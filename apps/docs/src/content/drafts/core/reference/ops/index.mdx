@@ -1,0 +1,13 @@
+---
+title: Ops
+---
+
+{/* TODO: co to jest op — leniwy konstruktor grafu:
+    - każdy op zwraca PENDING Value podpięty do wejść; NIC nie liczy na GPU
+    - walidacja shape/dtype dzieje się od razu (tanio, przed dispatchem) — błędy łapiesz przy budowie grafu
+    - liczenie odpala dopiero evalValues / toArray
+    - dwie formy wywołania: funkcja add(x, b) i metoda x.add(b) — ten sam węzeł grafu;
+      metody mają tylko opy, które w torchu są metodami Tensora (reszta jak torch.nn.functional)
+    - konwencje: f32 wszędzie poza wagami (packedF16/quantW tylko do matmul/matmulGather),
+      layouty 2D [M,N] row-major i 3D CHW
+    - grupy poniżej = podział 1:1 z plikami w packages/runntime/src/core/graph/ops/ */}

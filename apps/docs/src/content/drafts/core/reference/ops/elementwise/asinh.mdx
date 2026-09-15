@@ -1,0 +1,51 @@
+---
+title: asinh
+sidebar:
+  order: 7
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+asinh(x: Value): Value
+```
+
+Method form:
+
+```ts
+x.asinh()
+```
+Applies the inverse hyperbolic sine, elementwise:
+
+```
+out[i] = ln(x[i] + sqrt(x[i]² + 1))
+```
+
+Returns a pending Value with the same shape and dtype as `x`: nothing
+runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — the input Value.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const y = x.asinh();
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+y = x.asinh()
+```
+</TabItem>
+</Tabs>
+
+## Constraints
+
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

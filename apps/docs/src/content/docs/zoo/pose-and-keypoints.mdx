@@ -1,0 +1,227 @@
+---
+title: Pose & keypoints
+description: Find people and their body landmarks in an image.
+---
+
+import { Keypoints } from '../../../demos/Keypoints.tsx';
+
+Keypoint detection finds the people in an image and where their body
+landmarks are. You pass in the pixels and get back a list: one entry per
+person, with a box and 17 landmarks, from the nose to the ankles.
+
+`createKeypointDetector` runs
+[YOLO26 pose](https://docs.ultralytics.com/models/yolo26/) by Ultralytics on
+the GPU.
+
+## Quick start
+
+```ts
+import { createKeypointDetector, imageBufferFromImageData, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const detector = await createKeypointDetector(models.keypointDetection.YOLO26_POSE.DEFAULT);
+
+// 2. Get the pixels of an image, here from a canvas the picture is drawn on.
+const ctx = canvas.getContext('2d');
+const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
+
+// 3. Find the people.
+const people = await detector.detectKeypoints(image);
+
+// 4. Use the results.
+for (const { confidence, box, landmarks } of people) {
+  console.log(confidence, box, landmarks.nose);
+}
+// 0.89 { format: 'xyxy', xmin: 48, ymin: 397, xmax: 241, ymax: 908 } { x: 144, y: 446, confidence: 0.99 }
+// 0.87 { format: 'xyxy', xmin: 224, ymin: 404, xmax: 346, ymax: 868 } { x: 296, y: 448, confidence: 0.99 }
+// ...
+
+// 5. Free the GPU memory when done.
+detector.dispose();
+```
+
+The example reads one picture off a canvas. A video or a camera works the
+same way: draw each frame on the canvas and call `detectKeypoints` again,
+the detector is loaded once.
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+The model runs in half precision, so the device needs `shader-f16`.
+
+## Try it yourself
+
+Your camera, frame by frame through `detectKeypoints()` on your GPU. Limbs
+are drawn from `detector.skeleton`, landmarks under 0.5 confidence are left
+out. No camera? The sample picture goes through the same call.
+
+<Keypoints client:only="react" />
+
+## Results
+
+`detectKeypoints` returns a list with one entry per person found, best
+first. Nobody found gives an empty list. Each entry is:
+
+```ts
+interface KeypointDetection {
+  box: { format: 'xyxy'; xmin: number; ymin: number; xmax: number; ymax: number };
+  confidence: number; // how sure the model is, 0 to 1
+  landmarks: Record<CocoLandmark, Landmark>; // 17 entries, 'nose' to 'rightAnkle'
+}
+
+interface Landmark {
+  x: number; // in pixels of the image you passed in
+  y: number;
+  confidence: number; // how sure the model is the landmark is visible, 0 to 1
+}
+```
+
+Every person has all 17 landmarks. One the model cannot see, behind the
+body or outside the frame, still has a position, with a low `confidence`.
+Skip landmarks below about 0.5 when drawing.
+
+## Drawing a skeleton
+
+`detector.skeleton` lists which landmarks connect, as pairs of names:
+
+```ts
+for (const person of people) {
+  for (const [a, b] of detector.skeleton) {
+    const from = person.landmarks[a];
+    const to = person.landmarks[b];
+    if (from.confidence < 0.5 || to.confidence < 0.5) continue;
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+  }
+}
+ctx.stroke();
+```
+
+## Methods
+
+```ts
+function createKeypointDetector(
+  model?: KeypointDetectorModel,
+  options?: LoadOptions,
+): Promise<KeypointDetector>;
+
+interface KeypointDetector {
+  readonly landmarkNames: readonly CocoLandmark[];
+  readonly skeleton: readonly (readonly [CocoLandmark, CocoLandmark])[];
+  detectKeypoints(
+    image: ImageBuffer,
+    options?: DetectKeypointsOptions,
+  ): Promise<KeypointDetection[]>;
+  dispose(): void;
+}
+
+interface DetectKeypointsOptions {
+  readonly confidenceThreshold?: number; // default 0.3
+  readonly maxDetections?: number; // default 300
+}
+
+type CocoLandmark = 'nose' | 'leftEye' | 'rightEye' | 'leftEar' | 'rightEar'
+  | 'leftShoulder' | 'rightShoulder' | 'leftElbow' | 'rightElbow'
+  | 'leftWrist' | 'rightWrist' | 'leftHip' | 'rightHip'
+  | 'leftKnee' | 'rightKnee' | 'leftAnkle' | 'rightAnkle';
+```
+
+- `detectKeypoints(image, options?)` returns the people in the image, best
+  first. `image` is an `ImageBuffer` of any size. Build one with
+  `imageBufferFromImageData(imageData)` from a canvas, or
+  `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
+  `bgra`, `bgr` or `gray` bytes.
+  `confidenceThreshold` drops people scored below it,
+  `maxDetections` caps how many come back.
+- `landmarkNames` are the 17 names in model order, the same list as the
+  exported `COCO_LANDMARKS`.
+- `skeleton` are the landmark pairs that form limbs, as name pairs.
+- `dispose()` frees the GPU memory.
+
+YOLO26 picks one box per person on its own, so there is no IoU threshold.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models.keypointDetection.YOLO26_POSE` holds ready-made ones: `N`
+(6 MB, the `DEFAULT`) and `M` (44 MB, more accurate, slower). Pass one as
+is, copy it with a field changed, or point at your own safetensors export
+of an Ultralytics YOLO26 pose checkpoint.
+
+```ts
+interface KeypointDetectorModel {
+  readonly modelPath?: ModelPath;
+  readonly variant?: 'n' | 's' | 'm' | 'l' | 'x';
+  readonly inputSize?: number; // default 640
+  readonly resizeMode?: 'letterbox' | 'stretch' | 'crop'; // default 'letterbox'
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+import { createKeypointDetector, models } from 'runntime/zoo';
+
+// The medium size.
+await createKeypointDetector(models.keypointDetection.YOLO26_POSE.M);
+
+// Faster, for a camera loop.
+await createKeypointDetector({
+  ...models.keypointDetection.YOLO26_POSE.DEFAULT,
+  inputSize: 512,
+  resizeMode: 'crop',
+});
+
+// Your own copy of the file.
+await createKeypointDetector({ modelPath: '/models/yolo26n-pose/model.safetensors' });
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. Default:
+  `models.keypointDetection.YOLO26_POSE.DEFAULT.modelPath`.
+- **variant** - the model size, `n`, `s`, `m`, `l` or `x`. Read from the
+  weights by default.
+- **inputSize** - model input width and height, a multiple of 32. Default 640. Smaller is faster and misses more small people.
+- **resizeMode** - how the image fits the model input. `letterbox`
+  (default) pads, `stretch` distorts, `crop` cuts the centered square.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createKeypointDetector, createOpfsCache, models } from 'runntime/zoo';
+
+const detector = await createKeypointDetector(models.keypointDetection.YOLO26_POSE.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights in the browser, so the next
+  visit loads them without the network. `createOpfsCache(name)` is the
+  built-in one.
+- **onProgress** - called while the weights upload to the GPU, with bytes
+  done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to cancel a load in progress.
+
+## Supported models
+
+| Model                                                                         | Config                                   | Landmarks | Input             | Weights    |
+| ----------------------------------------------------------------------------- | ---------------------------------------- | --------- | ----------------- | ---------- |
+| [YOLO26 pose](https://huggingface.co/software-mansion/runntime-yolo26-pose) n | `models.keypointDetection.YOLO26_POSE.N` | COCO-17   | 640×640 (default) | f16, 6 MB  |
+| [YOLO26 pose](https://huggingface.co/software-mansion/runntime-yolo26-pose) m | `models.keypointDetection.YOLO26_POSE.M` | COCO-17   | 640×640 (default) | f16, 44 MB |
+
+Your own export of the other sizes, `s`, `l` and `x`, loads through
+`modelPath` too.

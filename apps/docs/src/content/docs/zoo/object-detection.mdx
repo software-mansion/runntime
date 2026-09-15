@@ -1,0 +1,198 @@
+---
+title: Object detection
+description: Find objects in an image.
+---
+
+import { Detect } from '../../../demos/Detect.tsx';
+
+Object detection finds bounding boxes for objects present in an image. You pass in the pixels and
+get back a list: what each object is, how sure the model is, and where it
+sits in the image.
+
+`createObjectDetector` runs
+[YOLO26](https://docs.ultralytics.com/models/yolo26/) by Ultralytics.
+
+## Quick start
+
+```ts
+import { createObjectDetector, imageBufferFromImageData, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const detector = await createObjectDetector(models.objectDetection.YOLO26.DEFAULT);
+
+// 2. Get the pixels of an image, here from a canvas the picture is drawn on.
+const ctx = canvas.getContext('2d');
+const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
+
+// 3. Find the objects.
+const objects = await detector.detectObjects(image);
+
+// 4. Use them: one entry per object, best first.
+for (const { label, confidence, box } of objects) {
+  console.log(label, confidence, box);
+}
+// bus 0.93 { format: 'xyxy', xmin: 6, ymin: 228, xmax: 807, ymax: 749 }
+// person 0.92 { format: 'xyxy', xmin: 47, ymin: 399, xmax: 237, ymax: 902 }
+// ...
+
+// 5. Free the GPU memory when done.
+detector.dispose();
+```
+
+The example reads one picture off a canvas. A video or a camera works the
+same way: draw each frame on the canvas and call `detectObjects` again, the
+detector is loaded once.
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+The model runs in half precision, so the device needs `shader-f16`.
+
+## Try it yourself
+
+Your camera, frame by frame through `detectObjects()` on your GPU, each
+object boxed and labeled. No camera? The sample picture goes through the
+same call.
+
+<Detect client:only="react" />
+
+## Results
+
+`detectObjects` returns a list with one entry per object found, best first.
+Nothing found gives an empty list. Each entry is:
+
+```ts
+interface ObjectDetection {
+  label: string; // what it is: 'person', 'bus', ... one of the 80 COCO classes
+  classId: number; // the same as a number, index into detector.labels
+  confidence: number; // how sure the model is, 0 to 1
+  box: { format: 'xyxy'; xmin: number; ymin: number; xmax: number; ymax: number };
+}
+```
+
+`box` is the top-left corner (`xmin`, `ymin`) and the bottom-right corner
+(`xmax`, `ymax`) of the object, in pixels of the image you passed in.
+
+## Methods
+
+```ts
+function createObjectDetector(
+  model?: ObjectDetectorModel,
+  options?: LoadOptions,
+): Promise<ObjectDetector>;
+
+interface ObjectDetector {
+  readonly labels: readonly string[];
+  detectObjects(
+    image: ImageBuffer,
+    options?: DetectObjectsOptions,
+  ): Promise<ObjectDetection[]>;
+  dispose(): void;
+}
+
+interface DetectObjectsOptions {
+  readonly confidenceThreshold?: number; // default 0.3
+  readonly maxDetections?: number; // default 300
+}
+```
+
+- `detectObjects(image, options?)` returns the objects in the image, best
+  first. `image` is an `ImageBuffer` of any size. Build one with
+  `imageBufferFromImageData(imageData)` from a canvas, or
+  `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
+  `bgra`, `bgr` or `gray` bytes.
+  `confidenceThreshold` drops objects scored below it,
+  `maxDetections` caps how many come back.
+- `labels` are the class names, by class index. COCO's 80 for a standard
+  checkpoint, `class 0`, `class 1`, ... for a custom one.
+- `dispose()` frees the GPU memory.
+
+YOLO26 picks one box per object on its own, so there is no IoU threshold.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models.objectDetection.YOLO26` holds ready-made ones: `N` (5 MB,
+the `DEFAULT`) and `M` (41 MB, more accurate, slower). Pass one as is, copy
+it with a field changed, or point at your own safetensors export of an
+Ultralytics YOLO26 detect checkpoint.
+
+```ts
+interface ObjectDetectorModel {
+  readonly modelPath?: ModelPath;
+  readonly variant?: 'n' | 's' | 'm' | 'l' | 'x';
+  readonly inputSize?: number; // default 640
+  readonly resizeMode?: 'letterbox' | 'stretch' | 'crop'; // default 'letterbox'
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+import { createObjectDetector, models } from 'runntime/zoo';
+
+// The medium size.
+await createObjectDetector(models.objectDetection.YOLO26.M);
+
+// Faster, for a camera loop.
+await createObjectDetector({
+  ...models.objectDetection.YOLO26.DEFAULT,
+  inputSize: 512,
+  resizeMode: 'crop',
+});
+
+// Your own copy of the file.
+await createObjectDetector({ modelPath: '/models/yolo26n/model.safetensors' });
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. Default:
+  `models.objectDetection.YOLO26.DEFAULT.modelPath`.
+- **variant** - the model size, `n`, `s`, `m`, `l` or `x`. Read from the
+  weights by default.
+- **inputSize** - model input width and height, a multiple of 32. Default 640. Smaller is faster and misses more small objects.
+- **resizeMode** - how the image fits the model input. `letterbox`
+  (default) pads, `stretch` distorts, `crop` cuts the centered square.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createObjectDetector, createOpfsCache, models } from 'runntime/zoo';
+
+const detector = await createObjectDetector(models.objectDetection.YOLO26.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights in the browser, so the next
+  visit loads them without the network. `createOpfsCache(name)` is the
+  built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                               | Config                            | Classes | Input             | Weights    |
+| ------------------------------------------------------------------- | --------------------------------- | ------- | ----------------- | ---------- |
+| [YOLO26](https://huggingface.co/software-mansion/runntime-yolo26) n | `models.objectDetection.YOLO26.N` | COCO-80 | 640×640 (default) | f16, 5 MB  |
+| [YOLO26](https://huggingface.co/software-mansion/runntime-yolo26) m | `models.objectDetection.YOLO26.M` | COCO-80 | 640×640 (default) | f16, 41 MB |
+
+Your own export of the other sizes, `s`, `l` and `x`, loads through
+`modelPath` too.

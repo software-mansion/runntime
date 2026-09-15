@@ -1,0 +1,51 @@
+---
+title: sigmoid
+sidebar:
+  order: 5
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+sigmoid(x: Value): Value
+```
+
+Method form:
+
+```ts
+x.sigmoid()
+```
+Applies the logistic function, elementwise:
+
+```
+out[i] = 1 / (1 + e^(-x[i]))
+```
+
+Returns a pending Value with the same shape and dtype as `x`: nothing
+runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — the input Value.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const gate = h.sigmoid();   // gating values in (0, 1)
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+gate = h.sigmoid()
+```
+</TabItem>
+</Tabs>
+
+## Constraints
+
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

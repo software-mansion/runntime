@@ -1,0 +1,57 @@
+---
+title: clamp
+sidebar:
+  order: 4
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+clamp(x: Value, lo: number, hi: number): Value
+```
+
+Method form:
+
+```ts
+x.clamp(lo, hi)
+```
+Clamps every element of `x` into the range `[lo, hi]`:
+
+```
+out[i] = min(max(x[i], lo), hi)
+```
+
+Returns a pending Value with the same shape and dtype as `x`: nothing
+runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — the input Value.
+- **lo**, **hi** (`number`) — the lower and upper bound, validated
+  (`lo <= hi`) at graph-build time. Use `±Infinity` for a one-sided
+  clamp.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const capped = logits.clamp(-7, 7);
+const relu = x.clamp(0, Infinity);   // one-sided
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+capped = logits.clamp(-7, 7)
+relu = x.clamp(min=0)
+```
+</TabItem>
+</Tabs>
+
+## Constraints
+
+- `lo <= hi`, checked when the op is called.
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

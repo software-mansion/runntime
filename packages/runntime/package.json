@@ -1,0 +1,22 @@
+{
+  "name": "runntime",
+  "version": "0.0.1-alpha.0",
+  "description": "Placeholder. Real package coming soon.",
+  "license": "MIT",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./core": "./src/core/index.ts",
+    "./zoo": "./src/zoo/index.ts",
+    "./zoo/transformers": "./src/zoo/transformers/index.ts"
+  },
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "typegpu": "^0.11.9"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.60"
+  }
+}

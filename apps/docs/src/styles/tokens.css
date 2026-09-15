@@ -1,0 +1,147 @@
+/*
+ * Two layers. The raw scale never changes between modes; the semantic aliases
+ * are redefined under [data-theme='light']. No component rule branches on the
+ * theme — they all read aliases.
+ */
+
+:root {
+  /* ── Raw neutral scale. Named by approximate lightness. R = G = B. ── */
+  --n-00: #000000;
+  --n-03: #070707;
+  --n-06: #0e0e0e;
+  --n-08: #141414;
+  --n-09: #161616;
+  --n-12: #1f1f1f;
+  --n-15: #262626;
+  --n-18: #2e2e2e;
+  --n-26: #434343;
+  --n-36: #5c5c5c;
+  --n-46: #767676;
+  --n-50: #808080;
+  --n-63: #a0a0a0;
+  --n-78: #c6c6c6;
+  --n-83: #d4d4d4;
+  --n-89: #e4e4e4;
+  --n-93: #ededed;
+  --n-96: #f4f4f4;
+  --n-98: #fafafa;
+  --n-100: #ffffff;
+
+  /* ── Raw gradients. Also mode-independent. ── */
+  --grad-ink: linear-gradient(135deg, #3a3a3a 0%, #0a0a0a 100%);
+  --grad-chalk: linear-gradient(135deg, #ffffff 0%, #b0b0b0 100%);
+  --grad-mist: linear-gradient(135deg, #f4f4f4 0%, #d4d4d4 100%);
+  /* The dark-mode slab: lighter than --grad-ink, which now falls below the page. */
+  --grad-ash: linear-gradient(135deg, #4d4d4d 0%, #1c1c1c 100%);
+
+  /*
+   * A shallower angle and a wider range than --grad-chalk / --grad-ink,
+   * because the wordmark is short and a 135deg ramp barely travels across it.
+   * Not reused for buttons, whose text contrast depends on the darker ends of
+   * --grad-ink — but --grad-brand (below) feeds this pair to the sidebar rail
+   * and the TOC rail too, not just the wordmark.
+   */
+  --grad-mark-chalk: linear-gradient(100deg, #ffffff 0%, #7a7a7a 100%);
+  --grad-mark-ink: linear-gradient(100deg, #000000 0%, #6e6e6e 100%);
+
+  /* ── Semantic aliases: dark mode, the default. ── */
+  --surface-base: var(--n-08);
+  --surface-raised: var(--n-12);
+  --surface-sunken: var(--n-15);
+  --surface-quiet: var(--n-18);
+
+  --border-hairline: var(--n-26);
+  --border-strong: var(--n-36);
+
+  --text-comment: var(--n-46);
+  --text-disabled: var(--n-46);
+  --text-faint: var(--n-50);
+  --text-muted: var(--n-63);
+  --text-body: var(--n-83);
+  --text-strong: var(--n-89);
+  --text-primary: var(--n-100);
+
+  /* The gradient always runs toward the mode's ink. */
+  --grad-brand: var(--grad-mark-chalk);
+  --grad-action: var(--grad-chalk);
+  --grad-action-text: var(--n-00);
+  --grad-slab: var(--grad-ash);
+  --grad-slab-border: var(--n-18);
+  --grad-slab-text: var(--n-89);
+
+  /*
+   * Admonitions: hue is gone, so severity is brightness. In dark mode the more
+   * serious it is, the brighter it gets. The shadow is whichever neighbouring
+   * step stays distinct from both the fill and the page ground.
+   */
+  --aside-note-fill: transparent;
+  --aside-note-text: var(--n-83);
+  --aside-note-shadow: var(--n-26);
+  --aside-note-border: var(--n-36);
+  --aside-note-code: rgb(255 255 255 / 0.1);
+
+  --aside-tip-fill: var(--n-15);
+  --aside-tip-text: var(--n-89);
+  --aside-tip-shadow: var(--n-26);
+  --aside-tip-code: rgb(255 255 255 / 0.1);
+
+  --aside-caution-fill: var(--n-63);
+  --aside-caution-text: var(--n-00);
+  --aside-caution-shadow: var(--n-36);
+  --aside-caution-code: rgb(0 0 0 / 0.08);
+
+  --aside-danger-fill: var(--n-100);
+  --aside-danger-text: var(--n-00);
+  --aside-danger-shadow: var(--n-46);
+  --aside-danger-code: rgb(0 0 0 / 0.08);
+
+  --code-line-highlight: var(--n-18);
+}
+
+:root[data-theme='light'] {
+  --surface-base: var(--n-100);
+  --surface-raised: var(--n-98);
+  --surface-sunken: var(--n-96);
+  --surface-quiet: var(--n-93);
+
+  --border-hairline: var(--n-89);
+  --border-strong: var(--n-83);
+
+  --text-comment: var(--n-63);
+  --text-disabled: var(--n-46);
+  --text-faint: var(--n-36);
+  --text-muted: var(--n-26);
+  --text-body: var(--n-15);
+  --text-strong: var(--n-08);
+  --text-primary: var(--n-00);
+
+  --grad-brand: var(--grad-mark-ink);
+  --grad-action: var(--grad-ink);
+  --grad-action-text: var(--n-100);
+  --grad-slab: var(--grad-mist);
+  --grad-slab-border: var(--n-63);
+  --grad-slab-text: var(--n-15);
+
+  --aside-note-fill: transparent;
+  --aside-note-text: var(--n-15);
+  --aside-note-shadow: var(--n-89);
+  --aside-note-border: var(--n-83);
+  --aside-note-code: rgb(0 0 0 / 0.06);
+
+  --aside-tip-fill: var(--n-96);
+  --aside-tip-text: var(--n-15);
+  --aside-tip-shadow: var(--n-83);
+  --aside-tip-code: rgb(0 0 0 / 0.06);
+
+  --aside-caution-fill: var(--n-26);
+  --aside-caution-text: var(--n-100);
+  --aside-caution-shadow: var(--n-63);
+  --aside-caution-code: rgb(255 255 255 / 0.16);
+
+  --aside-danger-fill: var(--n-00);
+  --aside-danger-text: var(--n-100);
+  --aside-danger-shadow: var(--n-46);
+  --aside-danger-code: rgb(255 255 255 / 0.16);
+
+  --code-line-highlight: var(--n-93);
+}

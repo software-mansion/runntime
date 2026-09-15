@@ -1,0 +1,189 @@
+/*
+ * Live demos embedded in example pages. Everything reads the semantic tokens
+ * from tokens.css, so the panels follow the theme like the rest of the page.
+ * Every root carries Starlight's `not-content` class, which keeps its markdown
+ * flow spacing (a top margin on every following sibling) out of the panels.
+ */
+
+.demo {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+}
+
+.demo-gate {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 2rem 1.25rem;
+  text-align: center;
+}
+
+.demo-button {
+  background: var(--grad-action);
+  border: 0;
+  border-radius: 999px;
+  color: var(--grad-action-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  padding: 0.6rem 1.5rem;
+}
+
+.demo-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.demo-note {
+  color: var(--text-faint);
+  font-size: 0.8125rem;
+  margin: 0;
+  max-width: 48ch;
+}
+
+.demo-error {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  margin: 0;
+}
+
+.progress {
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  height: 4px;
+  overflow: hidden;
+  width: min(100%, 240px);
+}
+
+.progress-fill {
+  background: var(--text-muted);
+  height: 100%;
+  transition: width 120ms linear;
+}
+
+.demo-row {
+  align-items: center;
+  display: flex;
+  gap: 0.625rem;
+}
+
+.demo-input {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-hairline);
+  border-radius: 6px;
+  color: var(--text-primary);
+  flex: 1;
+  font: inherit;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+}
+
+.demo-input:focus {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
+.demo-stats {
+  border-top: 1px solid var(--border-hairline);
+  color: var(--text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--__sl-font-mono, monospace);
+  font-size: 0.75rem;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+  padding-top: 0.875rem;
+}
+
+/* ── Image demos ── */
+
+.demo-glyph {
+  font-size: 0.7em;
+  margin-right: 0.45em;
+  vertical-align: 0.1em;
+}
+
+.demo-button-quiet {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+}
+
+.demo-canvas {
+  background: var(--surface-sunken);
+  border-radius: 6px;
+  display: block;
+  height: auto;
+  margin-top: 1rem;
+  max-width: 100%;
+  width: 100%;
+}
+
+/* ── Ranked hits ── */
+
+.hits {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  list-style: none;
+  margin: 1.25rem 0 0;
+  padding: 0;
+}
+
+.hit {
+  align-items: center;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) 90px 4rem;
+}
+
+.hit-text {
+  color: var(--text-body);
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hit-track {
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.hit-bar {
+  background: var(--text-muted);
+  display: block;
+  height: 100%;
+}
+
+.hit:first-child .hit-bar {
+  background: var(--text-primary);
+}
+
+.hit-score {
+  color: var(--text-faint);
+  font-family: var(--__sl-font-mono, monospace);
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+@media (max-width: 50rem) {
+  .hit {
+    grid-template-columns: minmax(0, 1fr) 60px 3.5rem;
+  }
+}
+
+/* ── Transcript ── */
+
+.transcript {
+  color: var(--text-body);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  margin: 1.25rem 0 0;
+  min-height: 3rem;
+}

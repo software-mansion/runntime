@@ -1,0 +1,163 @@
+---
+const t = Astro.locals.t;
+---
+
+<starlight-theme-pill>
+  <div class="theme-pill" role="group" aria-label={t('themeSelect.accessibleLabel')}>
+    <button type="button" data-theme-value="light" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"
+        ></path>
+      </svg>
+      <span class="sr-only">{t('themeSelect.light')}</span>
+    </button>
+    <button type="button" data-theme-value="dark" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"
+        ></path>
+      </svg>
+      <span class="sr-only">{t('themeSelect.dark')}</span>
+    </button>
+  </div>
+</starlight-theme-pill>
+
+<style>
+  /*
+   * Geometry measured from @swmansion/t-rex-ui's ColorModeToggle: a 72x36
+   * shell holding two square cells, icons at 65% of the cell, and the moon
+   * mirrored. There is no divider between the halves — the active cell's
+   * fill is what draws the split.
+   */
+  .theme-pill {
+    --switch-idle: var(--n-18);
+
+    display: flex;
+    align-items: stretch;
+    width: 72px;
+    height: 36px;
+    border: 1px solid var(--border-strong);
+    border-radius: 0;
+    overflow: hidden;
+  }
+
+  /* On black, the reference's idle tone would disappear; lift it one step. */
+  :global([data-theme='dark']) .theme-pill {
+    --switch-idle: var(--n-26);
+  }
+
+  :global([data-theme='light']) .theme-pill {
+    --switch-idle: var(--border-strong);
+  }
+
+  button {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 0;
+    background-color: transparent;
+    color: var(--switch-idle);
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+    line-height: 0;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+
+  button svg {
+    width: 65%;
+    height: 65%;
+  }
+
+  /* The reference mirrors the moon so its crescent opens away from the sun. */
+  button[data-theme-value='dark'] {
+    transform: scaleX(-1);
+  }
+
+  button:hover {
+    color: var(--text-muted);
+  }
+
+  button:focus-visible {
+    outline-offset: var(--sl-outline-offset-inside);
+  }
+
+  button[aria-pressed='true'] {
+    background-color: var(--border-strong);
+    color: var(--text-primary);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+</style>
+
+<script>
+  type Theme = 'dark' | 'light';
+
+  const storageKey = 'starlight-theme';
+
+  const preferred = (): Theme =>
+    matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+
+  const load = (): Theme => {
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(storageKey);
+    } catch {
+      /* private mode, blocked storage */
+    }
+    return stored === 'dark' || stored === 'light' ? stored : preferred();
+  };
+
+  function apply(theme: Theme, persist = false): void {
+    document.documentElement.dataset.theme = theme;
+    if (persist) {
+      try {
+        localStorage.setItem(storageKey, theme);
+      } catch {
+        /* nothing to do — the page still renders in the chosen theme */
+      }
+    }
+    document.querySelectorAll<HTMLButtonElement>('starlight-theme-pill button').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.themeValue === theme));
+    });
+  }
+
+  class StarlightThemePill extends HTMLElement {
+    constructor() {
+      super();
+      apply(load());
+      this.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+        btn.addEventListener('click', () => apply(btn.dataset.themeValue as Theme, true));
+      });
+    }
+  }
+
+  customElements.define('starlight-theme-pill', StarlightThemePill);
+
+  /* While nothing is stored, keep following the OS theme. */
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(storageKey);
+    } catch {
+      /* private mode, blocked storage */
+    }
+    if (stored !== 'dark' && stored !== 'light') apply(preferred());
+  });
+</script>

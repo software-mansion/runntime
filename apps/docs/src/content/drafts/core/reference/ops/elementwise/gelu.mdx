@@ -1,0 +1,56 @@
+---
+title: gelu
+sidebar:
+  order: 9
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+gelu(x: Value): Value
+```
+
+Function-only:
+
+```ts
+gelu(x)
+```
+Applies the Gaussian Error Linear Units function, elementwise:
+
+```
+out[i] = x[i] · Φ(x[i])
+```
+
+Φ is the Cumulative Distribution Function for the Gaussian distribution.
+Returns a pending Value with the same shape and dtype as `x`: nothing
+runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — the input Value.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const h = gelu(x.matmul(w1, { bias: b1 }));   // MLP up-projection + activation
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+h = F.gelu(x @ w1 + b1)
+```
+</TabItem>
+</Tabs>
+
+As a convolution epilogue, prefer the fused form:
+[`conv1d`](/core/reference/ops/conv/conv1d/) takes `activation: 'gelu'` and
+applies it in the same kernel.
+
+## Constraints
+
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

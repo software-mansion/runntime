@@ -1,0 +1,60 @@
+---
+title: add
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+add(a: Value, b: Value | number): Value
+```
+
+Method form:
+
+```ts
+a.add(b)
+```
+Adds `b` to `a`, elementwise:
+
+```
+out[i] = a[i] + b[i]
+```
+
+Supports [broadcasting](/core/reference/ops/broadcasting/) to a common
+shape. Returns a pending Value of that shape: nothing runs until
+evaluation.
+
+## Parameters
+
+- **a** (`Value`) — the input Value.
+- **b** (`Value | number`) — the Value or number to add to `a`.
+
+`add(a, b)` and `add(b, a)` return the same result, the matrix may be
+either argument.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const y = x.add(bias);   // [T,N] + [N] — bias added to every row
+const z = x.add(1);      // plain number — no upload
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+y = x + bias
+z = x + 1
+```
+</TabItem>
+</Tabs>
+
+## Constraints
+
+- Both Values must have the same dtype.
+- The `[1]` pattern is supported only for f32.
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

@@ -1,0 +1,60 @@
+---
+title: mul
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+mul(a: Value, b: Value | number): Value
+```
+
+Method form:
+
+```ts
+a.mul(b)
+```
+Multiplies `a` by `b`, elementwise:
+
+```
+out[i] = a[i] * b[i]
+```
+
+Supports [broadcasting](/core/reference/ops/broadcasting/) to a common
+shape. Returns a pending Value of that shape: nothing runs until
+evaluation.
+
+## Parameters
+
+- **a** (`Value`) — the input Value.
+- **b** (`Value | number`) — the Value or number to multiply `a` by.
+
+`mul(a, b)` and `mul(b, a)` return the same result, the matrix may be
+either argument.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const gated = h.mul(gate);    // [T,N] * [T,N] — elementwise gating
+const scaled = x.mul(0.5);    // plain number — no upload
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+gated = h * gate
+scaled = x * 0.5
+```
+</TabItem>
+</Tabs>
+
+## Constraints
+
+- Both Values must have the same dtype.
+- The `[1]` pattern is supported only for f32.
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

@@ -1,0 +1,63 @@
+---
+title: swigluChunk
+sidebar:
+  order: 12
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+swigluChunk(x: Value): Value
+```
+
+Function-only:
+
+```ts
+swigluChunk(x)
+```
+Applies the SwiGLU activation to one concatenated Value,
+`[T,2F] → [T,F]`:
+
+```
+hidden = x[:, 0:F]     // first F columns
+gate   = x[:, F:2F]    // last F columns
+out    = silu(gate) · hidden
+```
+
+The column order (hidden first, gate second) matches Hugging Face
+models. Weights trained with the opposite order produce wrong results,
+not an error. The whole formula runs as one fused kernel: a single GPU
+pass instead of separate ops, so it is faster than composing it from
+`slice`/`silu`/`mul`. Returns a pending Value of shape `[T,F]`:
+nothing runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — hidden and gate halves concatenated along columns,
+  `[T,2F]`.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const h = swigluChunk(x.matmul(wFc1));   // [T,2F] → [T,F]
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+# unfused equivalent of the one swigluChunk kernel
+hidden, gate = fc1(x).chunk(2, dim=-1)
+h = F.silu(gate) * hidden
+```
+</TabItem>
+</Tabs>
+
+For the clamped variant that takes the two halves as separate Values,
+see [`swiglu`](/core/reference/ops/elementwise/swiglu/).
+
+## Constraints
+
+- 2D f32 input with an even number of columns.
