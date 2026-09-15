@@ -1,0 +1,19 @@
+---
+import Default from '@astrojs/starlight/components/TableOfContents.astro';
+
+const contactHref = 'https://swmansion.com/contact/?utm_source=runntime-docs&utm_medium=sidebar';
+---
+
+<Default><slot /></Default>
+
+<aside class="hire-us">
+  <p class="hire-us__copy">We are Software Mansion.</p>
+  <a class="hire-us__cta" href={contactHref} target="_blank" rel="noopener noreferrer">
+    <span>Hire us</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20">
+      <path
+        fill="currentColor"
+        d="M16.01 11H4v2h12.01v3L20 12l-3.99-4v3z"></path>
+    </svg>
+  </a>
+</aside>

@@ -1,0 +1,176 @@
+---
+title: Migrating from transformers.js
+description: Run transformers.js pipelines on the ruNNtime engine instead of ONNX Runtime.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`runntime/zoo/transformers` plugs ruNNtime into
+[transformers.js](https://huggingface.co/docs/transformers.js). You keep the
+transformers.js API, supported models run faster on the ruNNtime engine instead
+of ONNX Runtime. For specific model benchmarks, please see the [benchmarks section](/zoo/benchmarks/). One `initRunntimeBackend()` call, the rest of your
+code stays the same.
+
+## Quick start
+
+<Tabs syncKey="engine">
+<TabItem label="ruNNtime">
+```ts
+import { initRunntimeBackend } from 'runntime/zoo/transformers';
+import { pipeline } from '@huggingface/transformers';
+
+await initRunntimeBackend();
+
+const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+const out = await pipe(texts, { pooling: 'mean', normalize: true });
+
+````
+</TabItem>
+<TabItem label="stock ONNX">
+```ts
+import { pipeline } from '@huggingface/transformers';
+
+const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+const out = await pipe(texts, { pooling: 'mean', normalize: true });
+````
+
+</TabItem>
+</Tabs>
+
+The `pipeline()` call and everything after it are identical in both tabs. The
+patched loader swaps the engine under the same API, options like `pooling`
+and `normalize` keep working exactly as before.
+
+## Supported models
+
+| pipeline task                  | model id                                                                          | runs as                                |
+| ------------------------------ | --------------------------------------------------------------------------------- | -------------------------------------- |
+| `feature-extraction`           | `Xenova/all-MiniLM-L6-v2`, `sentence-transformers/all-MiniLM-L6-v2`               | MiniLM-L6 sentence embedder            |
+| `token-classification`         | `openai/privacy-filter`                                                           | privacy filter, personal data spans    |
+| `automatic-speech-recognition` | `onnx-community/moonshine-tiny-ONNX`, `onnx-community/moonshine-base-ONNX`        | Moonshine speech to text               |
+| `object-detection`             | `onnx-community/yolo26n-ONNX`, `onnx-community/yolo26m-ONNX`                      | YOLO26 detector                        |
+| `depth-estimation`             | `onnx-community/depth-anything-v2-small`, `onnx-community/depth-anything-v2-base` | DepthART relative depth, s and b       |
+| `image-classification`         | `onnx-community/mobilenetv4_conv_small.e2400_r224_in1k`                           | MobileNetV4-Conv-S ImageNet classifier |
+
+Every id works with `initRunntimeBackend()` alone: the weights come from the
+[software-mansion](https://huggingface.co/software-mansion) `runntime-*`
+repos on the Hub, the smallest hosted file of each model. The other YOLO26
+sizes, `s`, `l` and `x`, need your own safetensors export registered under
+the id, see [When to pass models](#when-to-pass-models).
+
+## Unsupported models
+
+By default the plugin loads only models it can run on ruNNtime. A `pipeline()`
+call with a model id that is not registered throws an error listing the
+registered ids. A registered model whose load fails (no WebGPU, weights
+could not be fetched) throws with the cause attached.
+
+To load everything else with ONNX Runtime instead, pass
+`fallbackToOnnx: true`:
+
+```ts
+await initRunntimeBackend({ fallbackToOnnx: true });
+```
+
+With the fallback on, supported models still run on ruNNtime and every other
+model loads exactly as if the plugin was not there, with no warning. A
+supported model whose ruNNtime load fails also falls back, and that case is
+reported with `console.warn`. To check which engine a model actually runs
+on, use `isRunntimeModel`:
+
+```ts
+import { isRunntimeModel } from 'runntime/zoo/transformers';
+
+isRunntimeModel(pipe.model); // true when it runs on ruNNtime
+```
+
+## initRunntimeBackend
+
+```ts
+initRunntimeBackend(opts?: RegisterRunntimeBackendOpts): Promise<TgpuRoot>
+```
+
+One-call setup: creates the WebGPU device, points ruNNtime at it and patches
+transformers.js. Returns the root for apps that also use TypeGPU directly.
+
+The device is requested with `subgroups` and `shader-f16` as optional
+features. YOLO26 and DepthART need `shader-f16` and fail to load without
+it, the other models run in f32 on such devices.
+
+### Options
+
+- **models** (`Record<string, RunntimeModelLoader>`) - optional. Extra models the
+  plugin should intercept: keys are model ids, values are the loaders that
+  build them. An id that is already supported overrides the built-in entry.
+- **fallbackToOnnx** (`boolean`) - optional, `false` by default. Loads
+  unsupported models with ONNX Runtime instead of throwing.
+
+### When to pass models
+
+Pass `models` when you use your own checkpoint of a supported architecture:
+a fine-tuned MiniLM, or a YOLO26 size that is not hosted. Each built-in
+loader takes the URL of your safetensors file:
+
+```ts
+import { initRunntimeBackend, minilmLoader, yolo26Loader } from 'runntime/zoo/transformers';
+
+await initRunntimeBackend({
+  models: {
+    'sentence-transformers/paraphrase-MiniLM-L6-v2': minilmLoader(
+      'https://example.com/minilm/model.safetensors',
+    ),
+    'onnx-community/yolo26s-ONNX': yolo26Loader('https://example.com/yolo26s/model.safetensors'),
+  },
+});
+const pipe = await pipeline('feature-extraction', 'sentence-transformers/paraphrase-MiniLM-L6-v2');
+```
+
+Each key is a Hub id, not a name you invent. `pipeline()` still reads the
+`config.json` and the tokenizer of that repo from the Hub, so the id has to
+exist there; `models` only points ruNNtime at your weights instead of the
+hosted ones. To run a checkpoint of your own, upload it to the Hub and
+register it under its id.
+
+## registerRunntimeBackend
+
+```ts
+registerRunntimeBackend(opts?: RegisterRunntimeBackendOpts): void
+```
+
+Most apps never call this, `initRunntimeBackend()` does it for them. Use it only
+when your app already runs ruNNtime on its own GPU device, so the plugin shares
+that device instead of creating a second one:
+
+```ts
+import { initRunntime } from 'runntime/zoo';
+import { registerRunntimeBackend } from 'runntime/zoo/transformers';
+import tgpu from 'typegpu';
+
+// app already has this
+const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
+initRunntime(root);
+
+// plugin hooks into the same device
+registerRunntimeBackend();
+```
+
+Takes the same options as `initRunntimeBackend`. Calling it again replaces the
+registered models and options, patches never stack.
+
+## Removing the plugin
+
+```ts
+unregisterRunntimeBackend(): void
+```
+
+Removes the patch and restores the original ONNX loader. Models already
+loaded keep working, later `pipeline()` calls load with ONNX Runtime again.
+
+## Constraints
+
+- `@huggingface/transformers` is an optional peer dependency of `runntime/zoo`,
+  version `^4.2.0`.
+- With `registerRunntimeBackend()`, `initRunntime(root)` must run before the first
+  model load. Without it the load throws, or with `fallbackToOnnx: true`
+  warns and loads on ONNX Runtime. `initRunntimeBackend()` handles that for
+  you.

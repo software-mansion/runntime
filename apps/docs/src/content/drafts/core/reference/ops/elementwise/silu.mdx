@@ -1,0 +1,57 @@
+---
+title: silu
+sidebar:
+  order: 10
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+silu(x: Value): Value
+```
+
+Function-only:
+
+```ts
+silu(x)
+```
+Applies the Sigmoid Linear Unit (SiLU) function, also known as swish,
+elementwise:
+
+```
+out[i] = x[i] · σ(x[i])
+```
+
+σ is the logistic sigmoid. Returns a pending Value with the same shape
+and dtype as `x`: nothing runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — the input Value.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const h = silu(x.matmul(w1, { bias: b1 }));
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+h = F.silu(x @ w1 + b1)
+```
+</TabItem>
+</Tabs>
+
+In a SwiGLU MLP, prefer the fused
+[`swigluChunk`](/core/reference/ops/elementwise/swiglu-chunk/), which applies
+`silu(gate) · hidden` in one fused kernel instead of a slice/silu/mul
+chain.
+
+## Constraints
+
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

@@ -1,0 +1,59 @@
+---
+title: sub
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+sub(a: Value, b: Value | number): Value
+```
+
+Method form:
+
+```ts
+a.sub(b)
+```
+Subtracts `b` from `a`, elementwise:
+
+```
+out[i] = a[i] - b[i]
+```
+
+Supports [broadcasting](/core/reference/ops/broadcasting/) to a common
+shape, with one difference: only `b` may have a broadcast shape, `a`
+must be the matrix. Returns a pending Value of that shape: nothing runs
+until evaluation.
+
+## Parameters
+
+- **a** (`Value`) — the input Value. Must be the `[M,N]` input,
+  broadcast shapes are not allowed here.
+- **b** (`Value | number`) — the Value or number to subtract from `a`.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const centered = x.sub(rowMean);   // [M,N] − [M,1] — column broadcast
+const shifted = x.sub(1);          // plain number — no upload
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+centered = x - row_mean
+shifted = x - 1
+```
+</TabItem>
+</Tabs>
+
+## Constraints
+
+- f32 only (unlike `add`/`mul`, there is no vec4f path).
+- `b` may not have more elements than `a`.
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

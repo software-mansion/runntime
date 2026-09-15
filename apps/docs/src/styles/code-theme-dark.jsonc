@@ -1,0 +1,72 @@
+// Catppuccin Mocha accents, unmodified, on the docs' own neutral code surface.
+// Comments use overlay2 and punctuation uses subtext0 instead of Mocha's
+// overlay0/overlay1, which sit at 3.4:1 and 4.5:1 against this background.
+{
+  "name": "runntime-mocha",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1f1f1f",
+    "editor.foreground": "#cdd6f4",
+  },
+  "tokenColors": [
+    {
+      "scope": ["comment", "punctuation.definition.comment", "string.comment"],
+      "settings": { "foreground": "#9399b2", "fontStyle": "italic" },
+    },
+    {
+      "scope": [
+        "keyword",
+        "keyword.control",
+        "keyword.operator.new",
+        "keyword.operator.expression",
+        "storage",
+        "storage.type",
+        "storage.modifier",
+        "variable.language",
+      ],
+      "settings": { "foreground": "#cba6f7", "fontStyle": "bold" },
+    },
+    {
+      "scope": [
+        "entity.name.type",
+        "entity.name.class",
+        "entity.other.inherited-class",
+        "support.type",
+        "support.class",
+      ],
+      "settings": { "foreground": "#f9e2af", "fontStyle": "bold" },
+    },
+    {
+      "scope": ["entity.name.function", "support.function", "meta.function-call"],
+      "settings": { "foreground": "#89b4fa" },
+    },
+    {
+      "scope": ["constant.numeric", "constant.language", "constant.character", "support.constant"],
+      "settings": { "foreground": "#fab387" },
+    },
+    {
+      "scope": [
+        "variable",
+        "variable.other",
+        "variable.parameter",
+        "meta.object-literal.key",
+        "support.variable",
+        "entity.name.tag",
+        "entity.other.attribute-name",
+      ],
+      "settings": { "foreground": "#cdd6f4" },
+    },
+    {
+      "scope": ["string", "string.quoted", "string.template", "constant.other.symbol"],
+      "settings": { "foreground": "#a6e3a1" },
+    },
+    {
+      "scope": ["keyword.operator"],
+      "settings": { "foreground": "#89dceb" },
+    },
+    {
+      "scope": ["punctuation", "meta.brace", "punctuation.separator", "punctuation.terminator"],
+      "settings": { "foreground": "#a6adc8" },
+    },
+  ],
+}

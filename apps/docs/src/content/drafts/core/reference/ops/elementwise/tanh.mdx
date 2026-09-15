@@ -1,0 +1,55 @@
+---
+title: tanh
+sidebar:
+  order: 6
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+tanh(x: Value): Value
+```
+
+Method form:
+
+```ts
+x.tanh()
+```
+Applies the hyperbolic tangent, elementwise:
+
+```
+out[i] = tanh(x[i])
+```
+
+Returns a pending Value with the same shape and dtype as `x`: nothing
+runs until evaluation.
+
+## Parameters
+
+- **x** (`Value`) — the input Value.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const y = h.tanh();
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+y = h.tanh()
+```
+</TabItem>
+</Tabs>
+
+As a convolution epilogue, prefer the fused form:
+[`conv1d`](/core/reference/ops/conv/conv1d/) takes `activation: 'tanh'` and
+applies it in the same kernel.
+
+## Constraints
+
+- packedF16 / quantW Values are not accepted, they are packed weight
+  storage that only `matmul` can read.

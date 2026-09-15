@@ -1,0 +1,144 @@
+---
+title: Privacy filter
+description: Find personal data in text.
+---
+
+Privacy Filter is a token-level model that scans text for personally
+identifiable information (PII), such as names, emails, phone numbers,
+addresses, SSNs, secrets and more, and returns the detected spans together
+with the entity type.
+
+`createPrivacyFilter` runs
+[privacy-filter](https://huggingface.co/openai/privacy-filter) by OpenAI.
+
+## Quick start
+
+```ts
+import { createPrivacyFilter, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const filter = await createPrivacyFilter(models.privacyFilter.PRIVACY_FILTER.DEFAULT);
+
+// 2. Scan a text.
+const spans = await filter.detect('Contact Jane Doe at jane.doe@example.com.');
+console.log(spans);
+// [
+//   { label: 'private_person', start: 8, end: 16, text: 'Jane Doe', placeholder: '<PRIVATE_PERSON>' },
+//   { label: 'private_email', start: 20, end: 40, text: 'jane.doe@example.com', placeholder: '<PRIVATE_EMAIL>' },
+// ]
+
+// 3. Free the GPU memory when done.
+filter.dispose();
+```
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+The weights are 1.55 GB, so pass a cache in the
+[loading options](#loading-options) to download them once.
+
+## Methods
+
+```ts
+function createPrivacyFilter(
+  model?: PrivacyFilterModel,
+  options?: LoadOptions,
+): Promise<PrivacyFilter>;
+
+interface PrivacyFilter {
+  detect(text: string): Promise<PrivacySpan[]>;
+  dispose(): void;
+}
+```
+
+- `detect(text)` returns the personal data it found, in text order. Empty
+  text gives an empty list.
+- `dispose()` frees the GPU memory.
+
+## Spans
+
+Each span is one piece of personal data:
+
+```ts
+interface PrivacySpan {
+  readonly label: string; // 'private_email', 'private_phone', ...
+  readonly start: number;
+  readonly end: number; // exclusive: text.slice(start, end) is the match
+  readonly text: string;
+  readonly placeholder: string; // '<PRIVATE_EMAIL>', ...
+}
+```
+
+- **label** - the kind of data, one of `private_person`, `private_email`,
+  `private_phone`, `private_address`, `private_date`, `private_url`,
+  `account_number`, `secret`.
+- **start**, **end** - where it sits in the text, as string indices. `end`
+  is exclusive, so `text.slice(start, end)` is the match.
+- **text** - the matched text.
+- **placeholder** - a tag to put in its place, like `<PRIVATE_EMAIL>`.
+
+## Options
+
+The first argument is the model config, a plain object with the field
+below. It is optional: `createPrivacyFilter()` with no arguments loads
+`models.privacyFilter.PRIVACY_FILTER.DEFAULT`, the official checkpoint with
+int8 weights, 1.55 GB, the one hosted format.
+
+Pass it as is, or point at your own copy of the file:
+
+```ts
+interface PrivacyFilterModel {
+  readonly modelPath?: ModelPath;
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+// Your own copy of the file.
+await createPrivacyFilter({ modelPath: '/models/privacy-filter/model.safetensors' });
+```
+
+- **modelPath** - the weights, a `model.safetensors` file: the hosted int8
+  export, or your own int8, f16 or bf16 export of OpenAI's checkpoint. The
+  weight format is read from the file.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createOpfsCache, createPrivacyFilter, models } from 'runntime/zoo';
+
+const filter = await createPrivacyFilter(models.privacyFilter.PRIVACY_FILTER.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights in the browser, so the next
+  visit loads them without the network. `createOpfsCache(name)` is the
+  built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                                             | Config                                | Language | Parameters       | Weights       |
+| --------------------------------------------------------------------------------- | ------------------------------------- | -------- | ---------------- | ------------- |
+| [privacy-filter](https://huggingface.co/software-mansion/runntime-privacy-filter) | `models.privacyFilter.PRIVACY_FILTER` | English  | 1.5B, 50M active | int8, 1.55 GB |

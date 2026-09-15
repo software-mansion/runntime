@@ -1,7 +1,14 @@
 {
-  "name": "runntime",
-  "version": "0.0.1-alpha.0",
-  "description": "Placeholder. Real package coming soon.",
-  "main": "index.js",
-  "license": "MIT"
+  "name": "runntime-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "build:docs": "pnpm --filter docs run build",
+    "dev:docs": "pnpm --filter docs run dev"
+  }
 }

@@ -1,0 +1,62 @@
+---
+title: swiglu
+sidebar:
+  order: 11
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Signature
+
+```ts
+swiglu(glu: Value, lin: Value): Value
+```
+
+Function-only:
+
+```ts
+swiglu(glu, lin)
+```
+Applies the SwiGLU activation with clamping, elementwise:
+
+```
+g   = min(glu, 7)
+l   = clamp(lin, -7, 7)
+out = g · σ(1.702·g) · (l + 1)
+```
+
+σ is the logistic sigmoid. The whole formula runs as one fused kernel:
+a single GPU pass instead of seven separate ops, so it is faster than
+composing it from `clamp`/`sigmoid`/`mul`/`add`. Returns a pending Value
+with the shape of the inputs: nothing runs until evaluation.
+
+## Parameters
+
+- **glu** (`Value`) — gate input, `[T,H]`.
+- **lin** (`Value`) — linear input, `[T,H]`.
+
+## Example
+
+<Tabs syncKey="framework">
+<TabItem label="ruNNtime">
+```ts
+const h = swiglu(x.matmul(wGlu), x.matmul(wLin));   // both halves [T,H]
+```
+</TabItem>
+<TabItem label="PyTorch">
+```python
+# unfused equivalent of the one swiglu kernel
+g = glu.clamp(max=7)
+l = lin.clamp(-7, 7)
+h = g * torch.sigmoid(1.702 * g) * (l + 1)
+```
+</TabItem>
+</Tabs>
+
+For the unclamped variant that takes one concatenated Value, see
+[`swigluChunk`](/core/reference/ops/elementwise/swiglu-chunk/).
+
+## Constraints
+
+- `glu` and `lin` must have the same shape and dtype.
+- f32 only.

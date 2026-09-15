@@ -1,0 +1,528 @@
+/* ── Admonitions ────────────────────────────────────────────────────── */
+
+/*
+ * T-Rex geometry: square, 24px padding, a hard offset shadow instead of a
+ * border accent. The -8px inline offset puts the shadow to the left, so the
+ * block is nudged in by the same amount to keep it inside the content column.
+ */
+.starlight-aside {
+  padding: 1.5rem;
+  border: 0;
+  border-radius: 0;
+  border-inline-start: 0;
+  margin-inline-start: 8px;
+  margin-block-end: 1.5rem;
+  background-color: var(--aside-fill);
+  color: var(--aside-text);
+  box-shadow: -8px 8px 0 0 var(--aside-shadow);
+}
+
+.starlight-aside--note {
+  --aside-fill: var(--aside-note-fill);
+  --aside-text: var(--aside-note-text);
+  --aside-shadow: var(--aside-note-shadow);
+  --aside-code: var(--aside-note-code);
+  border: 1px solid var(--aside-note-border);
+}
+
+.starlight-aside--tip {
+  --aside-fill: var(--aside-tip-fill);
+  --aside-text: var(--aside-tip-text);
+  --aside-shadow: var(--aside-tip-shadow);
+  --aside-code: var(--aside-tip-code);
+}
+
+.starlight-aside--caution {
+  --aside-fill: var(--aside-caution-fill);
+  --aside-text: var(--aside-caution-text);
+  --aside-shadow: var(--aside-caution-shadow);
+  --aside-code: var(--aside-caution-code);
+}
+
+.starlight-aside--danger {
+  --aside-fill: var(--aside-danger-fill);
+  --aside-text: var(--aside-danger-text);
+  --aside-shadow: var(--aside-danger-shadow);
+  --aside-code: var(--aside-danger-code);
+}
+
+.starlight-aside__title {
+  font-family: var(--__sl-font);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: inherit;
+  gap: 0.5rem;
+}
+
+/* Links and code inherit the admonition's own foreground, not the page's. */
+.starlight-aside__content a {
+  color: inherit;
+  border-bottom: 1px solid currentColor;
+  text-decoration: none;
+}
+
+.starlight-aside__content code {
+  background-color: var(--aside-code);
+  color: inherit;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+header.header {
+  background-color: var(--surface-base);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────── */
+
+/*
+ * The fill is the separation — no right border. Group labels carry the
+ * heading face; links sit two steps quieter and only lift on hover.
+ */
+.sidebar-pane {
+  background-color: var(--surface-sunken);
+  border-inline-end: 0;
+}
+
+.sidebar-content .large,
+.sidebar-content details > summary span.large {
+  font-family: var(--__sl-font);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sidebar-content a {
+  font-size: 1rem;
+  color: var(--text-muted);
+  border-radius: 0;
+  border-inline-start: 2px solid transparent;
+  text-decoration: none;
+}
+
+.sidebar-content a:hover,
+.sidebar-content a:focus-visible {
+  color: var(--text-strong);
+  background-color: transparent;
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  color: var(--text-primary);
+  background-color: transparent;
+  background-image: var(--grad-brand);
+  background-repeat: no-repeat;
+  background-size: 2px 100%;
+  background-position: left center;
+  /* Paint over the reserved border, not inside it, so the rail sits flush. */
+  background-origin: border-box;
+  font-weight: 500;
+}
+
+/* starlight-sidebar-topics: the Core / Zoo switcher reads as a sidebar group. */
+.sidebar-content a.starlight-sidebar-topics-current {
+  background-color: var(--surface-quiet);
+  color: var(--text-primary);
+}
+
+/* ── Table of contents ──────────────────────────────────────────────── */
+
+starlight-toc nav {
+  border-inline-start: 0;
+}
+
+starlight-toc a {
+  color: var(--text-faint);
+  border-inline-start: 2px solid transparent;
+  border-radius: 0;
+  text-decoration: none;
+}
+
+starlight-toc a[aria-current='true'] {
+  color: var(--text-primary);
+  font-weight: 500;
+  background-image: var(--grad-brand);
+  background-repeat: no-repeat;
+  background-size: 2px 100%;
+  background-position: left center;
+  /* Paint over the reserved border, not inside it, so the rail sits flush. */
+  background-origin: border-box;
+}
+
+/* ── Prose links ────────────────────────────────────────────────────── */
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--text-primary);
+  font-weight: 500;
+  text-decoration: none;
+  border-bottom: 1px solid var(--n-36);
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  border-bottom-color: var(--text-primary);
+}
+
+/* ── Inline code ────────────────────────────────────────────────────── */
+
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+  background-color: var(--surface-sunken);
+  color: var(--text-strong);
+  border: 0;
+  border-radius: 0;
+  padding: 0.25rem;
+  font-family: var(--__sl-font-mono);
+  font-weight: 400;
+}
+
+.sl-markdown-content a code {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────────── */
+
+.sl-markdown-content table:not(:where(.not-content *)) {
+  border-collapse: collapse;
+  border-radius: 0;
+}
+
+/*
+ * THE PRIMARY FIX. A wide table otherwise stretches the content column past the
+ * viewport and clips the whole page — body text included, not just the table.
+ * Making the table its own scroll container keeps the overflow inside it, which
+ * is what the spec requires: only tables, diagrams and code blocks may exceed
+ * the column, each scrolling within itself, and the page body never scrolls
+ * sideways.
+ */
+.sl-markdown-content table:not(:where(.not-content *)) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.sl-markdown-content th:not(:where(.not-content *)) {
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+  font-weight: 500;
+  border-radius: 0;
+}
+
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  border: 1px solid var(--border-hairline);
+}
+
+/*
+ * Long identifiers in a cell (`models.textEmbedding.ALL_MINILM_L6_V2`) have no
+ * break opportunities, so under table-layout: auto they claim whatever width
+ * they need and squeeze every other column. Letting them wrap puts the column
+ * proportions back under the content's control rather than one token's — and
+ * usually means the table fits without needing to scroll at all.
+ */
+.sl-markdown-content :is(td, th) code:not(:where(.not-content *)) {
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Starlight's default cell padding is tight, which reads as cramped once the
+ * cells are square and hairline-bordered — inline-code chips in particular sit
+ * almost against the cell edge. Give every cell real breathing room.
+ */
+.sl-markdown-content :is(td, th):not(:where(.not-content *)) {
+  padding: 0.625rem 0.875rem;
+  vertical-align: top;
+}
+
+/*
+ * Short identifiers in the first column read as labels; keep them on one line
+ * where they fit, and let the cell grow rather than hyphenating a model name.
+ */
+.sl-markdown-content td:first-child:not(:where(.not-content *)) {
+  white-space: nowrap;
+}
+
+.sl-markdown-content hr:not(:where(.not-content *)) {
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────────── */
+
+starlight-tabs .tablist-wrapper ul[role='tablist'] {
+  border-bottom: 1px solid var(--border-strong);
+}
+
+starlight-tabs [role='tab'] {
+  font-family: var(--__sl-font);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-faint);
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+}
+
+starlight-tabs [role='tab'][aria-selected='true'] {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────── */
+
+.card {
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  border-radius: 0;
+  transition: border-color 150ms ease;
+}
+
+.card:hover {
+  border-color: var(--n-36);
+}
+
+.card .title {
+  color: var(--text-primary);
+}
+
+/* ── Remaining rounded corners ──────────────────────────────────────── */
+
+/*
+ * Starlight has no single radius token, so each rounded element is zeroed
+ * by name. The Task 6 assertion fails if one is missed.
+ */
+site-search button,
+site-search dialog,
+site-search kbd,
+.sl-badge,
+.pagination-links a,
+starlight-menu-button button,
+.right-sidebar-container select,
+select,
+.sl-link-button,
+mobile-starlight-toc .toggle,
+.expressive-code .frame,
+.expressive-code .header,
+.expressive-code .title,
+.expressive-code .copy button,
+.expressive-code .copy button div {
+  border-radius: 0;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────── */
+
+.sl-link-button.primary {
+  background-image: var(--grad-action);
+  background-color: transparent;
+  color: var(--grad-action-text);
+  border: 0;
+}
+
+.sl-link-button.secondary {
+  background-image: var(--grad-slab);
+  background-color: transparent;
+  color: var(--grad-slab-text);
+  border: 1px solid var(--grad-slab-border);
+}
+
+/* ── Wordmark ───────────────────────────────────────────────────────── */
+
+.site-title {
+  align-items: center;
+  gap: var(--sl-nav-gap);
+  font-family: var(--__sl-font);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  min-width: 0;
+
+  /* Fallback for anything that can't paint text with a gradient. */
+  color: var(--text-primary);
+  background-image: var(--grad-brand);
+  background-clip: text;
+  -webkit-background-clip: text;
+}
+
+/* Only paint the text transparent once we know the clip took. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .site-title {
+    -webkit-text-fill-color: transparent;
+  }
+}
+
+.site-title span {
+  overflow: hidden;
+}
+
+.site-title img {
+  height: calc(var(--sl-nav-height) - 2 * var(--sl-nav-pad-y));
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: 0 50%;
+}
+
+@media (min-width: 50rem) {
+  :root {
+    --sl-nav-height: 4.25rem;
+  }
+}
+
+/* ── Hire us panel ──────────────────────────────────────────────────── */
+
+/*
+ * Lives under the table of contents in the desktop right sidebar. Starlight
+ * only renders that column above its `lg` breakpoint, so this needs no media
+ * query of its own.
+ */
+.hire-us {
+  margin-top: 1.5rem;
+  padding: 1.25rem 1rem;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border-hairline);
+  border-radius: 0;
+  text-align: center;
+}
+
+.hire-us__copy {
+  margin: 0 0 1.25rem;
+  font-family: var(--__sl-font);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  color: var(--text-primary);
+}
+
+/*
+ * The right sidebar styles bare `a` elements; this is a button, so it opts
+ * out of all of it explicitly rather than inheriting a link treatment.
+ */
+.right-sidebar-panel .hire-us__cta,
+.hire-us__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  background-image: var(--grad-action);
+  background-color: transparent;
+  color: var(--grad-action-text);
+  font-family: var(--__sl-font);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  border: 0;
+  border-radius: 0;
+  transition: opacity 150ms ease;
+}
+
+.hire-us__cta:hover {
+  opacity: 0.85;
+  color: var(--grad-action-text);
+}
+
+.hire-us__cta svg {
+  flex: none;
+}
+
+/* ── Skip link ──────────────────────────────────────────────────────── */
+
+/*
+ * Starlight leaves this to browser defaults, which paints it link-blue. It is
+ * the first thing a keyboard user sees, so it gets the same treatment as the
+ * rest of the chrome.
+ */
+.sl-skip-link {
+  background-color: var(--surface-sunken);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  font-family: var(--__sl-font);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+/* ── Terminal frame dots ────────────────────────────────────────────── */
+
+/*
+ * Expressive Code masks one SVG of three circles and tints it with a single
+ * background-color, so all three dots come out the same shade. Painting three
+ * equal colour bands behind that mask gives one colour per dot: the circles sit
+ * at 13.3%, 50% and 86.7% of the 2.1rem box, so 33.3% bands land cleanly.
+ *
+ * There are four places in the design allowed a non-neutral colour: code
+ * syntax, these terminal dots, the Hugging Face logo, and the Discord mark.
+ */
+.expressive-code .frame.is-terminal .header::before {
+  background-color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    #ff5f57 0 33.333%,
+    #febc2e 33.333% 66.667%,
+    #28c840 66.667% 100%
+  );
+  opacity: 1;
+}
+
+/* ── Social icons ───────────────────────────────────────────────────── */
+
+/*
+ * Starlight sizes icon SVGs in em (`font-size: var(--sl-icon-size, 1em)`), and
+ * the Hugging Face override follows the same pattern — so one font-size here
+ * scales the built-in icons and the custom one together, and they cannot drift.
+ */
+.social-icons a {
+  font-size: 1.375rem; /* 22px */
+}
+
+/*
+ * Discord's mark is one shape, so the built-in glyph is already the real logo —
+ * it just needs the brand colour. Hugging Face is multi-path and carries its
+ * own fills, so it is deliberately not listed here.
+ */
+.social-icons a[href*='discord'] svg,
+.social-icons a[href*='discord']:hover svg {
+  color: #5865f2;
+}
+
+/* ── Sidebar topic icons ────────────────────────────────────────────── */
+
+/*
+ * starlight-sidebar-topics rounds these to 0.25rem from an Astro scoped style,
+ * which compiles to `.class[data-astro-cid-…]` — specificity (0,2,0). A plain
+ * class selector loses to it, so this rule adds a descendant type selector to
+ * reach (0,2,1) rather than reaching for !important.
+ */
+.sidebar-content a .starlight-sidebar-topics-icon {
+  border-radius: 0;
+  border-color: var(--border-strong);
+}
+
+/*
+ * Starlight ships no animal icons, so the Zoo topic paints its own: the
+ * placeholder icon is hidden and a squirrel is drawn as a mask, which keeps
+ * it taking its color from the link in both themes.
+ * Squirrel outline from Lucide, ISC licensed.
+ */
+.sidebar-content a .starlight-sidebar-topics-icon svg {
+  display: none;
+}
+
+.sidebar-content a .starlight-sidebar-topics-icon::after {
+  content: '';
+  display: block;
+  width: 1em;
+  height: 1em;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15.236 22a3 3 0 0 0-2.2-5'/%3E%3Cpath d='M16 20a3 3 0 0 1 3-3h1a2 2 0 0 0 2-2v-2a4 4 0 0 0-4-4V4'/%3E%3Cpath d='M18 13h.01'/%3E%3Cpath d='M18 6a4 4 0 0 0-4 4 7 7 0 0 0-7 7c0-5 4-5 4-10.5a4.5 4.5 0 1 0-9 0 2.5 2.5 0 0 0 5 0C7 10 3 11 3 17c0 2.8 2.2 5 5 5h10'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15.236 22a3 3 0 0 0-2.2-5'/%3E%3Cpath d='M16 20a3 3 0 0 1 3-3h1a2 2 0 0 0 2-2v-2a4 4 0 0 0-4-4V4'/%3E%3Cpath d='M18 13h.01'/%3E%3Cpath d='M18 6a4 4 0 0 0-4 4 7 7 0 0 0-7 7c0-5 4-5 4-10.5a4.5 4.5 0 1 0-9 0 2.5 2.5 0 0 0 5 0C7 10 3 11 3 17c0 2.8 2.2 5 5 5h10'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}

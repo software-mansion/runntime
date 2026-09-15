@@ -1,0 +1,73 @@
+// Catppuccin Latte hues. Mauve, blue, text, subtext0 and subtext1 are the
+// stock values; yellow, green, peach and sky are darkened along the same hue,
+// because on a near-white surface the stock accents land at 2.5-3.6:1. Every
+// colour here clears 4.7:1.
+{
+  "name": "runntime-latte",
+  "type": "light",
+  "colors": {
+    "editor.background": "#fafafa",
+    "editor.foreground": "#4c4f69",
+  },
+  "tokenColors": [
+    {
+      "scope": ["comment", "punctuation.definition.comment", "string.comment"],
+      "settings": { "foreground": "#6c6f85", "fontStyle": "italic" },
+    },
+    {
+      "scope": [
+        "keyword",
+        "keyword.control",
+        "keyword.operator.new",
+        "keyword.operator.expression",
+        "storage",
+        "storage.type",
+        "storage.modifier",
+        "variable.language",
+      ],
+      "settings": { "foreground": "#8839ef", "fontStyle": "bold" },
+    },
+    {
+      "scope": [
+        "entity.name.type",
+        "entity.name.class",
+        "entity.other.inherited-class",
+        "support.type",
+        "support.class",
+      ],
+      "settings": { "foreground": "#8f6100", "fontStyle": "bold" },
+    },
+    {
+      "scope": ["entity.name.function", "support.function", "meta.function-call"],
+      "settings": { "foreground": "#1e66f5" },
+    },
+    {
+      "scope": ["constant.numeric", "constant.language", "constant.character", "support.constant"],
+      "settings": { "foreground": "#b3480c" },
+    },
+    {
+      "scope": [
+        "variable",
+        "variable.other",
+        "variable.parameter",
+        "meta.object-literal.key",
+        "support.variable",
+        "entity.name.tag",
+        "entity.other.attribute-name",
+      ],
+      "settings": { "foreground": "#4c4f69" },
+    },
+    {
+      "scope": ["string", "string.quoted", "string.template", "constant.other.symbol"],
+      "settings": { "foreground": "#307a1c" },
+    },
+    {
+      "scope": ["keyword.operator"],
+      "settings": { "foreground": "#0370a8" },
+    },
+    {
+      "scope": ["punctuation", "meta.brace", "punctuation.separator", "punctuation.terminator"],
+      "settings": { "foreground": "#5c5f77" },
+    },
+  ],
+}

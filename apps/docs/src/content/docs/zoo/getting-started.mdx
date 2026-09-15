@@ -1,0 +1,145 @@
+---
+title: Getting started
+description: Install the package, set up the engine, pick a model.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+ruNNtime zoo is a set of ready-to-run AI models for the web: text
+embeddings, speech to text, computer vision and more. They run completely offline, using own
+AI kernels, written in [TypeGPU](https://typegpu.com). Because of that, zoo
+works in any environment with WebGPU: the web, React Native, Electron and
+more. The kernels are plain TypeGPU code, so there is no custom WASM binary
+to download at runtime.
+
+What are the benefits?
+
+- **Private** - the data never leaves the device. You don't have to host a server, and you don't need any API keys. 
+- **Fast** - ruNNtime is faster than existing alternatives. See
+  [Benchmarks](/zoo/benchmarks/) for comparison with other solutions.
+- **Simple** - one function loads a model, one method runs it.
+- **Offline after the first load** - the weights download once and can be
+  cached.
+
+## What is ruNNtime?
+
+ruNNtime is a framework for deploying AI models with TypeGPU. It has two
+packages:
+
+- **zoo** - the documentation you are reading. Ready-to-use model
+  implementations across the AI stack: NLP, speech, vision.
+- **core** - This part is not yet officially released to the public (stay tuned 👀). It is the engine powering zoo. Bare AI primitives, so a model can be
+  composed from numerical blocks and ported straight from a research
+  framework.
+
+## Installation
+
+### 1. Install TypeGPU
+
+ruNNtime is built on [TypeGPU](https://docs.swmansion.com/TypeGPU/): the
+kernels are TypeGPU functions compiled to shaders at build time. You need
+TypeGPU installed and its bundler plugin added to your build before ruNNtime
+will run.
+
+Follow the
+[TypeGPU installation guide](https://docs.swmansion.com/TypeGPU/getting-started/),
+then the
+[unplugin-typegpu setup](https://docs.swmansion.com/TypeGPU/tooling/unplugin-typegpu/)
+for your bundler.
+
+### 2. Install ruNNtime
+
+<Tabs syncKey="package-manager">
+<TabItem label="npm">
+
+```bash
+npm install runntime
+```
+
+</TabItem>
+<TabItem label="pnpm">
+
+```bash
+pnpm add runntime
+```
+
+</TabItem>
+<TabItem label="yarn">
+
+```bash
+yarn add runntime
+```
+
+</TabItem>
+</Tabs>
+
+## Requirements
+
+- **Web** - a browser with WebGPU: Chrome, Edge, Safari 26 and newer, recent
+  Firefox. See [caniuse](https://caniuse.com/webgpu) for the details.
+- **Electron** - ships Chromium, so the web setup works as is.
+- **React Native** - through
+  [react-native-webgpu](https://github.com/wcandillon/react-native-webgpu).
+  Call its `installWebGPU()` first, then request the device yourself and
+  wrap it with `tgpu.initFromDevice({ device })` before passing it to
+  `initRunntime()`. Use the Babel entry of `unplugin-typegpu`.
+
+## Set up the engine
+
+Once per page, before you create any model:
+
+```ts
+import { initRunntime } from 'runntime/zoo';
+import tgpu from 'typegpu';
+
+initRunntime(await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } }));
+```
+
+`initRunntime()` connects the engine to a WebGPU device. Both features are
+requested as optional, so the call succeeds on devices without them. Many
+kernels run much faster with `subgroups`. Every vision model - object
+detection, instance segmentation, pose, depth estimation and image
+classification - runs in half precision and needs `shader-f16`; the
+`create` call throws without it. Text embedding, speech to text and the
+privacy filter run in f32 on such devices. If your app already uses
+TypeGPU, pass the root you have.
+
+## Pick a model
+
+Every model has its own factory function, like `createTextEmbedder(...)`,
+and its own methods. The model's page shows how to load it, call it and
+free it:
+
+- [Text embedding](/zoo/text-embedding/) - text to vectors, for search and
+  similarity.
+- [Speech to text](/zoo/speech-to-text/) - recorded speech to text.
+- [Privacy filter](/zoo/privacy-filter/) - finds personal data in text.
+- [Object detection](/zoo/object-detection/) - finds objects in an image.
+- [Instance segmentation](/zoo/instance-segmentation/) - finds objects in
+  an image, each with a pixel mask.
+- [Pose & keypoints](/zoo/pose-and-keypoints/) - finds people and their
+  body landmarks in an image.
+- [Depth estimation](/zoo/depth-estimation/) - how far each pixel of an
+  image is.
+- [Image classification](/zoo/image-classification/) - what an image shows.
+
+## Coming from transformers.js?
+
+Already using transformers.js and don't want to move your whole codebase to
+a new framework? Keep your `pipeline()` code and swap the engine
+underneath. By default transformers.js runs on ONNX Runtime, which pays for
+its generality in speed. One `initRunntimeBackend()` call replaces that backend
+with ruNNtime. It only changes anything for the models ruNNtime supports,
+everything else keeps loading on ONNX Runtime.
+
+```ts
+import { initRunntimeBackend } from 'runntime/zoo/transformers';
+import { pipeline } from '@huggingface/transformers';
+
+await initRunntimeBackend({ fallbackToOnnx: true });
+
+const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+```
+
+See [migrating from transformers.js](/zoo/migrating-from-transformers-js/) for the supported models
+and the fallback rules.

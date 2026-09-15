@@ -1,0 +1,38 @@
+---
+title: conv2d
+sidebar:
+  order: 2
+---
+
+## Signature
+
+```ts
+conv2d(
+  x: Value,
+  weight: Value,
+  bias: Value | undefined,
+  opts: {
+    kernelSize: number | [number, number];
+    stride: number;
+    padding: number;
+    groups: number;
+    activation?: 'silu' | 'gelu' | 'relu';
+  },
+): Value
+```
+
+torch: `F.conv2d` (CHW)
+
+## Parameters
+
+{/* TODO */}
+
+## Constraints
+
+{/* TODO */}
+
+## Example
+
+```ts
+// TODO
+```

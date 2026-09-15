@@ -1,0 +1,124 @@
+/*
+ * Starlight's own custom properties, remapped onto the token layer.
+ * Injected unlayered by `customCss`, so these beat every @layer starlight.*
+ * rule without needing !important.
+ */
+
+:root,
+::backdrop {
+  --sl-color-white: var(--text-primary);
+  --sl-color-gray-1: var(--text-strong);
+  --sl-color-gray-2: var(--text-body);
+  --sl-color-gray-3: var(--text-muted);
+  --sl-color-gray-4: var(--text-faint);
+  --sl-color-gray-5: var(--border-strong);
+  --sl-color-gray-6: var(--surface-sunken);
+  --sl-color-gray-7: var(--surface-raised);
+  --sl-color-black: var(--surface-base);
+
+  /* Accent collapses onto plain ink — there is no accent hue on this site. */
+  --sl-color-accent: var(--text-primary);
+  --sl-color-accent-high: var(--text-primary);
+  --sl-color-accent-low: var(--surface-quiet);
+
+  --sl-color-text: var(--text-body);
+  --sl-color-text-accent: var(--text-primary);
+  --sl-color-text-invert: var(--surface-base);
+
+  --sl-color-bg: var(--surface-base);
+  --sl-color-bg-nav: var(--surface-base);
+  --sl-color-bg-sidebar: var(--surface-sunken);
+  --sl-color-bg-inline-code: var(--surface-sunken);
+  --sl-color-bg-accent: var(--text-primary);
+
+  --sl-color-hairline: var(--border-hairline);
+  --sl-color-hairline-light: var(--border-hairline);
+  --sl-color-hairline-shade: var(--border-hairline);
+
+  --sl-color-backdrop-overlay: rgb(0 0 0 / 0.66);
+
+  /* Flat surface — this design has no soft depth, only hard offset shadows. */
+  --sl-shadow-sm: none;
+  --sl-shadow-md: none;
+  --sl-shadow-lg: none;
+}
+
+:root[data-theme='light'],
+[data-theme='light'] ::backdrop {
+  --sl-color-backdrop-overlay: rgb(0 0 0 / 0.4);
+}
+
+/* ── Typography ─────────────────────────────────────────────────────── */
+
+:root,
+::backdrop {
+  --sl-font: 'Aeonik';
+  --sl-font-mono: 'DM Mono';
+
+  /* Mobile-first; the 996px block below promotes each heading one step. */
+  --sl-text-h1: 2rem; /* 32px */
+  --sl-text-h2: 1.375rem; /* 22px */
+  --sl-text-h3: 1.125rem; /* 18px */
+  --sl-text-h4: 1rem; /* 16px */
+  --sl-text-h5: 1rem; /* 16px */
+  /* Starlight references --sl-text-h6 but never defines it. */
+  --sl-text-h6: 1rem; /* 16px */
+
+  --sl-text-body: 1rem; /* 16px */
+  --sl-text-code: 0.875rem; /* 14px */
+
+  --sl-line-height: 1.6;
+  --sl-line-height-headings: 1.3;
+}
+
+@media (min-width: 62.25rem) {
+  /* 996px — the react-native-executorch breakpoint. */
+  :root {
+    --sl-text-h1: 2.625rem; /* 42px */
+    --sl-text-h2: 2rem; /* 32px */
+    --sl-text-h3: 1.375rem; /* 22px */
+    --sl-text-h4: 1.125rem; /* 18px */
+    --sl-text-h5: 1.125rem; /* 18px */
+    --sl-text-h6: 1.125rem; /* 18px */
+  }
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+}
+
+h1 {
+  line-height: 1.15;
+}
+
+h2 {
+  line-height: 1.2;
+}
+
+h3,
+h4,
+h5 {
+  line-height: 1.3;
+}
+
+/* h6 in mono, matching the reference. */
+h6 {
+  font-family: var(--__sl-font-mono);
+}
+
+@media (min-width: 62.25rem) {
+  h1 {
+    letter-spacing: 0.02em;
+  }
+}
+
+.sl-markdown-content p {
+  line-height: 1.6;
+}
