@@ -14,16 +14,10 @@ const monoLight = ExpressiveCodeTheme.fromJSONString(
   fs.readFileSync(new URL('./src/styles/code-theme-light.jsonc', import.meta.url), 'utf-8'),
 );
 
-/** GitHub Pages serves this repo's site under /runntime/, so every asset and
- *  link needs that prefix. Overridable for a custom domain, where it is '/'.
- *  Normalized with a trailing slash so the redirects below can concatenate. */
 const base = `${(process.env.BASE_PATH ?? '/runntime').replace(/\/$/, '')}/`;
 
-/** Markdown and MDX prose links are written root-absolute (`/zoo/...`), the
- *  way they read in the source repo. Astro prefixes component hrefs with
- *  `base` but leaves content links alone, so under a project Pages path they
- *  would all 404. This rewrites them at build time, which keeps the content
- *  files identical to upstream. */
+/** Astro prefixes component hrefs with `base`, but not links written in
+ *  Markdown prose. Without this they all 404 under /runntime/. */
 function rehypeBaseLinks() {
   const prefix = (url) =>
     url.startsWith('/') && !url.startsWith('//') && !url.startsWith(base)
@@ -46,12 +40,10 @@ function rehypeBaseLinks() {
 
 // https://astro.build/config
 export default defineConfig({
-  site: process.env.SITE_URL ?? 'https://software-mansion.github.io',
+  site: process.env.SITE_URL ?? 'https://docs.swmansion.com',
   base,
   trailingSlash: 'always',
   redirects: {
-    // Astro prefixes hrefs with `base` but not redirect destinations, so
-    // these spell it out. Without it the landing page 404s on Pages.
     '/': `${base}zoo/getting-started/`,
     '/zoo/': `${base}zoo/getting-started/`,
   },
