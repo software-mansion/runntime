@@ -1,0 +1,180 @@
+---
+title: Benchmarks
+description: ruNNtime zoo models measured against other on-device engines.
+---
+
+import { BenchBars } from '../../../components/BenchBars.tsx';
+
+Benchmarks of ruNNtime against the alternatives. Same model, same input,
+same browser, one engine at a time: ruNNtime zoo, ruNNtime through the
+[transformers.js plugin](/zoo/migrating-from-transformers-js/), and stock
+transformers.js on ONNX Runtime, all on WebGPU. All tests were performed
+on an Apple M2 Pro.
+
+## Speech to text
+
+[Moonshine](/zoo/speech-to-text/) on 500 utterances of LibriSpeech
+test-clean, 66 minutes of speech. ruNNtime runs the f16 weights in half
+precision, its default; transformers.js runs the fp32 and q4 ONNX exports.
+
+### × realtime
+
+Seconds of audio transcribed per second. **Higher is better.**
+
+<BenchBars
+  rows={[
+    { label: 'ruNNtime tiny', value: 89, unit: '×', ours: true },
+    { label: 'ruNNtime tiny, tjs plugin', value: 92, unit: '×', ours: true },
+    { label: 'transformers.js tiny fp32', value: 33, unit: '×' },
+    { label: 'transformers.js tiny q4', value: 34, unit: '×' },
+    { label: 'ruNNtime base', value: 52, unit: '×', ours: true },
+    { label: 'ruNNtime base, tjs plugin', value: 53, unit: '×', ours: true },
+    { label: 'transformers.js base fp32', value: 24, unit: '×' },
+    { label: 'transformers.js base q4', value: 26, unit: '×' },
+    { label: 'ruNNtime streaming tiny', value: 87, unit: '×', ours: true },
+  ]}
+/>
+
+### ms per token
+
+Decode time per generated token. **Lower is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime tiny', value: 2.8, unit: ' ms', ours: true },
+    { label: 'ruNNtime tiny, tjs plugin', value: 2.7, unit: ' ms', ours: true },
+    { label: 'transformers.js tiny fp32', value: 7.2, unit: ' ms' },
+    { label: 'transformers.js tiny q4', value: 6.9, unit: ' ms' },
+    { label: 'ruNNtime base', value: 4.9, unit: ' ms', ours: true },
+    { label: 'ruNNtime base, tjs plugin', value: 4.8, unit: ' ms', ours: true },
+    { label: 'transformers.js base fp32', value: 9.6, unit: ' ms' },
+    { label: 'transformers.js base q4', value: 9.0, unit: ' ms' },
+    { label: 'ruNNtime streaming tiny', value: 2.9, unit: ' ms', ours: true },
+  ]}
+/>
+
+### All numbers
+
+| Model          | Engine               | Precision | × realtime | ms per token | 66 min of audio in |
+| -------------- | -------------------- | --------- | ---------- | ------------ | ------------------ |
+| tiny           | ruNNtime             | f16       | 89         | 2.8          | 43 s               |
+| tiny           | ruNNtime, tjs plugin | f16       | 92         | 2.7          | 42 s               |
+| tiny           | transformers.js      | fp32      | 33         | 7.2          | 120 s              |
+| tiny           | transformers.js      | q4        | 34         | 6.9          | 118 s              |
+| base           | ruNNtime             | f16       | 52         | 4.9          | 75 s               |
+| base           | ruNNtime, tjs plugin | f16       | 53         | 4.8          | 73 s               |
+| base           | transformers.js      | fp32      | 24         | 9.6          | 167 s              |
+| base           | transformers.js      | q4        | 26         | 9.0          | 157 s              |
+| streaming tiny | ruNNtime             | f16       | 87         | 2.9          | 48 s               |
+
+## Text embedding
+
+[all-MiniLM-L6-v2](/zoo/text-embedding/) on 1000 Wikipedia paragraphs,
+22 to 629 words each, in batches of 1, 8 and 32 paragraphs per call.
+ruNNtime runs the f16 weights in half precision, its default;
+transformers.js runs the fp32 ONNX export, its WebGPU default, plus the
+fp16 and q4 exports.
+
+### Paragraphs per second
+
+**Higher is better.**
+
+#### Batch of 32
+
+<BenchBars
+  rows={[
+    { label: 'ruNNtime', value: 351, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 190, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 81, unit: '/s' },
+    { label: 'transformers.js fp16', value: 117, unit: '/s' },
+    { label: 'transformers.js q4', value: 91, unit: '/s' },
+  ]}
+/>
+
+#### Batch of 8
+
+<BenchBars
+  rows={[
+    { label: 'ruNNtime', value: 303, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 191, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 117, unit: '/s' },
+    { label: 'transformers.js fp16', value: 156, unit: '/s' },
+    { label: 'transformers.js q4', value: 120, unit: '/s' },
+  ]}
+/>
+
+### All numbers
+
+Milliseconds per paragraph.
+
+| Engine               | Precision | Batch 1 | Batch 8 | Batch 32 |
+| -------------------- | --------- | ------- | ------- | -------- |
+| ruNNtime             | f16       | 7.0     | 3.1     | 2.7      |
+| ruNNtime             | f32       | 6.2     | 4.1     | 4.5      |
+| ruNNtime, tjs plugin | f16       | 9.1     | 4.8     | 5.2      |
+| transformers.js      | fp32      | 7.7     | 7.6     | 11.3     |
+| transformers.js      | fp16      | 6.6     | 5.9     | 8.3      |
+| transformers.js      | q4        | 7.7     | 7.1     | 10.9     |
+
+## Image classification
+
+[MobileNetV4](/zoo/image-classification/) on 500 COCO photos, one photo per
+call, pixels in to class names out. ruNNtime runs the f16 weights, its only
+precision; transformers.js runs the fp32 ONNX export, its WebGPU default, plus
+the fp16 and q4 exports. Through the plugin, ruNNtime keeps transformers.js's
+image preprocessing, which is most of that row's time.
+
+### Images per second
+
+**Higher is better.**
+
+<BenchBars
+  rows={[
+    { label: 'ruNNtime', value: 407, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 103, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 87, unit: '/s' },
+    { label: 'transformers.js fp16', value: 86, unit: '/s' },
+    { label: 'transformers.js q4', value: 83, unit: '/s' },
+  ]}
+/>
+
+### All numbers
+
+| Engine               | Precision | ms per image | Images per second |
+| -------------------- | --------- | ------------ | ----------------- |
+| ruNNtime             | f16       | 2.4          | 407               |
+| ruNNtime, tjs plugin | f16       | 9.4          | 103               |
+| transformers.js      | fp32      | 10.9         | 87                |
+| transformers.js      | fp16      | 11.2         | 86                |
+| transformers.js      | q4        | 11.7         | 83                |
+
+## How we measure
+
+- **Machine**: MacBook Pro, Apple M2 Pro, 16 GB, Chromium 148, WebGPU on
+  Metal.
+- **Setup**: ruNNtime as in [Getting started](/zoo/getting-started/), with
+  `subgroups` and `shader-f16`, the hosted f16 weights. transformers.js
+  4.2.0, `device: 'webgpu'`, the `onnx-community` and `Xenova` ONNX exports
+  at the row's `dtype`.
+- **Timing**: one engine loaded at a time, every input runs once untimed
+  first. Reported numbers are medians.
+- **Speech to text**: the first 500 utterances of
+  [LibriSpeech](https://www.openslr.org/12) test-clean, 65.8 minutes,
+  1.4 to 31.6 s per clip, 16 kHz mono, the same samples for every engine.
+  Each clip is timed once, samples in to text out. × realtime is audio
+  seconds over seconds taken, median over the 500 clips. ms per token is
+  decode time over tokens produced, median over clips. Every transcript is
+  checked against the reference.
+- **Text embedding**: the 1000 distinct paragraphs of
+  [SQuAD](https://rajpurkar.github.io/SQuAD-explorer/) v1.1 dev, Wikipedia
+  text, capped at 512 tokens, the same for every engine. Two passes per
+  batch size, text in to unit-length vectors out. Paragraphs per second is the
+  whole set over the time it took; ms per paragraph is the median call
+  time over the batch size. Every vector is checked against the ruNNtime f32
+  output.
+- **Image classification**: the first 500 [COCO](https://cocodataset.org/)
+  val2017 photos under a license that allows reuse, 69k to 410k pixels each,
+  decoded once, the same for every engine. Four passes, RGBA pixels in to
+  class names out. Images per second is the whole set over the time it took;
+  ms per image is the median call time.
