@@ -9,3 +9,7 @@ onlyBuiltDependencies:
 allowBuilds:
   esbuild: true
   sharp: true
+  # Node-side artifacts of @huggingface/transformers — only ever used in the
+  # browser here, so their native build scripts never need to run.
+  onnxruntime-node: false
+  protobufjs: false

@@ -1,132 +1,91 @@
-/** API-surface stub of runntime/zoo. The types and the model registry are
- *  the real ones; every create<Task>() and helper throws. Here so apps/docs
- *  builds and typechecks before the library lands in this repo. */
+/** runntime/zoo root: what a zoo user calls. Setup, load options and the
+ *  input and result types every task shares. Each task runner
+ *  (create<Task>) adds its export here. Building blocks under tasks/ stay
+ *  internal; the package imports them by path. */
 
-export { bufferSource, createOpfsCache, initRunntime } from '../core/index.ts';
-export type { RangeSource, WeightCache } from '../core/index.ts';
+export {
+  bufferSource,
+  createOpfsCache,
+  initRunntime,
+  type RangeSource,
+  type WeightCache,
+} from '../core/index.ts';
 
+export type { LoadOptions, ModelPath } from './load.ts';
 export { models } from './models.ts';
-export { COCO_LANDMARKS } from './types.ts';
-export type * from './types.ts';
 
-import type {
-  DepthEstimator,
-  DepthEstimatorModel,
-  ImageBuffer,
-  ImageClassifier,
-  ImageClassifierModel,
-  ImageFormat,
-  InstanceSegmenter,
-  InstanceSegmenterModel,
-  KeypointDetector,
-  KeypointDetectorModel,
-  LoadOptions,
-  ObjectDetector,
-  ObjectDetectorModel,
-  PrivacyFilter,
-  PrivacyFilterModel,
-  SpeechToText,
-  SpeechToTextModel,
-  TextEmbedder,
-  TextEmbedderModel,
-} from './types.ts';
+export {
+  createTextEmbedder,
+  similarity,
+  type TextEmbedder,
+  type TextEmbedderModel,
+} from './tasks/nlp/textEmbedding.ts';
 
-/** Sample rate every speech model expects, in Hz. */
-export const SPEECH_SAMPLE_RATE = 16_000;
+export {
+  createPrivacyFilter,
+  type PrivacyFilter,
+  type PrivacyFilterModel,
+  type PrivacySpan,
+} from './tasks/nlp/privacyFilter.ts';
 
-const notImplemented = (name: string): never => {
-  throw new Error(
-    `runntime: ${name}() is a stub in this repo. The library is not published yet.`,
-  );
-};
+export {
+  createSpeechToText,
+  type SpeechStreamUpdate,
+  type SpeechToText,
+  type SpeechToTextArch,
+  type SpeechToTextModel,
+} from './tasks/audio/speechToText.ts';
+export { decodeAudio, resampleAudio, SPEECH_SAMPLE_RATE } from './tasks/audio/audioInput.ts';
 
-/* ------------------------------------------------------------- task runners */
+export {
+  createObjectDetector,
+  type DetectObjectsOptions,
+  type ObjectDetection,
+  type ObjectDetector,
+  type ObjectDetectorModel,
+} from './tasks/cv/objectDetection.ts';
+export type { Yolo26Variant } from './yolo26/config.ts';
 
-export function createTextEmbedder(
-  _config: TextEmbedderModel = {},
-  _opts: LoadOptions = {},
-): Promise<TextEmbedder> {
-  return notImplemented('createTextEmbedder');
-}
+export {
+  createInstanceSegmenter,
+  type InstanceSegmentation,
+  type InstanceSegmenter,
+  type InstanceSegmenterModel,
+  type SegmentInstancesOptions,
+} from './tasks/cv/instanceSegmentation.ts';
 
-export function createPrivacyFilter(
-  _config: PrivacyFilterModel = {},
-  _opts: LoadOptions = {},
-): Promise<PrivacyFilter> {
-  return notImplemented('createPrivacyFilter');
-}
+export {
+  createKeypointDetector,
+  type DetectKeypointsOptions,
+  type KeypointDetection,
+  type KeypointDetector,
+  type KeypointDetectorModel,
+  type Landmark,
+} from './tasks/cv/keypointDetection.ts';
+export { COCO_LANDMARKS, type CocoLandmark } from './yolo26/pipeline.ts';
 
-export function createSpeechToText(
-  _config: SpeechToTextModel = {},
-  _opts: LoadOptions = {},
-): Promise<SpeechToText> {
-  return notImplemented('createSpeechToText');
-}
+export {
+  createDepthEstimator,
+  type DepthEstimator,
+  type DepthEstimatorModel,
+  type DepthMap,
+} from './tasks/cv/depthEstimation.ts';
+export type { DepthartVariant } from './depthart/estimator.ts';
 
-export function createObjectDetector(
-  _config: ObjectDetectorModel = {},
-  _opts: LoadOptions = {},
-): Promise<ObjectDetector> {
-  return notImplemented('createObjectDetector');
-}
+export {
+  createImageClassifier,
+  type ClassifyOptions,
+  type ImageClassifier,
+  type ImageClassifierModel,
+} from './tasks/cv/imageClassification.ts';
+export { type Classification } from './mobilenetv4/pipeline.ts';
 
-export function createInstanceSegmenter(
-  _config: InstanceSegmenterModel = {},
-  _opts: LoadOptions = {},
-): Promise<InstanceSegmenter> {
-  return notImplemented('createInstanceSegmenter');
-}
-
-export function createKeypointDetector(
-  _config: KeypointDetectorModel = {},
-  _opts: LoadOptions = {},
-): Promise<KeypointDetector> {
-  return notImplemented('createKeypointDetector');
-}
-
-export function createDepthEstimator(
-  _config: DepthEstimatorModel = {},
-  _opts: LoadOptions = {},
-): Promise<DepthEstimator> {
-  return notImplemented('createDepthEstimator');
-}
-
-export function createImageClassifier(
-  _config: ImageClassifierModel = {},
-  _opts: LoadOptions = {},
-): Promise<ImageClassifier> {
-  return notImplemented('createImageClassifier');
-}
-
-/* ------------------------------------------------------------------ helpers */
-
-/** Dot product of two unit-length embeddings, which is their cosine
- *  similarity: 1 for the same meaning, near 0 for unrelated text. */
-export function similarity(_a: Float32Array, _b: Float32Array): number {
-  return notImplemented('similarity');
-}
-
-/** Decodes an audio file to mono samples at 16 kHz. */
-export function decodeAudio(_bytes: ArrayBuffer | Uint8Array): Promise<Float32Array> {
-  return notImplemented('decodeAudio');
-}
-
-/** Resamples mono PCM from `fromRate` to 16 kHz. */
-export function resampleAudio(_samples: Float32Array, _fromRate: number): Promise<Float32Array> {
-  return notImplemented('resampleAudio');
-}
-
-/** Wraps raw pixel bytes as an ImageBuffer. */
-export function imageBuffer(
-  _data: Uint8Array | Uint8ClampedArray,
-  _width: number,
-  _height: number,
-  _format?: ImageFormat,
-): ImageBuffer {
-  return notImplemented('imageBuffer');
-}
-
-/** Wraps a canvas ImageData as an rgba ImageBuffer. */
-export function imageBufferFromImageData(_img: ImageData): ImageBuffer {
-  return notImplemented('imageBufferFromImageData');
-}
+export {
+  imageBuffer,
+  imageBufferFromImageData,
+  type ImageBuffer,
+  type ImageFormat,
+  type ResizeMode,
+} from './tasks/cv/image.ts';
+export type { Point, Size } from './tasks/cv/ops/point.ts';
+export type { BoundingBox, BoxFormat, BoxMap } from './tasks/cv/ops/box.ts';

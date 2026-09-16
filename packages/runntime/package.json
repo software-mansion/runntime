@@ -1,22 +1,61 @@
 {
   "name": "runntime",
-  "version": "0.0.1-alpha.0",
-  "description": "Placeholder. Real package coming soon.",
+  "version": "0.0.1",
+  "description": "AI models on the web, built with TypeGPU.",
   "license": "MIT",
-  "main": "index.js",
-  "exports": {
-    ".": "./index.js",
-    "./core": "./src/core/index.ts",
-    "./zoo": "./src/zoo/index.ts",
-    "./zoo/transformers": "./src/zoo/transformers/index.ts"
-  },
-  "files": [
-    "index.js"
+  "keywords": [
+    "webgpu",
+    "typegpu",
+    "wgsl",
+    "gpu",
+    "machine-learning",
+    "inference",
+    "on-device",
+    "neural-network",
+    "transformers",
+    "object-detection",
+    "speech-to-text",
+    "text-embedding",
+    "image-classification",
+    "depth-estimation",
+    "react-native"
   ],
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./zoo": {
+      "types": "./dist/zoo/index.d.mts",
+      "default": "./dist/zoo/index.mjs"
+    },
+    "./zoo/transformers": {
+      "types": "./dist/zoo/transformers/index.d.mts",
+      "default": "./dist/zoo/transformers/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
   "dependencies": {
-    "typegpu": "^0.11.9"
+    "js-tiktoken": "^1.0.20"
+  },
+  "peerDependencies": {
+    "typegpu": "^0.11.9",
+    "@huggingface/transformers": "^4.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.60"
+    "@huggingface/transformers": "^4.2.0",
+    "@types/node": "^25.9.2",
+    "@webgpu/types": "^0.1.60",
+    "tsdown": "^0.23.0",
+    "unplugin-typegpu": "^0.11.6",
+    "typegpu": "^0.11.9"
   }
 }

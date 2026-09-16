@@ -1,34 +1,26 @@
-/** API-surface stub of runntime/zoo/transformers: the transformers.js
- *  backend adapter. Every function throws; the docs only quote these in
- *  code samples. */
+/** transformers.js plugin: hub ids we implement load as TypeGPU zoo models
+ *  through the stock pipeline() call.
+ *  - init.ts       one-call setup: device + initRunntime + registerRunntimeBackend
+ *  - registry.ts   patches PreTrainedModel.from_pretrained and holds the
+ *                  id → loader registry
+ *  - weights.ts    OPFS weight caches for the loaders: whole-file for small
+ *                  models, byte ranges for big ones
+ *  - runntimeModel.ts   isRunntimeModel, knows every wrapper class
+ *  One folder per zoo model, each with:
+ *  - model.ts      the transformers.js model stand-in running the zoo model
+ *  - loader.ts     fetches the weights and builds the stand-in for a hub id */
 
-const notImplemented = (name: string): never => {
-  throw new Error(
-    `runntime: ${name}() is a stub in this repo. The library is not published yet.`,
-  );
-};
-
-/** Registers runntime as a transformers.js backend and initialises it. */
-export function initRunntimeBackend(_options?: unknown): Promise<void> {
-  return notImplemented('initRunntimeBackend');
-}
-
-/** Registers runntime as a transformers.js backend against an existing root. */
-export function registerRunntimeBackend(_options?: unknown): void {
-  return notImplemented('registerRunntimeBackend');
-}
-
-/** True when transformers.js would route this model id through runntime. */
-export function isRunntimeModel(_modelId: string): boolean {
-  return notImplemented('isRunntimeModel');
-}
-
-/** Loader for all-MiniLM-L6-v2 weights. */
-export function minilmLoader(_options?: unknown): unknown {
-  return notImplemented('minilmLoader');
-}
-
-/** Loader for YOLO26 weights. */
-export function yolo26Loader(_options?: unknown): unknown {
-  return notImplemented('yolo26Loader');
-}
+export { initRunntimeBackend } from './init.ts';
+export {
+  registerRunntimeBackend,
+  unregisterRunntimeBackend,
+  type RegisterRunntimeBackendOpts,
+  type RunntimeModelLoader,
+} from './registry.ts';
+export { isRunntimeModel } from './runntimeModel.ts';
+export { minilmLoader } from './minilm/loader.ts';
+export { privacyFilterLoader } from './privacy-filter/loader.ts';
+export { moonshineLoader } from './moonshine/loader.ts';
+export { yolo26Loader } from './yolo26/loader.ts';
+export { depthartLoader } from './depthart/loader.ts';
+export { mobilenetv4Loader } from './mobilenetv4/loader.ts';

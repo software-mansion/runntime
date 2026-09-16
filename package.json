@@ -8,7 +8,11 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
+    "typecheck": "pnpm -r exec tsc --noEmit",
     "build:docs": "pnpm --filter docs run build",
     "dev:docs": "pnpm --filter docs run dev"
+  },
+  "devDependencies": {
+    "typescript": "npm:tsover@^5.9.8"
   }
 }
