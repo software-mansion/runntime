@@ -45,9 +45,12 @@ export function topIndices(score: Float32Array, k: number): number[] {
 }
 
 export interface TopAnchors {
+  /** `count` x (numClasses + 1): the class logits, then the background 0. */
   logits: Float32Array;
   boxes: Float32Array;
   count: number;
+  /** The class count the logits actually carry, background included. */
+  outClasses: number;
 }
 
 export function selectTopAnchors(
@@ -73,7 +76,10 @@ export function selectTopAnchors(
   }
   const order = topIndices(best, maxDet);
   const count = Math.min(maxDet, total);
-  const logits = new Float32Array(count * numClasses);
+  // A trailing background class at 0: post_process_object_detection softmaxes
+  // across classes and drops anchors whose best class is last, giving sigmoid.
+  const outClasses = numClasses + 1;
+  const logits = new Float32Array(count * outClasses);
   const boxes = new Float32Array(count * 4);
   for (let k = 0; k < count; k++) {
     let idx = order[k]!;
@@ -84,7 +90,7 @@ export function selectTopAnchors(
     }
     const { data, h, w, stride } = levels[level]!;
     const hw = h * w;
-    for (let c = 0; c < numClasses; c++) logits[k * numClasses + c] = data[(4 + c) * hw + idx]!;
+    for (let c = 0; c < numClasses; c++) logits[k * outClasses + c] = data[(4 + c) * hw + idx]!;
     const ax = (idx % w) + 0.5;
     const ay = Math.floor(idx / w) + 0.5;
     const l = data[idx]!;
@@ -97,5 +103,5 @@ export function selectTopAnchors(
     boxes[k * 4 + 2] = (l + r) * scale;
     boxes[k * 4 + 3] = (t + b) * scale;
   }
-  return { logits, boxes, count };
+  return { logits, boxes, count, outClasses };
 }

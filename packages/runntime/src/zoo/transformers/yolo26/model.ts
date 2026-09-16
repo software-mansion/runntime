@@ -49,7 +49,7 @@ export class RunntimeYolosForObjectDetection extends PreTrainedModel {
       inputSize: size,
     });
     return {
-      logits: new Tensor('float32', top.logits, [1, top.count, numClasses]),
+      logits: new Tensor('float32', top.logits, [1, top.count, top.outClasses]),
       pred_boxes: new Tensor('float32', top.boxes, [1, top.count, 4]),
     };
   }
