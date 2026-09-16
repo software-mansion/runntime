@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
+    "sync:readme": "node scripts/sync-readme.mjs",
     "typecheck": "pnpm -r run typecheck",
     "build:docs": "pnpm --filter docs run build",
     "dev:docs": "pnpm --filter docs run dev",

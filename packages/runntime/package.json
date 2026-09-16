@@ -45,7 +45,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "prepack": "pnpm run build"
+    "prepack": "node ../../scripts/sync-readme.mjs && pnpm run build"
   },
   "dependencies": {
     "js-tiktoken": "^1.0.20"

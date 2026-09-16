@@ -5,3 +5,6 @@ dist/
 *.log
 .env
 .env.production
+
+# generated from the repo README by scripts/sync-readme.mjs
+packages/runntime/README.md
