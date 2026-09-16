@@ -37,15 +37,12 @@ packages:
 ### 1. Install TypeGPU
 
 ruNNtime is built on [TypeGPU](https://docs.swmansion.com/TypeGPU/): the
-kernels are TypeGPU functions compiled to shaders at build time. You need
-TypeGPU installed and its bundler plugin added to your build before ruNNtime
-will run.
+kernels are TypeGPU functions already compiled to shaders when ruNNtime is
+published, so you only need TypeGPU itself installed. No bundler plugin is
+required to use ruNNtime.
 
 Follow the
-[TypeGPU installation guide](https://docs.swmansion.com/TypeGPU/getting-started/),
-then the
-[unplugin-typegpu setup](https://docs.swmansion.com/TypeGPU/tooling/unplugin-typegpu/)
-for your bundler.
+[TypeGPU installation guide](https://docs.swmansion.com/TypeGPU/getting-started/).
 
 ### 2. Install ruNNtime
 
@@ -82,7 +79,7 @@ yarn add runntime
   [react-native-webgpu](https://github.com/wcandillon/react-native-webgpu).
   Call its `installWebGPU()` first, then request the device yourself and
   wrap it with `tgpu.initFromDevice({ device })` before passing it to
-  `initRunntime()`. Use the Babel entry of `unplugin-typegpu`.
+  `initRunntime()`.
 
 ## Set up the engine
 
