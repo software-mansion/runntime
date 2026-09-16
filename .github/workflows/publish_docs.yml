@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/publish_docs.yml'
       - 'apps/docs/**'
+      - 'packages/runntime/**'
   workflow_dispatch:
 jobs:
   publish:
@@ -22,7 +23,7 @@ jobs:
           && git config --local user.name "GitHub Action"
           && corepack enable
           && pnpm install --frozen-lockfile
-          && pnpm --filter docs run build
+          && pnpm --filter docs... run build
 
       - name: Publish generated content to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@releases/v3
