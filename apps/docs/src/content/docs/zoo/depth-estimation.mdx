@@ -14,6 +14,13 @@ the scene from near to far within one image.
 [DepthART](https://huggingface.co/software-mansion/runntime-depthart) on the
 GPU.
 
+Through the [transformers.js plugin](/zoo/migrating-from-transformers-js/),
+DepthART runs under the Depth Anything V2 model ids,
+`onnx-community/depth-anything-v2-small` and `-base`. transformers.js has no
+DepthART, so a `depth-estimation` pipeline with one of those ids runs
+DepthART, not Depth Anything. The map comes back at 448×448 with smaller
+for nearer, the opposite of Depth Anything.
+
 ## Quick start
 
 ```ts

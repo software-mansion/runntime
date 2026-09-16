@@ -15,7 +15,7 @@ on an Apple M2 Pro.
 
 [Moonshine](/zoo/speech-to-text/) on 500 utterances of LibriSpeech
 test-clean, 66 minutes of speech. ruNNtime runs the f16 weights in half
-precision, its default; transformers.js runs the fp32 and q4 ONNX exports.
+precision, its default. transformers.js runs the fp32 and q4 ONNX exports.
 
 ### × realtime
 
@@ -72,7 +72,7 @@ Decode time per generated token. **Lower is better.**
 
 [all-MiniLM-L6-v2](/zoo/text-embedding/) on 1000 Wikipedia paragraphs,
 22 to 629 words each, in batches of 1, 8 and 32 paragraphs per call.
-ruNNtime runs the f16 weights in half precision, its default;
+ruNNtime runs the f16 weights in half precision, its default.
 transformers.js runs the fp32 ONNX export, its WebGPU default, plus the
 fp16 and q4 exports.
 
@@ -121,7 +121,7 @@ Milliseconds per paragraph.
 
 [MobileNetV4](/zoo/image-classification/) on 500 COCO photos, one photo per
 call, pixels in to class names out. ruNNtime runs the f16 weights, its only
-precision; transformers.js runs the fp32 ONNX export, its WebGPU default, plus
+precision. transformers.js runs the fp32 ONNX export, its WebGPU default, plus
 the fp16 and q4 exports. Through the plugin, ruNNtime keeps transformers.js's
 image preprocessing, which is most of that row's time.
 
@@ -149,14 +149,144 @@ image preprocessing, which is most of that row's time.
 | transformers.js      | fp16      | 11.2         | 86                |
 | transformers.js      | q4        | 11.7         | 83                |
 
+## Depth estimation
+
+[DepthART](/zoo/depth-estimation/) on 500 COCO photos, one photo per call,
+pixels in to a depth map out. ruNNtime runs the f16 weights, its only
+precision. Through the plugin, ruNNtime runs DepthART with transformers.js's
+image preprocessing, which is most of that row's time.
+
+### Images per second
+
+**Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime', value: 51, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 20, unit: '/s', ours: true },
+  ]}
+/>
+
+### All numbers
+
+| Engine               | Precision | ms per image | Images per second |
+| -------------------- | --------- | ------------ | ----------------- |
+| ruNNtime             | f16       | 19.3         | 51                |
+| ruNNtime, tjs plugin | f16       | 50.1         | 20                |
+
+## Object detection
+
+[YOLO26](/zoo/object-detection/) on 500 COCO photos, one photo per call,
+pixels in to boxes out, in the n and m sizes. ruNNtime runs the f16
+weights, its only precision. transformers.js runs the ONNX export of the
+same model in fp32, its WebGPU default, plus the fp16 and q4 exports.
+Through the plugin, ruNNtime keeps transformers.js's image preprocessing.
+
+### Images per second
+
+**Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime n', value: 61, unit: '/s', ours: true },
+    { label: 'ruNNtime n, tjs plugin', value: 27, unit: '/s', ours: true },
+    { label: 'transformers.js n fp32', value: 23, unit: '/s' },
+    { label: 'transformers.js n fp16', value: 24, unit: '/s' },
+    { label: 'transformers.js n q4', value: 22, unit: '/s' },
+    { label: 'ruNNtime m', value: 13.6, unit: '/s', ours: true },
+    { label: 'ruNNtime m, tjs plugin', value: 11.1, unit: '/s', ours: true },
+    { label: 'transformers.js m fp32', value: 11.2, unit: '/s' },
+    { label: 'transformers.js m fp16', value: 13.7, unit: '/s' },
+    { label: 'transformers.js m q4', value: 11.3, unit: '/s' },
+  ]}
+/>
+
+### All numbers
+
+| Model | Engine               | Precision | ms per image | Images per second |
+| ----- | -------------------- | --------- | ------------ | ----------------- |
+| n     | ruNNtime             | f16       | 16.3         | 61                |
+| n     | ruNNtime, tjs plugin | f16       | 34.5         | 27                |
+| n     | transformers.js      | fp32      | 42.5         | 23                |
+| n     | transformers.js      | fp16      | 37.9         | 24                |
+| n     | transformers.js      | q4        | 46.4         | 22                |
+| m     | ruNNtime             | f16       | 72.7         | 13.6              |
+| m     | ruNNtime, tjs plugin | f16       | 89.6         | 11.1              |
+| m     | transformers.js      | fp32      | 88.6         | 11.2              |
+| m     | transformers.js      | fp16      | 72.4         | 13.7              |
+| m     | transformers.js      | q4        | 88.6         | 11.3              |
+
+## Pose and instance segmentation
+
+[YOLO26 pose](/zoo/pose-and-keypoints/) and
+[YOLO26 segment](/zoo/instance-segmentation/) on the same 500 COCO photos,
+one photo per call, in the n and m sizes.
+
+### Images per second
+
+**Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime pose n', value: 53.5, unit: '/s', ours: true },
+    { label: 'ruNNtime pose m', value: 12.3, unit: '/s', ours: true },
+    { label: 'ruNNtime segment n', value: 41.9, unit: '/s', ours: true },
+    { label: 'ruNNtime segment m', value: 7.2, unit: '/s', ours: true },
+  ]}
+/>
+
+### All numbers
+
+| Model     | Engine   | Precision | ms per image | Images per second |
+| --------- | -------- | --------- | ------------ | ----------------- |
+| pose n    | ruNNtime | f16       | 18.2         | 53.5              |
+| pose m    | ruNNtime | f16       | 78.4         | 12.3              |
+| segment n | ruNNtime | f16       | 23.3         | 41.9              |
+| segment m | ruNNtime | f16       | 138.5        | 7.2               |
+
+## Privacy filter
+
+[Privacy filter](/zoo/privacy-filter/) on 300 short messages with
+personal data, 9 to 76 words each, one message per call, text in to
+labelled spans out. ruNNtime runs the int8 weights, its only precision.
+transformers.js runs the ONNX exports of the same model in q4 and q4f16.
+Its q8 export finds almost none of the spans on WebGPU, so it is left out.
+Through the plugin, ruNNtime keeps transformers.js's tokenizer.
+
+### Texts per second
+
+**Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime', value: 32.3, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 32.2, unit: '/s', ours: true },
+    { label: 'transformers.js q4', value: 11.7, unit: '/s' },
+    { label: 'transformers.js q4f16', value: 15.0, unit: '/s' },
+  ]}
+/>
+
+### All numbers
+
+| Engine               | Precision | ms per text | Texts per second |
+| -------------------- | --------- | ----------- | ---------------- |
+| ruNNtime             | int8      | 31.8        | 32.3             |
+| ruNNtime, tjs plugin | int8      | 31.8        | 32.2             |
+| transformers.js      | q4        | 85.9        | 11.7             |
+| transformers.js      | q4f16     | 67.5        | 15.0             |
+
 ## How we measure
 
 - **Machine**: MacBook Pro, Apple M2 Pro, 16 GB, Chromium 148, WebGPU on
   Metal.
 - **Setup**: ruNNtime as in [Getting started](/zoo/getting-started/), with
-  `subgroups` and `shader-f16`, the hosted f16 weights. transformers.js
-  4.2.0, `device: 'webgpu'`, the `onnx-community` and `Xenova` ONNX exports
-  at the row's `dtype`.
+  `subgroups` and `shader-f16`, the hosted weights. transformers.js 4.2.0,
+  `device: 'webgpu'`, the `onnx-community`, `Xenova` and `openai` ONNX
+  exports at the row's `dtype`.
 - **Timing**: one engine loaded at a time, every input runs once untimed
   first. Reported numbers are medians.
 - **Speech to text**: the first 500 utterances of
@@ -170,11 +300,26 @@ image preprocessing, which is most of that row's time.
   [SQuAD](https://rajpurkar.github.io/SQuAD-explorer/) v1.1 dev, Wikipedia
   text, capped at 512 tokens, the same for every engine. Two passes per
   batch size, text in to unit-length vectors out. Paragraphs per second is the
-  whole set over the time it took; ms per paragraph is the median call
+  whole set over the time it took. ms per paragraph is the median call
   time over the batch size. Every vector is checked against the ruNNtime f32
   output.
 - **Image classification**: the first 500 [COCO](https://cocodataset.org/)
   val2017 photos under a license that allows reuse, 69k to 410k pixels each,
   decoded once, the same for every engine. Four passes, RGBA pixels in to
-  class names out. Images per second is the whole set over the time it took;
+  class names out. Images per second is the whole set over the time it took.
   ms per image is the median call time.
+- **Depth estimation**: the same 500 COCO photos, four passes, RGBA pixels
+  in to a relative depth map out. Images per second and ms per image as
+  above.
+- **Object detection**: the same 500 COCO photos, four passes, RGBA pixels
+  in to boxes out at each engine's default threshold. Images per second and
+  ms per image as above.
+- **Pose and instance segmentation**: the same 500 COCO photos, four
+  passes, RGBA pixels in to people with landmarks, or objects with masks,
+  out at the default threshold. Images per second and ms per image as above.
+- **Privacy filter**: 300 English messages, 9 to 76 words, with
+  names, emails, phones, addresses, dates, URLs, account numbers and
+  secrets, the same for every engine. Four passes, text in to labelled
+  spans out. Texts per second is the whole set over the time it took. ms
+  per text is the median call time. Every span set is checked against
+  ruNNtime's.
