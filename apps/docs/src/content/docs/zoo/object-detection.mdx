@@ -81,10 +81,7 @@ function createObjectDetector(
 
 interface ObjectDetector {
   readonly labels: readonly string[];
-  detectObjects(
-    image: ImageBuffer,
-    options?: DetectObjectsOptions,
-  ): Promise<ObjectDetection[]>;
+  detectObjects(image: ImageBuffer, options?: DetectObjectsOptions): Promise<ObjectDetection[]>;
   dispose(): void;
 }
 

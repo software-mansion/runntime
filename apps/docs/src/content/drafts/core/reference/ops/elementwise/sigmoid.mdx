@@ -15,8 +15,9 @@ sigmoid(x: Value): Value
 Method form:
 
 ```ts
-x.sigmoid()
+x.sigmoid();
 ```
+
 Applies the logistic function, elementwise:
 
 ```
@@ -33,16 +34,8 @@ runs until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const gate = h.sigmoid();   // gating values in (0, 1)
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-gate = h.sigmoid()
-```
-</TabItem>
+  <TabItem label="ruNNtime">```ts const gate = h.sigmoid(); // gating values in (0, 1) ```</TabItem>
+  <TabItem label="PyTorch">```python gate = h.sigmoid() ```</TabItem>
 </Tabs>
 
 ## Constraints

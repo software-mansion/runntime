@@ -10,17 +10,17 @@ different shapes. The shapes must be equal, or match one of the patterns
 below. For a matrix of shape `[M,N]` (M rows, N columns), the other input
 may be:
 
-| shape | combined as |
-| --- | --- |
-| `[N]` or `[1,N]` | a row vector — with each of the M rows |
-| `[M,1]` | a column vector — with each of the N columns |
-| `[1]` | a single element — with every element |
+| shape            | combined as                                  |
+| ---------------- | -------------------------------------------- |
+| `[N]` or `[1,N]` | a row vector — with each of the M rows       |
+| `[M,1]`          | a column vector — with each of the N columns |
+| `[1]`            | a single element — with every element        |
 
 ```ts
 // x: [M,N]
-x.add(row);   // row: [N]   — out[i][j] = x[i][j] + row[j]
-x.add(col);   // col: [M,1] — out[i][j] = x[i][j] + col[i]
-x.add(one);   // one: [1]   — out[i][j] = x[i][j] + one[0]
+x.add(row); // row: [N]   — out[i][j] = x[i][j] + row[j]
+x.add(col); // col: [M,1] — out[i][j] = x[i][j] + col[i]
+x.add(one); // one: [1]   — out[i][j] = x[i][j] + one[0]
 ```
 
 The result always has the matrix shape `[M,N]`. Any other shape pair

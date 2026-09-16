@@ -1,4 +1,9 @@
-import { createImageClassifier, models, type ImageClassifier, type LoadOptions } from 'runntime/zoo';
+import {
+  createImageClassifier,
+  models,
+  type ImageClassifier,
+  type LoadOptions,
+} from 'runntime/zoo';
 import { useCallback } from 'react';
 import { CameraDemo } from './CameraDemo.tsx';
 import { useModel } from './useModel.ts';

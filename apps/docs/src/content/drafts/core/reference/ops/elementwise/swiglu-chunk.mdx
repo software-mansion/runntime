@@ -15,8 +15,9 @@ swigluChunk(x: Value): Value
 Function-only:
 
 ```ts
-swigluChunk(x)
+swigluChunk(x);
 ```
+
 Applies the SwiGLU activation to one concatenated Value,
 `[T,2F] → [T,F]`:
 
@@ -41,18 +42,13 @@ nothing runs until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const h = swigluChunk(x.matmul(wFc1));   // [T,2F] → [T,F]
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-# unfused equivalent of the one swigluChunk kernel
-hidden, gate = fc1(x).chunk(2, dim=-1)
-h = F.silu(gate) * hidden
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const h = swigluChunk(x.matmul(wFc1)); // [T,2F] → [T,F] ```
+  </TabItem>
+  <TabItem label="PyTorch">
+    ```python # unfused equivalent of the one swigluChunk kernel hidden, gate = fc1(x).chunk(2,
+    dim=-1) h = F.silu(gate) * hidden ```
+  </TabItem>
 </Tabs>
 
 For the clamped variant that takes the two halves as separate Values,

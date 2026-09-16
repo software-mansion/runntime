@@ -15,8 +15,9 @@ mul(a: Value, b: Value | number): Value
 Method form:
 
 ```ts
-a.mul(b)
+a.mul(b);
 ```
+
 Multiplies `a` by `b`, elementwise:
 
 ```
@@ -38,18 +39,11 @@ either argument.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const gated = h.mul(gate);    // [T,N] * [T,N] — elementwise gating
-const scaled = x.mul(0.5);    // plain number — no upload
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-gated = h * gate
-scaled = x * 0.5
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const gated = h.mul(gate); // [T,N] * [T,N] — elementwise gating const scaled =
+    x.mul(0.5); // plain number — no upload ```
+  </TabItem>
+  <TabItem label="PyTorch">```python gated = h * gate scaled = x * 0.5 ```</TabItem>
 </Tabs>
 
 ## Constraints

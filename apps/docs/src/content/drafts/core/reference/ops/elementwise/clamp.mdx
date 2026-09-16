@@ -15,8 +15,9 @@ clamp(x: Value, lo: number, hi: number): Value
 Method form:
 
 ```ts
-x.clamp(lo, hi)
+x.clamp(lo, hi);
 ```
+
 Clamps every element of `x` into the range `[lo, hi]`:
 
 ```
@@ -36,18 +37,12 @@ runs until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const capped = logits.clamp(-7, 7);
-const relu = x.clamp(0, Infinity);   // one-sided
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-capped = logits.clamp(-7, 7)
-relu = x.clamp(min=0)
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const capped = logits.clamp(-7, 7); const relu = x.clamp(0, Infinity); // one-sided ```
+  </TabItem>
+  <TabItem label="PyTorch">
+    ```python capped = logits.clamp(-7, 7) relu = x.clamp(min=0) ```
+  </TabItem>
 </Tabs>
 
 ## Constraints

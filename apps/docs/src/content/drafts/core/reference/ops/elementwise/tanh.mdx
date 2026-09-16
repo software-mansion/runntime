@@ -15,8 +15,9 @@ tanh(x: Value): Value
 Method form:
 
 ```ts
-x.tanh()
+x.tanh();
 ```
+
 Applies the hyperbolic tangent, elementwise:
 
 ```
@@ -33,16 +34,8 @@ runs until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const y = h.tanh();
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-y = h.tanh()
-```
-</TabItem>
+  <TabItem label="ruNNtime">```ts const y = h.tanh(); ```</TabItem>
+  <TabItem label="PyTorch">```python y = h.tanh() ```</TabItem>
 </Tabs>
 
 As a convolution epilogue, prefer the fused form:
