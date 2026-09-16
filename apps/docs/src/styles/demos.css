@@ -187,3 +187,71 @@
   margin: 1.25rem 0 0;
   min-height: 3rem;
 }
+
+/* ── Benchmark bars (BenchBars.tsx) ── */
+
+.bench-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  list-style: none;
+  margin: 1rem 0 1.5rem;
+  padding: 0;
+}
+
+.bench-bar-row {
+  align-items: center;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 12rem minmax(0, 1fr) 4.5rem;
+}
+
+.bench-bar-label {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bench-bar-track {
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.bench-bar {
+  background: var(--text-faint);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+}
+
+.bench-bar-value {
+  color: var(--text-faint);
+  font-family: var(--__sl-font-mono, monospace);
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+/* ruNNtime rows: thick, bright, bold. */
+.bench-bar-row-ours .bench-bar-track {
+  height: 10px;
+}
+
+.bench-bar-row-ours .bench-bar {
+  background: var(--grad-brand);
+}
+
+.bench-bar-row-ours .bench-bar-label,
+.bench-bar-row-ours .bench-bar-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 50rem) {
+  .bench-bar-row {
+    grid-template-columns: 7.5rem minmax(0, 1fr) 3.5rem;
+  }
+}
