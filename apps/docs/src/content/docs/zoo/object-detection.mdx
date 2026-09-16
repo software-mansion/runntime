@@ -108,7 +108,7 @@ YOLO26 picks one box per object on its own, so there is no IoU threshold.
 
 The first argument is the model config, a plain object with the fields
 below. `models.objectDetection.YOLO26` holds ready-made ones: `N` (5 MB,
-the `DEFAULT`) and `M` (41 MB, more accurate, slower). Pass one as is, copy
+the `DEFAULT`), `S` (18 MB) and `M` (39 MB, more accurate, slower). Pass one as is, copy
 it with a field changed, or point at your own safetensors export of an
 Ultralytics YOLO26 detect checkpoint.
 
@@ -189,7 +189,8 @@ const detector = await createObjectDetector(models.objectDetection.YOLO26.DEFAUL
 | Model                                                               | Config                            | Classes | Input             | Weights    |
 | ------------------------------------------------------------------- | --------------------------------- | ------- | ----------------- | ---------- |
 | [YOLO26](https://huggingface.co/software-mansion/runntime-yolo26) n | `models.objectDetection.YOLO26.N` | COCO-80 | 640×640 (default) | f16, 5 MB  |
-| [YOLO26](https://huggingface.co/software-mansion/runntime-yolo26) m | `models.objectDetection.YOLO26.M` | COCO-80 | 640×640 (default) | f16, 41 MB |
+| [YOLO26](https://huggingface.co/software-mansion/runntime-yolo26) s | `models.objectDetection.YOLO26.S` | COCO-80 | 640×640 (default) | f16, 18 MB |
+| [YOLO26](https://huggingface.co/software-mansion/runntime-yolo26) m | `models.objectDetection.YOLO26.M` | COCO-80 | 640×640 (default) | f16, 39 MB |
 
 Your own export of the other sizes, `s`, `l` and `x`, loads through
 `modelPath` too.

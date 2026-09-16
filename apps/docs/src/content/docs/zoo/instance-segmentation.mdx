@@ -145,7 +145,7 @@ YOLO26 picks one box per object on its own, so there is no IoU threshold.
 
 The first argument is the model config, a plain object with the fields
 below. `models.instanceSegmentation.YOLO26_SEG` holds ready-made ones: `N`
-(6 MB, the `DEFAULT`) and `M` (48 MB, more accurate, slower). Pass one as
+(5 MB, the `DEFAULT`), `S` (20 MB) and `M` (45 MB, more accurate, slower). Pass one as
 is, copy it with a field changed, or point at your own safetensors export
 of an Ultralytics YOLO26 segment checkpoint.
 
@@ -224,8 +224,9 @@ const segmenter = await createInstanceSegmenter(models.instanceSegmentation.YOLO
 
 | Model                                                                           | Config                                     | Classes | Input             | Weights    |
 | ------------------------------------------------------------------------------- | ------------------------------------------ | ------- | ----------------- | ---------- |
-| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) n | `models.instanceSegmentation.YOLO26_SEG.N` | COCO-80 | 640×640 (default) | f16, 6 MB  |
-| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) m | `models.instanceSegmentation.YOLO26_SEG.M` | COCO-80 | 640×640 (default) | f16, 48 MB |
+| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) n | `models.instanceSegmentation.YOLO26_SEG.N` | COCO-80 | 640×640 (default) | f16, 5 MB  |
+| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) s | `models.instanceSegmentation.YOLO26_SEG.S` | COCO-80 | 640×640 (default) | f16, 20 MB |
+| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) m | `models.instanceSegmentation.YOLO26_SEG.M` | COCO-80 | 640×640 (default) | f16, 45 MB |
 
 Your own export of the other sizes, `s`, `l` and `x`, loads through
 `modelPath` too.
