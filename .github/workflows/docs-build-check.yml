@@ -1,0 +1,45 @@
+name: Check documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/docs/**'
+      - '.github/workflows/docs-build-check.yml'
+      # apps/docs imports runntime/zoo, which resolves to the library's dist,
+      # so a src-only change can break the docs build on its own.
+      - 'packages/runntime/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/docs/**'
+      - '.github/workflows/docs-build-check.yml'
+      # apps/docs imports runntime/zoo, which resolves to the library's dist,
+      # so a src-only change can break the docs build on its own.
+      - 'packages/runntime/**'
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+jobs:
+  check:
+    if: github.repository == 'software-mansion/runntime'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docs-check-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install node dependencies
+        run: corepack enable && pnpm install --frozen-lockfile
+      - name: Generate docs
+        # The trailing dots build what docs depends on first: the library's
+        # dist is not checked in, so docs has nothing to import without it.
+        run: pnpm --filter docs... run build
