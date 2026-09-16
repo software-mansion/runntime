@@ -152,12 +152,9 @@ image preprocessing, which is most of that row's time.
 ## Depth estimation
 
 [DepthART](/zoo/depth-estimation/) on 500 COCO photos, one photo per call,
-pixels in to a depth map out. DepthART has no ONNX export, so the
-transformers.js rows run a different model of the same task: Depth Anything
-V2 small, in fp32, fp16 and q4. DepthART takes every photo at 448×448.
-Depth Anything takes it at about 518 pixels on one side and resizes the map
-back to the photo. Through the plugin, ruNNtime runs DepthART with
-transformers.js's image preprocessing, which is most of that row's time.
+pixels in to a depth map out. ruNNtime runs the f16 weights, its only
+precision. Through the plugin, ruNNtime runs DepthART with transformers.js's
+image preprocessing, which is most of that row's time.
 
 ### Images per second
 
@@ -166,23 +163,17 @@ transformers.js's image preprocessing, which is most of that row's time.
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime DepthART', value: 51, unit: '/s', ours: true },
-    { label: 'ruNNtime DepthART, tjs plugin', value: 20, unit: '/s', ours: true },
-    { label: 'transformers.js Depth Anything fp32', value: 6.2, unit: '/s' },
-    { label: 'transformers.js Depth Anything fp16', value: 8.7, unit: '/s' },
-    { label: 'transformers.js Depth Anything q4', value: 6.3, unit: '/s' },
+    { label: 'ruNNtime', value: 51, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 20, unit: '/s', ours: true },
   ]}
 />
 
 ### All numbers
 
-| Engine               | Model                   | Precision | ms per image | Images per second |
-| -------------------- | ----------------------- | --------- | ------------ | ----------------- |
-| ruNNtime             | DepthART s              | f16       | 19.3         | 51                |
-| ruNNtime, tjs plugin | DepthART s              | f16       | 50.1         | 20                |
-| transformers.js      | Depth Anything V2 small | fp32      | 133          | 6.2               |
-| transformers.js      | Depth Anything V2 small | fp16      | 92.7         | 8.7               |
-| transformers.js      | Depth Anything V2 small | q4        | 123          | 6.3               |
+| Engine               | Precision | ms per image | Images per second |
+| -------------------- | --------- | ------------ | ----------------- |
+| ruNNtime             | f16       | 19.3         | 51                |
+| ruNNtime, tjs plugin | f16       | 50.1         | 20                |
 
 ## Object detection
 
@@ -319,8 +310,7 @@ Through the plugin, ruNNtime keeps transformers.js's tokenizer.
   ms per image is the median call time.
 - **Depth estimation**: the same 500 COCO photos, four passes, RGBA pixels
   in to a relative depth map out. Images per second and ms per image as
-  above. The stock rows run a different model, Depth Anything V2 small, at
-  its own input size, see the section.
+  above.
 - **Object detection**: the same 500 COCO photos, four passes, RGBA pixels
   in to boxes out at each engine's default threshold. Images per second and
   ms per image as above.
