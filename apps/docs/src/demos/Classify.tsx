@@ -21,10 +21,11 @@ function Ranked({ classifier }: { classifier: ImageClassifier }) {
     [classifier],
   );
 
-  // The classifier crops the centered square, so the sides of the frame
-  // never reach the model. The outline shows where to hold things.
+  // The classifier keeps the middle 87.5% of the centered square, so the
+  // sides of the frame never reach the model. The outline shows where to
+  // hold things.
   const draw = useCallback((ctx: CanvasRenderingContext2D) => {
-    const side = Math.min(ctx.canvas.width, ctx.canvas.height);
+    const side = Math.min(ctx.canvas.width, ctx.canvas.height) * 0.875;
     const x = (ctx.canvas.width - side) / 2;
     const y = (ctx.canvas.height - side) / 2;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
