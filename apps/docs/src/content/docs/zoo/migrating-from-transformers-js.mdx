@@ -48,14 +48,14 @@ and `normalize` keep working exactly as before.
 | `feature-extraction`           | `Xenova/all-MiniLM-L6-v2`, `sentence-transformers/all-MiniLM-L6-v2`               | MiniLM-L6 sentence embedder            |
 | `token-classification`         | `openai/privacy-filter`                                                           | privacy filter, personal data spans    |
 | `automatic-speech-recognition` | `onnx-community/moonshine-tiny-ONNX`, `onnx-community/moonshine-base-ONNX`        | Moonshine speech to text               |
-| `object-detection`             | `onnx-community/yolo26n-ONNX`, `onnx-community/yolo26m-ONNX`                      | YOLO26 detector                        |
+| `object-detection`             | `onnx-community/yolo26n-ONNX`, `onnx-community/yolo26s-ONNX`, `onnx-community/yolo26m-ONNX` | YOLO26 detector              |
 | `depth-estimation`             | `onnx-community/depth-anything-v2-small`, `onnx-community/depth-anything-v2-base` | DepthART relative depth, s and b       |
 | `image-classification`         | `onnx-community/mobilenetv4_conv_small.e2400_r224_in1k`                           | MobileNetV4-Conv-S ImageNet classifier |
 
 Every id works with `initRunntimeBackend()` alone: the weights come from the
 [software-mansion](https://huggingface.co/software-mansion) `runntime-*`
 repos on the Hub, the smallest hosted file of each model. The other YOLO26
-sizes, `s`, `l` and `x`, need your own safetensors export registered under
+sizes, `l` and `x`, need your own safetensors export registered under
 the id, see [When to pass models](#when-to-pass-models).
 
 ## Unsupported models
@@ -119,7 +119,7 @@ await initRunntimeBackend({
     'sentence-transformers/paraphrase-MiniLM-L6-v2': minilmLoader(
       'https://example.com/minilm/model.safetensors',
     ),
-    'onnx-community/yolo26s-ONNX': yolo26Loader('https://example.com/yolo26s/model.safetensors'),
+    'onnx-community/yolo26l-ONNX': yolo26Loader('https://example.com/yolo26l/model.safetensors'),
   },
 });
 const pipe = await pipeline('feature-extraction', 'sentence-transformers/paraphrase-MiniLM-L6-v2');

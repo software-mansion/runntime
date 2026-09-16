@@ -9,7 +9,7 @@
 implemented using TypeGPU. It composes GPU kernels into the layers a model is
 made of, attention, convolutions, norms, matmuls and builds common
 architectures out of them. The kernels are plain TypeGPU code compiled to
-WGSL at build time, so there is no WASM binary to download at runtime, and
+WGSL at runtime, so there is no WASM binary to download, and
 the same code runs anywhere WebGPU does: the browser, React Native and
 Electron.
 
@@ -34,7 +34,7 @@ It ships as one package, `runntime`, with two entry points:
 - **One function per task** - `createObjectDetector()` hands you a loaded
   model. Call `detectObjects(image)`, get boxes back. The `zoo` api is meant to be straight-forward and just work.
 - **No WASM to download** - the kernels are TypeGPU code compiled
-  to WGSL at build time, so there is no WASM binary shipped alongside your
+  to WGSL at runtime, so there is no WASM binary shipped alongside your
   app.
 - **Same code everywhere WebGPU runs** - the browser, React Native (through
   [react-native-webgpu](https://github.com/wcandillon/react-native-webgpu))

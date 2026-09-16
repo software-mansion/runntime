@@ -58,6 +58,7 @@ const PRIVACY_FILTER_INT8 = {
 } satisfies PrivacyFilterModel;
 
 const YOLO26_N = { modelPath: weights('yolo26', 'n', 'f16') } satisfies ObjectDetectorModel;
+const YOLO26_S = { modelPath: weights('yolo26', 's', 'f16') } satisfies ObjectDetectorModel;
 const YOLO26_M = { modelPath: weights('yolo26', 'm', 'f16') } satisfies ObjectDetectorModel;
 
 const MOBILENETV4_SMALL = {
@@ -67,12 +68,18 @@ const MOBILENETV4_SMALL = {
 const YOLO26_SEG_N = {
   modelPath: weights('yolo26-seg', 'n', 'f16'),
 } satisfies InstanceSegmenterModel;
+const YOLO26_SEG_S = {
+  modelPath: weights('yolo26-seg', 's', 'f16'),
+} satisfies InstanceSegmenterModel;
 const YOLO26_SEG_M = {
   modelPath: weights('yolo26-seg', 'm', 'f16'),
 } satisfies InstanceSegmenterModel;
 
 const YOLO26_POSE_N = {
   modelPath: weights('yolo26-pose', 'n', 'f16'),
+} satisfies KeypointDetectorModel;
+const YOLO26_POSE_S = {
+  modelPath: weights('yolo26-pose', 's', 'f16'),
 } satisfies KeypointDetectorModel;
 const YOLO26_POSE_M = {
   modelPath: weights('yolo26-pose', 'm', 'f16'),
@@ -111,7 +118,9 @@ export const models = {
       DEFAULT: YOLO26_N,
       /** The nano size, 5 MB. */
       N: YOLO26_N,
-      /** The medium size, 41 MB. More accurate, slower. */
+      /** The small size, 18 MB. */
+      S: YOLO26_S,
+      /** The medium size, 39 MB. More accurate, slower. */
       M: YOLO26_M,
     },
   },
@@ -119,9 +128,11 @@ export const models = {
     /** YOLO26 segment, COCO-80 classes with a mask per object, f16 weights. */
     YOLO26_SEG: {
       DEFAULT: YOLO26_SEG_N,
-      /** The nano size, 6 MB. */
+      /** The nano size, 5 MB. */
       N: YOLO26_SEG_N,
-      /** The medium size, 48 MB. More accurate, slower. */
+      /** The small size, 20 MB. */
+      S: YOLO26_SEG_S,
+      /** The medium size, 45 MB. More accurate, slower. */
       M: YOLO26_SEG_M,
     },
   },
@@ -131,7 +142,9 @@ export const models = {
       DEFAULT: YOLO26_POSE_N,
       /** The nano size, 6 MB. */
       N: YOLO26_POSE_N,
-      /** The medium size, 44 MB. More accurate, slower. */
+      /** The small size, 20 MB. */
+      S: YOLO26_POSE_S,
+      /** The medium size, 42 MB. More accurate, slower. */
       M: YOLO26_POSE_M,
     },
   },
