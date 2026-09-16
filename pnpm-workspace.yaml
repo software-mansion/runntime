@@ -4,10 +4,12 @@ packages:
 
 onlyBuiltDependencies:
   - esbuild
+  - lefthook
   - sharp
 
 allowBuilds:
   esbuild: true
+  lefthook: true
   sharp: true
   # Node-side artifacts of @huggingface/transformers — only ever used in the
   # browser here, so their native build scripts never need to run.

@@ -8,11 +8,9 @@
 
 import {
   add,
-  gelu,
   materialized,
   matrix,
   nn,
-  slice,
   uploadF32,
   type LazyStateDict,
   type Value,

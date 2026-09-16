@@ -1,0 +1,26 @@
+pre-commit:
+  parallel: true # safe only while format stays the sole job that writes files
+  jobs:
+    # `stage_fixes: true` does not re-stage prettier's rewrites; git add is required.
+    - name: format
+      glob: '*.{ts,tsx,js,jsx,json,md,yml,yaml,html,css}'
+      run: pnpm exec prettier --write {staged_files} && git add {staged_files}
+
+    # report-only on purpose: eslint --fix can change semantics (e.g. eqeqeq),
+    # and its output would never be re-formatted. Use `pnpm lint:fix` by hand.
+    - name: lint
+      glob: '*.{ts,tsx,js,jsx}'
+      run: pnpm exec eslint {staged_files}
+
+    # glob only gates whether this runs; tsc needs the whole program, not {staged_files}.
+    # json is included because tsconfig/package.json changes can break types on their own.
+    # Runs the packages that define a typecheck script; apps/docs has none, plain
+    # tsc chokes on the .ts sources Starlight ships and astro check is the tool there.
+    - name: typecheck
+      glob: '*.{ts,tsx,js,jsx,json}'
+      run: pnpm -r run typecheck
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: pnpm exec commitlint --edit {1}

@@ -127,6 +127,7 @@ export interface PendingOp {
 /** A tensor as the eager API sees it, and one node of a lazy DAG. Calling ops
  *  only links nodes; reading a result evaluates everything it depends on in one
  *  submit. */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- the class and the interface below are merged on purpose, see the note there.
 export class Value {
   private constructor(
     readonly shape: ValueMeta,
@@ -194,6 +195,7 @@ export class Value {
  *  augmentation of a relative path that no longer exists once bundled.
  *  The import is type-only, so value.ts still never imports ops.ts at
  *  runtime. */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- merged with the class above on purpose, see the note directly above this.
 export interface Value {
   add(b: Value | number): Value;
   sub(b: Value | number): Value;

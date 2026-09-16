@@ -43,7 +43,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "js-tiktoken": "^1.0.20"

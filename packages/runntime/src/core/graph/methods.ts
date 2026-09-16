@@ -23,7 +23,6 @@ import {
   tanh,
   topk,
   transpose,
-  type MatmulOpts,
 } from './ops.ts';
 
 Value.prototype.add = function (b) {
