@@ -3,6 +3,13 @@
   "version": "0.0.1",
   "description": "AI models on the web, built with TypeGPU.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/software-mansion/runntime.git",
+    "directory": "packages/runntime"
+  },
+  "homepage": "https://docs.swmansion.com/runntime",
+  "bugs": "https://github.com/software-mansion/runntime/issues",
   "keywords": [
     "webgpu",
     "typegpu",
