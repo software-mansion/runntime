@@ -16,11 +16,16 @@ export function yolo26Variant(modelId: string): Yolo26Variant {
 /** The hosted f16 exports, by variant. */
 const YOLO26_WEIGHTS_URLS: Partial<Record<Yolo26Variant, string>> = {
   n: models.objectDetection.YOLO26.N.modelPath,
+  s: models.objectDetection.YOLO26.S.modelPath,
   m: models.objectDetection.YOLO26.M.modelPath,
 };
 
 /** Every hub id with a hosted export. */
-export const YOLO26_MODEL_IDS = ['onnx-community/yolo26n-ONNX', 'onnx-community/yolo26m-ONNX'];
+export const YOLO26_MODEL_IDS = [
+  'onnx-community/yolo26n-ONNX',
+  'onnx-community/yolo26s-ONNX',
+  'onnx-community/yolo26m-ONNX',
+];
 
 /** `weightsUrl` defaults to the hosted export of the variant in the hub
  *  id; other variants need one. */
