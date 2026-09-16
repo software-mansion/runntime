@@ -1,54 +1,46 @@
-name: NPM publish
-
+name: Publish release to npm
 on:
   workflow_dispatch:
     inputs:
+      dry-run:
+        description: >-
+          Whether to perform a dry run of the publish.
+          Uncheck only to publish artifacts to the npm registry.
+        type: boolean
+        default: true
       release-type:
-        description: 'Which npm dist-tag to publish under'
-        required: true
+        description: Type of release to publish.
         type: choice
         options:
-          - latest # current stable release
-          - legacy # maintenance release of an older line
-        default: latest
-      dist-tag:
-        description: 'npm dist-tag to publish under instead of the one release-type implies, e.g. v0-8 for a maintenance line. NOT the git tag. Leave empty for a normal release.'
-        required: false
+          - stable
+          - alpha
+          - beta
+          - rc
+        default: stable
+      version:
+        description: >-
+          Specific version to publish. Leave empty to let the action work it
+          out from what is already on npm.
         type: string
-        default: ''
-      dry-run:
-        description: 'Build and pack, but do not publish to npm. Everything up to the publish step runs unchanged.'
         required: false
-        type: boolean
-        default: false
-
-permissions:
-  id-token: write
-  contents: read
-
-concurrency:
-  group: 'npm-runntime-package-build'
-  cancel-in-progress: false
+        default: ''
 
 jobs:
-  build:
+  npm-publish:
     if: github.repository == 'software-mansion/runntime'
     runs-on: ubuntu-latest
-    environment: deployment
+
     permissions:
       contents: read
-      id-token: write
-    env:
-      PACKAGE_DIR: packages/runntime
-      PACKAGE_VERSION: PLACEHOLDER
-      PACKAGE_NAME: PLACEHOLDER
-      TAG: PLACEHOLDER
-      RELEASE_TYPE: ${{ inputs.release-type || 'latest' }}
-      DRY_RUN: ${{ inputs.dry-run || false }}
-      DIST_TAG_OVERRIDE: ${{ inputs.dist-tag || '' }}
+      id-token: write # for OIDC
+
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Check out
+        uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -56,103 +48,21 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org/
 
+      # The action runs install-dependencies-command itself, so pnpm has to be
+      # on PATH before it starts.
       - name: Enable corepack
         run: corepack enable
 
-      - name: Determine version
-        working-directory: ${{ env.PACKAGE_DIR }}
-        run: |
-          VERSION=$(jq -r .version package.json)
-          echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
-
-      - name: Assert PACKAGE_VERSION
-        if: ${{ env.PACKAGE_VERSION == 'PLACEHOLDER' }}
-        run: exit 1 # this should never happen
-
-      # The workspace is packages/* + apps/*, and apps/docs pulls in Astro,
-      # sharp and @huggingface/transformers to build one library. Filtering the
-      # install to the package and its dependencies keeps the release job off
-      # all of that.
-      - name: Install the core package's dependencies
-        run: pnpm install --frozen-lockfile --filter runntime...
-
-      - name: Set tag
-        run: |
-          if [[ -n "$DIST_TAG_OVERRIDE" ]]; then
-            # npm's rule is that a dist-tag must not parse as a semver range,
-            # so ask semver rather than approximate it: `v0.8` parses as
-            # `>=0.8.0 <0.9.0-0` and `v0.10.0` as `0.10.0`, and npm rejects
-            # both. semver is not a dependency here, and npx only puts a
-            # package's bin on PATH, not on the module path, so install it
-            # somewhere require() can actually reach.
-            npm install --no-save --silent --prefix "$RUNNER_TEMP/semver-check" semver
-            if ! node -e 'const r=require(process.env.RUNNER_TEMP + "/semver-check/node_modules/semver").validRange(process.argv[1]); if (r) { console.error(`Invalid dist-tag: ${process.argv[1]} parses as the semver range ${r}, and npm rejects those. Use a form that is not a version, e.g. v0-8 for the 0.8 line.`); process.exit(1); }' "$DIST_TAG_OVERRIDE"; then
-              exit 1
-            fi
-            echo "TAG=$DIST_TAG_OVERRIDE" >> $GITHUB_ENV
-          else
-            case "$RELEASE_TYPE" in
-              latest)  echo "TAG=latest" >> $GITHUB_ENV ;;
-              legacy)  echo "TAG=legacy" >> $GITHUB_ENV ;;
-              *) echo "Unknown release type: $RELEASE_TYPE" >&2; exit 1 ;;
-            esac
-          fi
-
-      - name: Assert tag
-        if: ${{ env.TAG == 'PLACEHOLDER' }}
-        run: exit 1 # this should never happen
-
-      # tsdown compiles every 'use gpu' kernel to WGSL, so the tarball is the
-      # only place the shaders exist: it has to be built here, never reused.
-      - name: Build package
-        id: build
-        working-directory: ${{ env.PACKAGE_DIR }}
-        run: |
-          set -o pipefail
-          pnpm run build 2>&1 | tee build.log
-          npm pack 2>&1 | tee -a build.log
-
-      - name: Check if any node_modules were packed
-        id: check_node_modules
-        working-directory: ${{ env.PACKAGE_DIR }}
-        run: >-
-          ! grep --silent -E "node_modules/.+" build.log
-
-      - name: Show build log
-        working-directory: ${{ env.PACKAGE_DIR }}
-        if: failure() && steps.build.outcome == 'failure'
-        run: cat build.log
-
-      - name: Show packed node_modules
-        working-directory: ${{ env.PACKAGE_DIR }}
-        if: failure() && steps.check_node_modules.outcome == 'failure'
-        run: >-
-          ! grep -E "node_modules/.+" build.log
-
-      - name: Add package name to env
-        working-directory: ${{ env.PACKAGE_DIR }}
-        run: echo "PACKAGE_NAME=$(ls -l | egrep -o "runntime-(.*)(=?\.tgz)")" >> $GITHUB_ENV
-
-      - name: Assert package name
-        if: ${{ env.PACKAGE_NAME == 'PLACEHOLDER' }}
-        run: exit 1 # this should never happen
-
-      - name: Upload package to GitHub
-        uses: actions/upload-artifact@v4
+      - name: Publish manual release
+        uses: software-mansion/npm-package-publish@d347fc2b353b9ffc6e80ac7a149a49171274d1a4
         with:
-          name: ${{ env.PACKAGE_NAME }}
-          path: ${{ env.PACKAGE_DIR }}/${{ env.PACKAGE_NAME }}
-
-      - name: Move package to monorepo root
-        run: mv ${{ env.PACKAGE_DIR }}/${{ env.PACKAGE_NAME }} .
-
-      - name: Publish package to npm
-        if: ${{ env.DRY_RUN != 'true' }}
-        run: npm publish $PACKAGE_NAME --tag ${{ env.TAG }} --provenance
-
-      # --provenance is omitted here on purpose: it needs the OIDC exchange,
-      # which a dry run should not perform. Everything before this point,
-      # including the build and the packed tarball, has already run unchanged.
-      - name: Publish package to npm (dry run)
-        if: ${{ env.DRY_RUN == 'true' }}
-        run: npm publish $PACKAGE_NAME --tag ${{ env.TAG }} --dry-run
+          package-name: 'runntime'
+          package-json-path: 'packages/runntime/package.json'
+          # The workspace is packages/* + apps/*, and apps/docs pulls in Astro,
+          # sharp and transformers.js to build one library. Filtering keeps the
+          # release job off all of that.
+          install-dependencies-command: 'pnpm install --frozen-lockfile --filter runntime...'
+          release-type: ${{ inputs.release-type }}
+          version: ${{ inputs.version }}
+          dry-run: ${{ inputs.dry-run }}
+          perform-git-operations: false
