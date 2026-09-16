@@ -21,10 +21,10 @@ immediately, so mistakes throw at the call site. The GPU runs when you
 read a result:
 
 ```ts
-const x = tensor(root, data, [2, 64]);   // upload — materialized
-const h = x.matmul(w, { bias });         // pending — nothing ran yet
-const y = h.tanh();                      // still pending
-const out = await toArray(y, exec);      // whole chain runs, one GPU submit
+const x = tensor(root, data, [2, 64]); // upload — materialized
+const h = x.matmul(w, { bias }); // pending — nothing ran yet
+const y = h.tanh(); // still pending
+const out = await toArray(y, exec); // whole chain runs, one GPU submit
 ```
 
 `toArray` (or `evalValues`) walks the pending nodes behind the requested
@@ -37,24 +37,24 @@ Value, runs them in one batched submit, and flips them to materialized.
 Each method delegates to its op function — same graph node, two calling styles.
 Full docs live on the op pages:
 
-| method | group |
-| --- | --- |
-| [`add`](/core/reference/ops/elementwise/add/) | elementwise |
-| [`sub`](/core/reference/ops/elementwise/sub/) | elementwise |
-| [`mul`](/core/reference/ops/elementwise/mul/) | elementwise |
-| [`clamp`](/core/reference/ops/elementwise/clamp/) | elementwise |
+| method                                                | group       |
+| ----------------------------------------------------- | ----------- |
+| [`add`](/core/reference/ops/elementwise/add/)         | elementwise |
+| [`sub`](/core/reference/ops/elementwise/sub/)         | elementwise |
+| [`mul`](/core/reference/ops/elementwise/mul/)         | elementwise |
+| [`clamp`](/core/reference/ops/elementwise/clamp/)     | elementwise |
 | [`sigmoid`](/core/reference/ops/elementwise/sigmoid/) | elementwise |
-| [`tanh`](/core/reference/ops/elementwise/tanh/) | elementwise |
-| [`asinh`](/core/reference/ops/elementwise/asinh/) | elementwise |
-| [`rsqrt`](/core/reference/ops/elementwise/rsqrt/) | elementwise |
-| [`matmul`](/core/reference/ops/matmul/matmul/) | matmul |
-| [`reshape`](/core/reference/ops/shape/reshape/) | shape |
-| [`transpose`](/core/reference/ops/shape/transpose/) | shape |
-| [`slice`](/core/reference/ops/shape/slice/) | shape |
-| [`chunk`](/core/reference/ops/shape/chunk/) | shape |
-| [`split`](/core/reference/ops/shape/split/) | shape |
-| [`mean`](/core/reference/ops/reduce/mean/) | reduce |
-| [`softmax`](/core/reference/ops/reduce/softmax/) | reduce |
-| [`topk`](/core/reference/ops/reduce/topk/) | reduce |
+| [`tanh`](/core/reference/ops/elementwise/tanh/)       | elementwise |
+| [`asinh`](/core/reference/ops/elementwise/asinh/)     | elementwise |
+| [`rsqrt`](/core/reference/ops/elementwise/rsqrt/)     | elementwise |
+| [`matmul`](/core/reference/ops/matmul/matmul/)        | matmul      |
+| [`reshape`](/core/reference/ops/shape/reshape/)       | shape       |
+| [`transpose`](/core/reference/ops/shape/transpose/)   | shape       |
+| [`slice`](/core/reference/ops/shape/slice/)           | shape       |
+| [`chunk`](/core/reference/ops/shape/chunk/)           | shape       |
+| [`split`](/core/reference/ops/shape/split/)           | shape       |
+| [`mean`](/core/reference/ops/reduce/mean/)            | reduce      |
+| [`softmax`](/core/reference/ops/reduce/softmax/)      | reduce      |
+| [`topk`](/core/reference/ops/reduce/topk/)            | reduce      |
 
 Ops without a method form (the `torch.nn.functional` analog) are listed under Ops.

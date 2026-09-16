@@ -127,7 +127,10 @@ export default defineConfig({
                 { label: 'Pose & keypoints', slug: 'zoo/pose-and-keypoints' },
                 { label: 'Depth estimation', slug: 'zoo/depth-estimation' },
                 { label: 'Image classification', slug: 'zoo/image-classification' },
-                { label: 'Migrating from transformers.js', slug: 'zoo/migrating-from-transformers-js' },
+                {
+                  label: 'Migrating from transformers.js',
+                  slug: 'zoo/migrating-from-transformers-js',
+                },
                 { label: 'Benchmarks', slug: 'zoo/benchmarks' },
               ],
             },

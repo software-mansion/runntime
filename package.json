@@ -8,7 +8,25 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
     "build:docs": "pnpm --filter docs run build",
-    "dev:docs": "pnpm --filter docs run dev"
+    "dev:docs": "pnpm --filter docs run dev",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "lefthook install || true"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.7.0",
+    "lefthook": "^2.1.10",
+    "prettier": "^3.9.5",
+    "typescript": "npm:tsover@^5.9.8",
+    "typescript-eslint": "^8.63.0"
   }
 }

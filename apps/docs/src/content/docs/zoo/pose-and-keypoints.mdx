@@ -118,10 +118,24 @@ interface DetectKeypointsOptions {
   readonly maxDetections?: number; // default 300
 }
 
-type CocoLandmark = 'nose' | 'leftEye' | 'rightEye' | 'leftEar' | 'rightEar'
-  | 'leftShoulder' | 'rightShoulder' | 'leftElbow' | 'rightElbow'
-  | 'leftWrist' | 'rightWrist' | 'leftHip' | 'rightHip'
-  | 'leftKnee' | 'rightKnee' | 'leftAnkle' | 'rightAnkle';
+type CocoLandmark =
+  | 'nose'
+  | 'leftEye'
+  | 'rightEye'
+  | 'leftEar'
+  | 'rightEar'
+  | 'leftShoulder'
+  | 'rightShoulder'
+  | 'leftElbow'
+  | 'rightElbow'
+  | 'leftWrist'
+  | 'rightWrist'
+  | 'leftHip'
+  | 'rightHip'
+  | 'leftKnee'
+  | 'rightKnee'
+  | 'leftAnkle'
+  | 'rightAnkle';
 ```
 
 - `detectKeypoints(image, options?)` returns the people in the image, best

@@ -15,8 +15,9 @@ swiglu(glu: Value, lin: Value): Value
 Function-only:
 
 ```ts
-swiglu(glu, lin)
+swiglu(glu, lin);
 ```
+
 Applies the SwiGLU activation with clamping, elementwise:
 
 ```
@@ -38,19 +39,13 @@ with the shape of the inputs: nothing runs until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const h = swiglu(x.matmul(wGlu), x.matmul(wLin));   // both halves [T,H]
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-# unfused equivalent of the one swiglu kernel
-g = glu.clamp(max=7)
-l = lin.clamp(-7, 7)
-h = g * torch.sigmoid(1.702 * g) * (l + 1)
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const h = swiglu(x.matmul(wGlu), x.matmul(wLin)); // both halves [T,H] ```
+  </TabItem>
+  <TabItem label="PyTorch">
+    ```python # unfused equivalent of the one swiglu kernel g = glu.clamp(max=7) l = lin.clamp(-7,
+    7) h = g * torch.sigmoid(1.702 * g) * (l + 1) ```
+  </TabItem>
 </Tabs>
 
 For the unclamped variant that takes one concatenated Value, see

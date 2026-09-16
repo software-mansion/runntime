@@ -15,8 +15,9 @@ sub(a: Value, b: Value | number): Value
 Method form:
 
 ```ts
-a.sub(b)
+a.sub(b);
 ```
+
 Subtracts `b` from `a`, elementwise:
 
 ```
@@ -37,18 +38,11 @@ until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const centered = x.sub(rowMean);   // [M,N] − [M,1] — column broadcast
-const shifted = x.sub(1);          // plain number — no upload
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-centered = x - row_mean
-shifted = x - 1
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const centered = x.sub(rowMean); // [M,N] − [M,1] — column broadcast const shifted =
+    x.sub(1); // plain number — no upload ```
+  </TabItem>
+  <TabItem label="PyTorch">```python centered = x - row_mean shifted = x - 1 ```</TabItem>
 </Tabs>
 
 ## Constraints

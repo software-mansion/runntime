@@ -8,16 +8,14 @@
  *  `<size>/<precision>/model.safetensors` with `tokenizer.json` at the
  *  root where the model has one. */
 
-import type {
-  DepthEstimatorModel,
-  ImageClassifierModel,
-  InstanceSegmenterModel,
-  KeypointDetectorModel,
-  ObjectDetectorModel,
-  PrivacyFilterModel,
-  SpeechToTextModel,
-  TextEmbedderModel,
-} from './types.ts';
+import type { SpeechToTextModel } from './tasks/audio/speechToText.ts';
+import type { ImageClassifierModel } from './tasks/cv/imageClassification.ts';
+import type { DepthEstimatorModel } from './tasks/cv/depthEstimation.ts';
+import type { InstanceSegmenterModel } from './tasks/cv/instanceSegmentation.ts';
+import type { ObjectDetectorModel } from './tasks/cv/objectDetection.ts';
+import type { KeypointDetectorModel } from './tasks/cv/keypointDetection.ts';
+import type { PrivacyFilterModel } from './tasks/nlp/privacyFilter.ts';
+import type { TextEmbedderModel } from './tasks/nlp/textEmbedding.ts';
 
 const HUB = 'https://huggingface.co/software-mansion';
 

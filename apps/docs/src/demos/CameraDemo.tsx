@@ -1,8 +1,9 @@
 import { imageBufferFromImageData, type ImageBuffer } from 'runntime/zoo';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
-/** Shipped with the docs, for readers without a camera. */
-const SAMPLE_IMAGE = '/demos/bus.jpg';
+/** Shipped with the docs, for readers without a camera. `BASE_URL` is what
+ *  the site is served under, so the path holds up under /runntime/ too. */
+const SAMPLE_IMAGE = `${import.meta.env.BASE_URL}demos/bus.jpg`;
 
 /** Frames are read at this width; the height follows the source. */
 const FRAME_WIDTH = 640;

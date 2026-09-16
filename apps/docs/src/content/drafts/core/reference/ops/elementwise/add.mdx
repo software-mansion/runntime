@@ -15,8 +15,9 @@ add(a: Value, b: Value | number): Value
 Method form:
 
 ```ts
-a.add(b)
+a.add(b);
 ```
+
 Adds `b` to `a`, elementwise:
 
 ```
@@ -38,18 +39,11 @@ either argument.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const y = x.add(bias);   // [T,N] + [N] — bias added to every row
-const z = x.add(1);      // plain number — no upload
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-y = x + bias
-z = x + 1
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const y = x.add(bias); // [T,N] + [N] — bias added to every row const z = x.add(1); //
+    plain number — no upload ```
+  </TabItem>
+  <TabItem label="PyTorch">```python y = x + bias z = x + 1 ```</TabItem>
 </Tabs>
 
 ## Constraints

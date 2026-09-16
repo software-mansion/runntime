@@ -15,8 +15,9 @@ rsqrt(x: Value): Value
 Method form:
 
 ```ts
-x.rsqrt()
+x.rsqrt();
 ```
+
 Computes the reciprocal square root, elementwise:
 
 ```
@@ -33,16 +34,10 @@ runs until evaluation.
 ## Example
 
 <Tabs syncKey="framework">
-<TabItem label="ruNNtime">
-```ts
-const invStd = variance.rsqrt();   // normalization building block
-```
-</TabItem>
-<TabItem label="PyTorch">
-```python
-inv_std = variance.rsqrt()
-```
-</TabItem>
+  <TabItem label="ruNNtime">
+    ```ts const invStd = variance.rsqrt(); // normalization building block ```
+  </TabItem>
+  <TabItem label="PyTorch">```python inv_std = variance.rsqrt() ```</TabItem>
 </Tabs>
 
 For full normalization layers, prefer the fused

@@ -145,7 +145,8 @@ await createImageClassifier({
 - **labels** - the class names, one per class, 1000 of them. Default: the
   ImageNet names in English.
 - **resizeMode** - how the image fits the model input. `crop` (default)
-  cuts the centered square, `stretch` distorts, `letterbox` pads.
+  cuts the middle 87.5% of the centered square, the crop the model was
+  evaluated with; `stretch` distorts, `letterbox` pads.
 
 ## Loading options
 

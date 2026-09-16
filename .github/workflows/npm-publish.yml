@@ -1,0 +1,68 @@
+name: Publish release to npm
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: >-
+          Whether to perform a dry run of the publish.
+          Uncheck only to publish artifacts to the npm registry.
+        type: boolean
+        default: true
+      release-type:
+        description: Type of release to publish.
+        type: choice
+        options:
+          - stable
+          - alpha
+          - beta
+          - rc
+        default: stable
+      version:
+        description: >-
+          Specific version to publish. Leave empty to let the action work it
+          out from what is already on npm.
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  npm-publish:
+    if: github.repository == 'software-mansion/runntime'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write # for OIDC
+
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+
+      # The action runs install-dependencies-command itself, so pnpm has to be
+      # on PATH before it starts.
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Publish manual release
+        uses: software-mansion/npm-package-publish@d347fc2b353b9ffc6e80ac7a149a49171274d1a4
+        with:
+          package-name: 'runntime'
+          package-json-path: 'packages/runntime/package.json'
+          # The workspace is packages/* + apps/*, and apps/docs pulls in Astro,
+          # sharp and transformers.js to build one library. Filtering keeps the
+          # release job off all of that.
+          install-dependencies-command: 'pnpm install --frozen-lockfile --filter runntime...'
+          release-type: ${{ inputs.release-type }}
+          version: ${{ inputs.version }}
+          dry-run: ${{ inputs.dry-run }}
+          perform-git-operations: false
