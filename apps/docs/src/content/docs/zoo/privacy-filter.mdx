@@ -3,6 +3,8 @@ title: Privacy filter
 description: Find personal data in text.
 ---
 
+import { Redact } from '../../../demos/Redact.tsx';
+
 Privacy Filter is a token-level model that scans text for personally
 identifiable information (PII), such as names, emails, phone numbers,
 addresses, SSNs, secrets and more, and returns the detected spans together
@@ -34,6 +36,14 @@ filter.dispose();
 The engine must be set up first, see [Getting started](/zoo/getting-started/).
 The weights are 1.55 GB, so pass a cache in the
 [loading options](#loading-options) to download them once.
+
+## Try it yourself
+
+Your text through `detect()` on your GPU, every span it finds marked with
+its label. **Redact** swaps each one for its `placeholder`. Nothing leaves
+the page.
+
+<Redact client:only="react" />
 
 ## Methods
 
