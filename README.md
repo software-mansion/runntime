@@ -8,6 +8,10 @@
 
 <br />
 
+---
+
+<br />
+
 **ruNNtime** is a framework for running AI models on the user's own GPU,
 implemented using TypeGPU. It composes GPU kernels into the layers a model is
 made of, attention, convolutions, norms, matmuls and builds common
