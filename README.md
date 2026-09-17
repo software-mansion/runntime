@@ -8,6 +8,10 @@
 
 <br />
 
+---
+
+<br />
+
 **ruNNtime** is a framework for running AI models on the user's own GPU,
 implemented using TypeGPU. It composes GPU kernels into the layers a model is
 made of, attention, convolutions, norms, matmuls and builds common
@@ -28,8 +32,9 @@ It ships as one package, `runntime`, with two entry points:
   - [1. Installation](#1-installation)
   - [2. Set up the engine](#2-set-up-the-engine)
   - [3. Run a model](#3-run-a-model)
+- [Models](#models)
+- [Coming from transformers.js](#coming-from-transformersjs)
 - [Documentation](#documentation)
-- [Migrating from transformers.js](#coming-from-transformers.js)
 - [Created by Software Mansion](#created-by-software-mansion)
 
 ## Key Features

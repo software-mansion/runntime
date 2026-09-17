@@ -105,7 +105,7 @@ export default defineConfig({
         },
       },
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/software-mansion' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/software-mansion/runntime' },
         { icon: 'discord', label: 'Discord', href: 'https://discord.gg/ZGqqY55qkP' },
       ],
       plugins: [
