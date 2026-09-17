@@ -51,15 +51,19 @@ function Scanner({ filter }: { filter: PrivacyFilter }) {
   const [redact, setRedact] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scanMs, setScanMs] = useState<number>();
+  const [error, setError] = useState<string>();
 
   const scan = async (input: string) => {
     setBusy(true);
+    setError(undefined);
     try {
       const start = performance.now();
       const found = await filter.detect(input);
       setScanMs(performance.now() - start);
       setSpans(found);
       setScanned(input);
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -104,6 +108,8 @@ function Scanner({ filter }: { filter: PrivacyFilter }) {
             ? 'No personal data found in this text.'
             : render(scanned, spans, redact)}
       </p>
+
+      {error && <p className="demo-error">{error}</p>}
 
       <div className="demo-stats">
         <span>privacy-filter int8</span>
