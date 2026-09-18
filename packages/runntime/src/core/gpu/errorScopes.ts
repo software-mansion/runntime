@@ -5,6 +5,8 @@
  * zeros. Scopes are a per-device stack: callers must not overlap two scoped
  * regions on the same device.
  */
+import { RunntimeError } from '../error.ts';
+
 export async function inGpuErrorScopes<T>(
   device: GPUDevice,
   stage: string,
@@ -33,7 +35,9 @@ export async function inGpuErrorScopes<T>(
   }
   const gpuError = await popAll();
   if (gpuError) {
-    throw new Error(`GPU error during ${stage}: ${gpuError.message}`, { cause: gpuError });
+    throw new RunntimeError('EXECUTION_FAILED', `GPU error during ${stage}: ${gpuError.message}`, {
+      cause: gpuError,
+    });
   }
   return result;
 }
@@ -45,7 +49,8 @@ export async function warmUp(
 ): Promise<Float32Array> {
   const out = await inGpuErrorScopes(device, stage, run);
   if (out.length === 0 || !out.every(Number.isFinite) || out.every((v) => v === 0)) {
-    throw new Error(
+    throw new RunntimeError(
+      'EXECUTION_FAILED',
       `${stage} produced unusable output (non-finite or all zero) — inference fails on this device`,
     );
   }

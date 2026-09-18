@@ -14,6 +14,7 @@ import {
   defaultRoot,
   evalValues,
   gpuExecutor,
+  RunntimeError,
   slice,
   tensor,
   writeRows,
@@ -51,7 +52,8 @@ export async function createTranscriber(
 ): Promise<Transcriber> {
   const root = defaultRoot();
   if (sd.metadata['model'] && sd.metadata['model'] !== 'moonshine-streaming') {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       `moonshine-streaming weights: file is for model '${sd.metadata['model']}', ` +
         `expected 'moonshine-streaming'`,
     );
@@ -91,7 +93,7 @@ export async function createTranscriber(
   const idsBuf = tensor(root, new Float32Array(DECODE_POSITIONS), [DECODE_POSITIONS, 1]);
 
   const padToFrames = (audio: Float32Array): Float32Array => {
-    if (audio.length === 0) throw new Error('transcribe: empty audio');
+    if (audio.length === 0) throw new RunntimeError('INVALID_ARGUMENT', 'transcribe: empty audio');
     const frames = Math.ceil(audio.length / cfg.frameLen);
     if (frames * cfg.frameLen === audio.length) return audio;
     const padded = new Float32Array(frames * cfg.frameLen);
@@ -225,7 +227,8 @@ export async function createTranscriber(
   let inFlight: Promise<unknown> = Promise.resolve();
   let disposed = false;
   const transcribe = (audio: Float32Array): Promise<TranscribeResult> => {
-    if (disposed) return Promise.reject(new Error('transcriber is disposed'));
+    if (disposed)
+      return Promise.reject(new RunntimeError('RESOURCE_DISPOSED', 'transcriber is disposed'));
     const job = inFlight.then(() => transcribeAll(audio));
     inFlight = job.catch(() => undefined);
     return job;

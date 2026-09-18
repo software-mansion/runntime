@@ -1,5 +1,6 @@
 /** Bounding boxes in three formats, plus scaling back onto the original image. */
 
+import { RunntimeError } from '../../../../core/index.ts';
 import { resizeTransform, scalePoint, type ScalePointOptions } from './point.ts';
 
 /** Each box format and the fields it carries. */
@@ -32,7 +33,7 @@ export function decodeBox<F extends BoxFormat>(
     case 'cxcywh':
       return { format: 'cxcywh', cx: a, cy: b, w: c, h: d } as BoundingBox<F>;
     default:
-      throw new Error(`unknown box format ${String(format)}`);
+      throw new RunntimeError('INVALID_ARGUMENT', `unknown box format ${String(format)}`);
   }
 }
 

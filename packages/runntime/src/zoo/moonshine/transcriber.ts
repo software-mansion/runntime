@@ -14,6 +14,7 @@ import {
   defaultRoot,
   evalValues,
   gpuExecutor,
+  RunntimeError,
   slice,
   tensor,
   writeRows,
@@ -77,7 +78,8 @@ export async function createTranscriber(
 ): Promise<Transcriber> {
   const root = defaultRoot();
   if (sd.metadata['model'] && sd.metadata['model'] !== 'moonshine') {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       `moonshine weights: file is for model '${sd.metadata['model']}', expected 'moonshine'`,
     );
   }
@@ -242,7 +244,8 @@ export async function createTranscriber(
   let inFlight: Promise<unknown> = Promise.resolve();
   let disposed = false;
   const transcribe = (audio: Float32Array): Promise<TranscribeResult> => {
-    if (disposed) return Promise.reject(new Error('transcriber is disposed'));
+    if (disposed)
+      return Promise.reject(new RunntimeError('RESOURCE_DISPOSED', 'transcriber is disposed'));
     const job = inFlight.then(() => transcribeAll(audio));
     inFlight = job.catch(() => undefined);
     return job;

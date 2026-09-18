@@ -3,7 +3,14 @@
  *  model, rope tables are computed per call. Runs on the initRunntime() default
  *  device. Dispose frees the weights. */
 
-import { defaultRoot, supportsF16, toArray, warmUp, type LazyStateDict } from '../../core/index.ts';
+import {
+  defaultRoot,
+  RunntimeError,
+  supportsF16,
+  toArray,
+  warmUp,
+  type LazyStateDict,
+} from '../../core/index.ts';
 import { buildLabelInfo, V2_NER_CLASS_NAMES, ZERO_BIASES, type ViterbiBiases } from './config.ts';
 import { createTokenizer } from './tokenizer.ts';
 import { ViterbiDecoder } from './viterbi.ts';
@@ -20,7 +27,8 @@ export interface LoadedPrivacyFilterModel {
   weightFormat: string;
 }
 
-const mismatch = (message: string) => new Error(`privacy-filter weights: ${message}`);
+const mismatch = (message: string) =>
+  new RunntimeError('CHECKPOINT_MISMATCH', `privacy-filter weights: ${message}`);
 
 export async function loadPrivacyFilterModel(
   sd: LazyStateDict,

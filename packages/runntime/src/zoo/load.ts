@@ -3,10 +3,13 @@
 
 import {
   fromSafetensors,
+  isRunntimeError,
+  RunntimeError,
   type LazyStateDict,
   type RangeSource,
   type WeightCache,
 } from '../core/index.ts';
+import { asLoadError, isAbort } from './errors.ts';
 
 /** Where the weights come from: a URL, or any byte-range reader. */
 export type ModelPath = string | RangeSource;
@@ -25,15 +28,16 @@ export interface LoadOptions {
   signal?: AbortSignal;
 }
 
-/** Throws when the signal is already aborted. */
+/** Throws LOAD_ABORTED when the signal is already aborted. */
 export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw new Error('model load aborted', { cause: signal.reason });
+    throw new RunntimeError('LOAD_ABORTED', 'model load aborted', { cause: signal.reason });
   }
 }
 
 /** Opens a safetensors file and reads its header. Tensor bytes download
- *  later, during loadStateDict. Every failure names the file it came from. */
+ *  later, during loadStateDict. A failure is LOAD_FAILED and names the file it
+ *  came from, an abort LOAD_ABORTED. */
 export async function openWeights(
   modelPath: ModelPath,
   opts: LoadOptions = {},
@@ -46,15 +50,16 @@ export async function openWeights(
       cacheId: opts.cacheId,
     });
   } catch (err) {
+    if (isRunntimeError(err)) throw err;
     const where = typeof modelPath === 'string' ? modelPath : 'weights';
-    throw new Error(`${where}: ${(err as Error).message}`, { cause: err });
+    throw new RunntimeError('LOAD_FAILED', `${where}: ${(err as Error).message}`, { cause: err });
   }
 }
 
 /** Downloads and parses a JSON file (a tokenizer, a config). With a cache,
  *  the bytes are saved under `cacheId` (the file name by default) and the
- *  next load reads them from there. Every failure names the URL it came
- *  from. */
+ *  next load reads them from there. A failure is LOAD_FAILED and names the URL
+ *  it came from, an abort LOAD_ABORTED. */
 export async function fetchJson<T>(
   url: string,
   opts: Pick<LoadOptions, 'cache' | 'cacheId' | 'signal'> = {},
@@ -65,9 +70,10 @@ export async function fetchJson<T>(
     try {
       res = await fetch(url, { signal: opts.signal });
     } catch (err) {
-      throw new Error(`${url}: ${(err as Error).message}`, { cause: err });
+      if (isAbort(err)) throw asLoadError(err);
+      throw new RunntimeError('LOAD_FAILED', `${url}: ${(err as Error).message}`, { cause: err });
     }
-    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+    if (!res.ok) throw new RunntimeError('LOAD_FAILED', `${url}: HTTP ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   };
   const bytes = opts.cache
@@ -76,6 +82,6 @@ export async function fetchJson<T>(
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } catch (err) {
-    throw new Error(`${url}: not valid JSON`, { cause: err });
+    throw new RunntimeError('LOAD_FAILED', `${url}: not valid JSON`, { cause: err });
   }
 }

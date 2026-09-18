@@ -1,8 +1,9 @@
 /** Instance segmentation task: an image in, the objects in it out, each
  *  with a box and a pixel mask. Runs YOLO26 segment on the initRunntime() device. */
 
-import { createResourceScope } from '../../../core/index.ts';
+import { createResourceScope, RunntimeError } from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
 import { createDetector, SEGMENT_MASKS } from '../../yolo26/detector.ts';
 import { COCO_NAMES, decodeSegmentations } from '../../yolo26/pipeline.ts';
@@ -113,11 +114,12 @@ export async function createInstanceSegmenter(
     return {
       labels,
       async segmentInstances(image, options = {}) {
-        if (disposed) throw new Error('instance segmenter is disposed');
+        if (disposed)
+          throw new RunntimeError('RESOURCE_DISPOSED', 'instance segmenter is disposed');
         const { confidenceThreshold = 0.3, maxDetections = 300 } = options;
         const run = queue.then(() => detector.run(preprocessor.process(image, pixels)));
         queue = run.catch(() => undefined);
-        const { levels, proto } = await run;
+        const { levels, proto } = await run.catch(rethrowRunError);
         if (!proto) throw new Error('yolo26 segment: the forward pass gave no mask prototypes');
         const scale = preprocessor.scaleOptions(image);
         const toInput = resizeTransform(scale);
@@ -164,7 +166,7 @@ export async function createInstanceSegmenter(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }
 

@@ -9,11 +9,15 @@
  *  Files from tools/export_pf_safetensors.py use these names as is and
  *  bypass this mapping. */
 
-import type { LazyStateDict, LazyTensor } from '../../core/index.ts';
+import { RunntimeError, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 
 function take(sd: LazyStateDict, name: string): LazyTensor {
   const t = sd.tensors.get(name);
-  if (!t) throw new Error(`privacy-filter state dict: missing tensor '${name}'`);
+  if (!t)
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      `privacy-filter state dict: missing tensor '${name}'`,
+    );
   sd.tensors.delete(name);
   return t;
 }
@@ -49,7 +53,8 @@ function concatRows(parts: readonly LazyTensor[]): LazyTensor {
   const rest = parts[0]!.shape.slice(1);
   for (const p of parts) {
     if (p.shape.slice(1).join(',') !== rest.join(',')) {
-      throw new Error(
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
         `privacy-filter state dict: cannot stack shapes [${parts.map((q) => q.shape.join('x')).join('], [')}]`,
       );
     }
