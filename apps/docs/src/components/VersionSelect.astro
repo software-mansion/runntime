@@ -1,0 +1,175 @@
+---
+/**
+ * The version picker in the header. The site is built twice: stable/ at
+ * the root, src/content/docs under `next/`. The base path says which build
+ * this is, DOCS_VERSION gives the release label. Own menu, a native select
+ * opens the system popup.
+ */
+const base = import.meta.env.BASE_URL;
+const isNext = base.endsWith('/next/');
+const root = isNext ? base.slice(0, -'next/'.length) : base;
+const release = process.env.DOCS_VERSION ?? 'Latest';
+
+const versions = [
+  { value: `${root}next/`, label: 'Next' },
+  { value: root, label: release },
+];
+---
+
+<runntime-version-select data-root={root}>
+  <div class="version-select">
+    <button type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Version">
+      <span class="label">{release}</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path fill="currentColor" d="M7.4 9.6 12 14.2l4.6-4.6L18 11l-6 6-6-6z"></path>
+      </svg>
+    </button>
+    <ul role="listbox" hidden>
+      {
+        versions.map((v) => (
+          <li>
+            <a role="option" href={v.value} data-version={v.value}>
+              {v.label}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</runntime-version-select>
+
+<style>
+  /* Same shell as the theme pill: 36px tall, one hairline, square. */
+  .version-select {
+    position: relative;
+    height: 36px;
+  }
+
+  button {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    height: 100%;
+    padding: 0 0.5rem 0 0.75rem;
+    background-color: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
+    border-radius: 0;
+    font-family: var(--__sl-font);
+    font-size: var(--sl-text-sm);
+    line-height: 1;
+    cursor: pointer;
+    transition: color 150ms ease;
+  }
+
+  button:hover,
+  button[aria-expanded='true'] {
+    color: var(--text-primary);
+  }
+
+  button:focus-visible {
+    outline-offset: var(--sl-outline-offset-inside);
+  }
+
+  button svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    transition: transform 150ms ease;
+  }
+
+  button[aria-expanded='true'] svg {
+    transform: scaleY(-1);
+  }
+
+  ul {
+    position: absolute;
+    top: calc(100% + 0.375rem);
+    right: 0;
+    z-index: var(--sl-z-index-menu);
+    min-width: 100%;
+    margin: 0;
+    padding: 0.25rem 0;
+    list-style: none;
+    background-color: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+  }
+
+  a {
+    display: block;
+    padding: 0.5rem 0.875rem;
+    color: var(--text-muted);
+    font-size: var(--sl-text-sm);
+    line-height: 1.2;
+    white-space: nowrap;
+    text-decoration: none;
+    /* Rail on the current version, like the sidebar. */
+    border-inline-start: 2px solid transparent;
+  }
+
+  a:hover,
+  a:focus-visible {
+    color: var(--text-strong);
+    background-color: var(--surface-quiet);
+  }
+
+  a[aria-selected='true'] {
+    color: var(--text-primary);
+    font-weight: 500;
+    background-image: var(--grad-brand);
+    background-repeat: no-repeat;
+    background-size: 2px 100%;
+    background-position: left center;
+    background-origin: border-box;
+  }
+</style>
+
+<script>
+  class VersionSelect extends HTMLElement {
+    constructor() {
+      super();
+      const button = this.querySelector('button');
+      const list = this.querySelector('ul');
+      const root = this.dataset.root;
+      if (!button || !list || !root) return;
+
+      // The version comes from the URL, not the build: the 404 page of one
+      // build can show under the path of the other.
+      const next = `${root}next/`;
+      const path = window.location.pathname;
+      const current = path.startsWith(next) ? next : root;
+      const rest = path.startsWith(current) ? path.slice(current.length) : '';
+
+      const links = this.querySelectorAll<HTMLAnchorElement>('a[data-version]');
+      for (const link of links) {
+        const version = link.dataset.version ?? root;
+        link.href = version + rest;
+        link.setAttribute('aria-selected', String(version === current));
+        if (version === current) button.querySelector('.label')!.textContent = link.textContent;
+        link.addEventListener('click', async (event) => {
+          event.preventDefault();
+          // Same page in the other version when it exists, else its start page.
+          const exists = await fetch(link.href, { method: 'HEAD' })
+            .then((res) => res.ok)
+            .catch(() => false);
+          window.location.href = exists ? link.href : version;
+        });
+      }
+
+      const open = (show: boolean) => {
+        list.hidden = !show;
+        button.setAttribute('aria-expanded', String(show));
+      };
+      button.addEventListener('click', () => open(list.hidden));
+      document.addEventListener('click', (event) => {
+        if (!this.contains(event.target as Node)) open(false);
+      });
+      this.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          open(false);
+          button.focus();
+        }
+      });
+    }
+  }
+  customElements.define('runntime-version-select', VersionSelect);
+</script>

@@ -1,0 +1,27 @@
+---
+title: ruNNtime
+description: A TypeGPU-powered, programmable inference engine for the web.
+template: splash
+hero:
+  tagline: PyTorch-style building blocks for on-device AI in the browser. Define a model, load weights, run - no export step.
+  actions:
+    - text: The engine (runntime/core)
+      link: /core/
+      icon: right-arrow
+    - text: Model zoo (runntime/zoo)
+      link: /zoo/
+      icon: rocket
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="runntime/core" icon="open-book">
+    The engine: `nn.Module`s with an imperative `forward()`, eager execution, and safetensors weight
+    loading.
+  </Card>
+  <Card title="runntime/zoo" icon="rocket">
+    Ready-to-run models - YOLO26, MobileNetV4, Privacy Filter - running on WebGPU, on-device.
+  </Card>
+</CardGrid>
