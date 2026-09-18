@@ -14,7 +14,22 @@ const monoLight = ExpressiveCodeTheme.fromJSONString(
   fs.readFileSync(new URL('./src/styles/code-theme-light.jsonc', import.meta.url), 'utf-8'),
 );
 
+// The publish workflow sets BASE_PATH to /runntime/next for the next build.
+// VersionSelect.astro reads the result.
 const base = `${(process.env.BASE_PATH ?? '/runntime').replace(/\/$/, '')}/`;
+
+/** Drops entries whose page is missing. The stable pages share this sidebar
+ *  and can lack some of them. */
+function existing(items) {
+  return items.flatMap((item) => {
+    if (item.items) {
+      const kept = existing(item.items);
+      return kept.length > 0 ? [{ ...item, items: kept }] : [];
+    }
+    const file = new URL(`./src/content/docs/${item.slug}.mdx`, import.meta.url);
+    return fs.existsSync(file) ? [item] : [];
+  });
+}
 
 /** Astro prefixes component hrefs with `base`, but not links written in
  *  Markdown prose. Without this they all 404 under /runntime/. */
@@ -50,11 +65,14 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'ruNNtime',
+      routeMiddleware: './src/routeData.ts',
       components: {
         ThemeSelect: './src/components/ThemeSelect.astro',
         SiteTitle: './src/components/SiteTitle.astro',
         TableOfContents: './src/components/TableOfContents.astro',
         SocialIcons: './src/components/SocialIcons.astro',
+        // Empty without i18n, so the version picker lives here.
+        LanguageSelect: './src/components/VersionSelect.astro',
       },
       customCss: [
         './src/styles/fonts.css',
@@ -117,7 +135,7 @@ export default defineConfig({
               // Any Starlight icon works here: components.css hides it and
               // paints the squirrel, since Starlight ships no animals.
               icon: 'rocket',
-              items: [
+              items: existing([
                 {
                   label: 'Fundamentals',
                   items: [{ label: 'Getting started', slug: 'zoo/getting-started' }],
@@ -146,7 +164,7 @@ export default defineConfig({
                   ],
                 },
                 { label: 'Benchmarks', slug: 'zoo/benchmarks' },
-              ],
+              ]),
             },
           ],
           {

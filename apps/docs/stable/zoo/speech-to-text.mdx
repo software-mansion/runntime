@@ -1,0 +1,229 @@
+---
+title: Speech to text
+description: Turn recorded speech into text.
+---
+
+import { Transcribe } from '../../../demos/Transcribe.tsx';
+
+Speech to text turns spoken audio into written text. It powers voice
+notes, live captions, voice commands and searching through recordings.
+
+`createSpeechToText` runs
+[Moonshine](https://huggingface.co/software-mansion/runntime-moonshine), in
+the classic or the streaming family.
+
+## Quick start
+
+```ts
+import { createSpeechToText, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const stt = await createSpeechToText(models.speechToText.MOONSHINE.TINY.DEFAULT);
+
+// 2. Transcribe a clip: a Float32Array of mono samples at 16 kHz.
+const text = await stt.transcribe(audio);
+console.log(text); // "He hoped there would be stew for dinner."
+
+// 3. Free the GPU memory when done.
+stt.dispose();
+```
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+
+## Try it yourself
+
+Record a few words. The clip is captured as mono PCM at 16 kHz and passed
+to `transcribe()`, on your GPU.
+
+<Transcribe client:only="react" />
+
+## Live microphone
+
+`stream()` transcribes while the user speaks. Feed it microphone samples
+with `streamInsert`, read updates from the iterator it returns, and end it
+with `streamStop`. The samples come from a microphone recorder of your
+choice, such as an `AudioWorklet` on an `AudioContext` opened at
+`SPEECH_SAMPLE_RATE`.
+
+```ts
+import { createSpeechToText, models, SPEECH_SAMPLE_RATE } from 'runntime/zoo';
+import { recorder } from './recorder'; // Your microphone capture.
+
+const stt = await createSpeechToText(models.speechToText.MOONSHINE_STREAMING.TINY.DEFAULT);
+
+// 1. Read updates while the user speaks.
+(async () => {
+  for await (const { committed, nonCommitted } of stt.stream()) {
+    render(committed, nonCommitted);
+  }
+})();
+
+// 2. Feed the microphone in: mono samples at 16 kHz, chunk by chunk.
+recorder.start(SPEECH_SAMPLE_RATE, (samples) => stt.streamInsert(samples));
+
+// 3. Stop the microphone first, then the stream. The last sentence commits
+//    and the loop in step 1 ends.
+recorder.stop();
+stt.streamStop();
+```
+
+Each update has two strings. `nonCommitted` is the sentence being spoken:
+it is transcribed again every half second, so its words can still change.
+When the speaker pauses, or a sentence reaches 15 seconds of audio, it is
+final and moves to `committed`, the text of all finished sentences. Show both, one after the other.
+
+- An update comes when the text changes. Silence gives none.
+- The samples must be mono at 16 kHz, as `Float32Array`s.
+- One stream at a time. `streamStop()` and `dispose()` end it.
+
+## Methods
+
+```ts
+function createSpeechToText(
+  model?: SpeechToTextModel,
+  options?: LoadOptions,
+): Promise<SpeechToText>;
+
+interface SpeechToText {
+  transcribe(audio: Float32Array): Promise<string>;
+  stream(): AsyncIterable<SpeechStreamUpdate>;
+  streamInsert(samples: Float32Array): void;
+  streamStop(): void;
+  dispose(): void;
+}
+
+interface SpeechStreamUpdate {
+  readonly committed: string;
+  readonly nonCommitted: string;
+}
+```
+
+- `transcribe(audio)` takes mono samples at 16 kHz and returns the text.
+  Long clips are split on quiet moments and transcribed piece by piece. A
+  clip shorter than one model frame gives an empty string.
+- `stream()` starts live transcription. Loop over the result with
+  `for await` to get every update, see [Live microphone](#live-microphone).
+  `committed` is text that will not change again, `nonCommitted` is the
+  current guess for what is still being said.
+- `streamInsert(samples)` adds microphone samples to the stream.
+- `streamStop()` commits the last sentence and ends the stream.
+- `dispose()` frees the GPU memory.
+
+## Audio input
+
+The model takes a `Float32Array` of mono samples at 16 kHz. Two helpers
+turn what you have into that:
+
+```ts
+import { decodeAudio, resampleAudio } from 'runntime/zoo';
+
+// A file or a fetch response: wav, mp3, ogg, anything the browser plays.
+const audio = await decodeAudio(await file.arrayBuffer());
+
+// Raw microphone samples recorded at another rate.
+const audio = await resampleAudio(micSamples, audioContext.sampleRate);
+```
+
+```ts
+function decodeAudio(bytes: ArrayBuffer): Promise<Float32Array>;
+function resampleAudio(samples: Float32Array, sourceRate: number): Promise<Float32Array>;
+const SPEECH_SAMPLE_RATE: 16000;
+```
+
+- **decodeAudio(bytes)** - decodes a clip and resamples it to 16 kHz. Stereo
+  is mixed down to mono.
+- **resampleAudio(samples, sourceRate)** - resamples mono samples to 16 kHz.
+- **SPEECH_SAMPLE_RATE** - 16000, for an `AudioContext` that records at the
+  right rate from the start.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models` holds ready-made ones for each size: `DEFAULT`, the f16
+weights run in f16 where the device has `shader-f16` and in f32 elsewhere;
+`F16`, the same file with f16 forced; `F32`, the f32 weights, twice the
+download, run in f32. Pass one as is, copy it with a field changed, or
+point at your own files.
+
+```ts
+interface SpeechToTextModel {
+  readonly arch?: 'moonshine' | 'moonshine-streaming';
+  readonly modelPath?: ModelPath;
+  readonly tokenizerPath?: string;
+  readonly dtype?: 'f32' | 'f16';
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+import { createSpeechToText, models } from 'runntime/zoo';
+
+// The base size: more accurate, slower.
+await createSpeechToText(models.speechToText.MOONSHINE.BASE.DEFAULT);
+
+// The streaming family.
+await createSpeechToText(models.speechToText.MOONSHINE_STREAMING.TINY.DEFAULT);
+
+// Your own copy of the files.
+await createSpeechToText({
+  modelPath: '/models/moonshine/model.safetensors',
+  tokenizerPath: '/models/moonshine/tokenizer.json',
+});
+```
+
+- **arch** - `'moonshine'` (default) or `'moonshine-streaming'`. Picks the
+  model family and the default files.
+- **modelPath** - the weights, a `model.safetensors` file. The original
+  file from the Hub works as is. The model size is read from the file.
+- **tokenizerPath** - the `tokenizer.json` file next to it.
+- **dtype** - `'f16'` or `'f32'`. `f16` runs the model in half precision,
+  half the GPU memory, and needs a device with `shader-f16`. Default: `f16`
+  where the device has it, `f32` elsewhere. Either loads any weight file.
+
+Every field is optional. A missing one comes from the family's `TINY.DEFAULT`
+entry.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createOpfsCache, createSpeechToText, models } from 'runntime/zoo';
+
+const stt = await createSpeechToText(models.speechToText.MOONSHINE.TINY.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights and tokenizer in the browser, so
+  the next visit loads them without the network. `createOpfsCache(name)` is
+  the built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                                                            | Config                                         | Language | Parameters | Weights                |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------- | -------- | ---------- | ---------------------- |
+| [moonshine-tiny](https://huggingface.co/software-mansion/runntime-moonshine)                     | `models.speechToText.MOONSHINE.TINY`           | English  | 27M        | f16 54 MB, f32 108 MB  |
+| [moonshine-base](https://huggingface.co/software-mansion/runntime-moonshine)                     | `models.speechToText.MOONSHINE.BASE`           | English  | 61M        | f16 123 MB, f32 246 MB |
+| [moonshine-streaming-tiny](https://huggingface.co/software-mansion/runntime-moonshine-streaming) | `models.speechToText.MOONSHINE_STREAMING.TINY` | English  | 34M        | f16 88 MB, f32 176 MB  |
