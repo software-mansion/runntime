@@ -1,8 +1,9 @@
 /** Depth estimation task: an image in, a relative depth map out. Runs
  *  DepthART on the initRunntime() device. */
 
-import { createResourceScope, supportsF16 } from '../../../core/index.ts';
+import { createResourceScope, RunntimeError, supportsF16 } from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import {
   createEstimator,
   DEPTHART_CONFIGS,
@@ -47,7 +48,8 @@ export async function createDepthEstimator(
   opts: LoadOptions = {},
 ): Promise<DepthEstimator> {
   if (!supportsF16()) {
-    throw new Error(
+    throw new RunntimeError(
+      'UNSUPPORTED_DEVICE',
       "createDepthEstimator: this device has no shader-f16, which the conv kernels need. Request it with tgpu.init({ device: { optionalFeatures: ['shader-f16'] } })",
     );
   }
@@ -94,12 +96,12 @@ export async function createDepthEstimator(
     return {
       inputSize,
       async estimateDepth(image) {
-        if (disposed) throw new Error('depth estimator is disposed');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'depth estimator is disposed');
         const run = queue.then(() =>
           estimator.run(preprocessor.process(image, pixels), inputSize, inputSize),
         );
         queue = run.catch(() => undefined);
-        return { width: inputSize, height: inputSize, data: await run };
+        return { width: inputSize, height: inputSize, data: await run.catch(rethrowRunError) };
       },
       dispose() {
         disposed = true;
@@ -108,6 +110,6 @@ export async function createDepthEstimator(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }

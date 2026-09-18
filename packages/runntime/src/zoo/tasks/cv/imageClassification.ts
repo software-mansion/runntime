@@ -1,8 +1,9 @@
 /** Image classification task: an image in, the classes it shows out, best
  *  first. Runs MobileNetV4 on the initRunntime() device. */
 
-import { createResourceScope, supportsF16 } from '../../../core/index.ts';
+import { createResourceScope, RunntimeError, supportsF16 } from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import { createClassifier } from '../../mobilenetv4/classifier.ts';
 import {
   IMAGENET_MEAN,
@@ -55,7 +56,8 @@ export async function createImageClassifier(
   opts: LoadOptions = {},
 ): Promise<ImageClassifier> {
   if (!supportsF16()) {
-    throw new Error(
+    throw new RunntimeError(
+      'UNSUPPORTED_DEVICE',
       "createImageClassifier: this device has no shader-f16, which the conv kernels need. Request it with tgpu.init({ device: { optionalFeatures: ['shader-f16'] } })",
     );
   }
@@ -79,7 +81,10 @@ export async function createImageClassifier(
     const classifier = scope.track(await createClassifier(sd, { onProgress: opts.onProgress }));
     const { inputSize, numClasses } = classifier;
     if (labels.length !== numClasses) {
-      throw new Error(`labels: ${labels.length} names for a ${numClasses}-class model`);
+      throw new RunntimeError(
+        'INVALID_ARGUMENT',
+        `labels: ${labels.length} names for a ${numClasses}-class model`,
+      );
     }
     // (byte / 255 − mean) / std, per channel. The crop fraction matches how
     // the model was evaluated: 224 out of a 256 short side.
@@ -105,18 +110,23 @@ export async function createImageClassifier(
       labels,
       inputSize,
       async classify(image, options = {}) {
-        if (disposed) throw new Error('image classifier is disposed');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'image classifier is disposed');
         const { topk = numClasses } = options;
         if (!Number.isInteger(topk) || topk < 1) {
-          throw new Error(`classify: topk must be a positive integer, got ${topk}`);
+          throw new RunntimeError(
+            'INVALID_ARGUMENT',
+            `classify: topk must be a positive integer, got ${topk}`,
+          );
         }
         const run = queue.then(() => classifier.run(preprocessor.process(image, pixels)));
         queue = run.catch(() => undefined);
-        return decodeTopK(await run, Math.min(topk, numClasses)).map(({ classId, confidence }) => ({
-          label: labels[classId]!,
-          classId,
-          confidence,
-        }));
+        return decodeTopK(await run.catch(rethrowRunError), Math.min(topk, numClasses)).map(
+          ({ classId, confidence }) => ({
+            label: labels[classId]!,
+            classId,
+            confidence,
+          }),
+        );
       },
       dispose() {
         disposed = true;
@@ -125,6 +135,6 @@ export async function createImageClassifier(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }

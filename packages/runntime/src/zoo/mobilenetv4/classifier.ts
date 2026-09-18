@@ -7,6 +7,7 @@ import {
   evalValues,
   gpuExecutor,
   materialized,
+  RunntimeError,
   tensor3d,
   uploadF32,
   warmUp,
@@ -23,7 +24,8 @@ export interface Classifier {
   dispose(): void;
 }
 
-const mismatch = (message: string) => new Error(`mobilenetv4 weights: ${message}`);
+const mismatch = (message: string) =>
+  new RunntimeError('CHECKPOINT_MISMATCH', `mobilenetv4 weights: ${message}`);
 
 export function assertCheckpoint(sd: LazyStateDict, cfg: Mnv4Config): void {
   const stem = sd.tensors.get('conv_stem.weight');
@@ -71,7 +73,8 @@ export async function createClassifier(
     });
     let queue: Promise<unknown> = Promise.resolve();
     const run = (pixels: Float32Array) => {
-      if (disposed) return Promise.reject(new Error('classifier is disposed'));
+      if (disposed)
+        return Promise.reject(new RunntimeError('RESOURCE_DISPOSED', 'classifier is disposed'));
       const job = queue.then(() => {
         writeF32(root, buffer, pixels);
         const out = ex.readbackOnSubmit(cap.targets);

@@ -95,8 +95,9 @@ initRunntime(await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader
 requested as optional, so the call succeeds on devices without them. Many
 kernels run much faster with `subgroups`. Every vision model - object
 detection, instance segmentation, pose, depth estimation and image
-classification - runs in half precision and needs `shader-f16`; the
-`create` call throws without it. Text embedding, speech to text and the
+classification - runs in half precision and needs `shader-f16`. Without it
+the `create` call throws `UNSUPPORTED_DEVICE`, see
+[Error handling](/zoo/error-handling/). Text embedding, speech to text and the
 privacy filter run in f32 on such devices. If your app already uses
 TypeGPU, pass the root you have.
 
@@ -118,6 +119,10 @@ free it:
 - [Depth estimation](/zoo/depth-estimation/) - how far each pixel of an
   image is.
 - [Image classification](/zoo/image-classification/) - what an image shows.
+
+Every factory and every model method throws a `RunntimeError` with a
+`code` when something goes wrong. See
+[Error handling](/zoo/error-handling/) for the codes and how to catch them.
 
 ## Coming from transformers.js?
 

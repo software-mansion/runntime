@@ -10,14 +10,20 @@
  *  byteLengths carry the source file bytes, so load progress still sums to the
  *  checkpoint size. */
 
-import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import {
+  derivedTensor,
+  RunntimeError,
+  type LazyStateDict,
+  type LazyTensor,
+} from '../../core/index.ts';
 import type { MinilmConfig } from './config.ts';
 
 const qualify = (prefix: string, name: string): string => (prefix ? `${prefix}.${name}` : name);
 
 function take(sd: LazyStateDict, name: string): LazyTensor {
   const t = sd.tensors.get(name);
-  if (!t) throw new Error(`minilm state dict: missing tensor '${name}'`);
+  if (!t)
+    throw new RunntimeError('CHECKPOINT_MISMATCH', `minilm state dict: missing tensor '${name}'`);
   sd.tensors.delete(name);
   return t;
 }

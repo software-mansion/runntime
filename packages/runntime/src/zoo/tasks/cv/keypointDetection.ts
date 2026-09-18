@@ -1,8 +1,9 @@
 /** Keypoint detection task: an image in, the people in it out, each with a
  *  box and 17 COCO landmarks. Runs YOLO26 pose on the initRunntime() device. */
 
-import { createResourceScope } from '../../../core/index.ts';
+import { createResourceScope, RunntimeError } from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
 import { createDetector, POSE_KEYPOINTS } from '../../yolo26/detector.ts';
 import {
@@ -118,11 +119,11 @@ export async function createKeypointDetector(
       landmarkNames: COCO_LANDMARKS,
       skeleton: COCO_SKELETON.map(([a, b]) => [COCO_LANDMARKS[a]!, COCO_LANDMARKS[b]!] as const),
       async detectKeypoints(image, options = {}) {
-        if (disposed) throw new Error('keypoint detector is disposed');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'keypoint detector is disposed');
         const { confidenceThreshold = 0.3, maxDetections = 300 } = options;
         const run = queue.then(() => detector.run(preprocessor.process(image, pixels)));
         queue = run.catch(() => undefined);
-        const { levels } = await run;
+        const { levels } = await run.catch(rethrowRunError);
         const scale = preprocessor.scaleOptions(image);
         return decodePoses(levels, {
           numClasses,
@@ -156,7 +157,7 @@ export async function createKeypointDetector(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }
 

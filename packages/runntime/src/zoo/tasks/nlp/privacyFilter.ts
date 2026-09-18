@@ -1,8 +1,9 @@
 /** Privacy filter task: text in, the personal data it contains out, as
  *  labeled spans. Runs OpenAI's privacy-filter on the initRunntime() device. */
 
-import { createResourceScope } from '../../../core/index.ts';
+import { createResourceScope, RunntimeError } from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import { models } from '../../models.ts';
 import { createDetector } from '../../privacy-filter/detector.ts';
 
@@ -64,13 +65,13 @@ export async function createPrivacyFilter(
 
     return {
       async detect(text) {
-        if (disposed) throw new Error('privacy filter is disposed');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'privacy filter is disposed');
         if (typeof text !== 'string') {
-          throw new Error('detect: text must be a string');
+          throw new RunntimeError('INVALID_ARGUMENT', 'detect: text must be a string');
         }
         const run = queue.then(() => detector.detect(text));
         queue = run.catch(() => undefined);
-        return (await run).spans;
+        return (await run.catch(rethrowRunError)).spans;
       },
       dispose() {
         disposed = true;
@@ -79,6 +80,6 @@ export async function createPrivacyFilter(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }

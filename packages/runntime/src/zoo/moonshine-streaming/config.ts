@@ -7,7 +7,7 @@
  *  independent (they agree only for tiny), and the attention inner dim
  *  heads·headDim matches hidden_size only for tiny — never assume square. */
 
-import type { LazyStateDict } from '../../core/index.ts';
+import { RunntimeError, type LazyStateDict } from '../../core/index.ts';
 
 export interface StreamingEncoderConfig {
   readonly hidden: number;
@@ -125,7 +125,8 @@ export function presetFromStateDict(sd: LazyStateDict): MoonshineStreamingConfig
   const width = embedding?.shape[1];
   const presets = [MOONSHINE_STREAMING_TINY, MOONSHINE_STREAMING_SMALL, MOONSHINE_STREAMING_MEDIUM];
   for (const cfg of presets) if (cfg.dec.hidden === width) return cfg;
-  throw new Error(
+  throw new RunntimeError(
+    'CHECKPOINT_MISMATCH',
     embedding === undefined
       ? 'moonshine-streaming weights: no token embedding, not a Moonshine checkpoint'
       : `moonshine-streaming weights: embedding width ${width} matches no known size`,
@@ -137,19 +138,27 @@ type Json = Record<string, unknown>;
 function num(json: Json, key: string): number {
   const v = json[key];
   if (typeof v !== 'number') {
-    throw new Error(`moonshine-streaming config: '${key}' missing or not a number`);
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      `moonshine-streaming config: '${key}' missing or not a number`,
+    );
   }
   return v;
 }
 
 export function configFromCheckpoint(json: Json): MoonshineStreamingConfig {
   const encJson = json.encoder_config as Json | undefined;
-  if (!encJson) throw new Error("moonshine-streaming config: 'encoder_config' missing");
+  if (!encJson)
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      "moonshine-streaming config: 'encoder_config' missing",
+    );
   const ropeParams = (json.rope_parameters ?? {}) as Json;
   const ropeTheta = ropeParams.rope_theta as number | undefined;
   const partialRotary = ropeParams.partial_rotary_factor as number | undefined;
   if (typeof ropeTheta !== 'number' || typeof partialRotary !== 'number') {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       'moonshine-streaming config: rope_parameters.{rope_theta,partial_rotary_factor} missing',
     );
   }
@@ -159,12 +168,14 @@ export function configFromCheckpoint(json: Json): MoonshineStreamingConfig {
     ['encoder', encJson],
   ] as const) {
     if (j.attention_bias !== false) {
-      throw new Error(
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
         `moonshine-streaming config: ${scope} attention_bias must be false — loader folds no biases`,
       );
     }
     if (num(j, 'num_key_value_heads') !== num(j, 'num_attention_heads')) {
-      throw new Error(
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
         `moonshine-streaming config: ${scope} kv heads != attention heads — model assumes MHA`,
       );
     }
@@ -173,14 +184,18 @@ export function configFromCheckpoint(json: Json): MoonshineStreamingConfig {
   const decHeadDim = num(json, 'head_dim');
   const rotaryDim = Math.floor(decHeadDim * partialRotary); // HF: int(head_dim · factor)
   if (rotaryDim <= 0 || rotaryDim % 2 !== 0 || rotaryDim > decHeadDim) {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       `moonshine-streaming config: derived rotaryDim ${rotaryDim} invalid for headDim ${decHeadDim}`,
     );
   }
 
   const bos = num(json, 'bos_token_id');
   if (json.decoder_start_token_id !== bos) {
-    throw new Error('moonshine-streaming config: decoder_start_token_id != bos_token_id');
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      'moonshine-streaming config: decoder_start_token_id != bos_token_id',
+    );
   }
 
   const frameLen = Math.round((num(encJson, 'sample_rate') * num(encJson, 'frame_ms')) / 1000);
@@ -190,7 +205,8 @@ export function configFromCheckpoint(json: Json): MoonshineStreamingConfig {
     rawWindows.length !== num(encJson, 'num_hidden_layers') ||
     !rawWindows.every((w) => Array.isArray(w) && w.length === 2)
   ) {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       'moonshine-streaming config: sliding_windows must hold one [left, right] pair per layer',
     );
   }
@@ -235,7 +251,10 @@ export function assertConfigMatches(
       return;
     }
     if (a !== b) {
-      throw new Error(`moonshine-streaming config: checkpoint ${path}=${a} != preset ${b}`);
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `moonshine-streaming config: checkpoint ${path}=${a} != preset ${b}`,
+      );
     }
   };
   walk(parsed, preset, '');

@@ -1,8 +1,9 @@
 /** Object detection task: an image in, the objects in it out, as labeled
  *  boxes. Runs YOLO26 on the initRunntime() device. */
 
-import { createResourceScope } from '../../../core/index.ts';
+import { createResourceScope, RunntimeError } from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
 import { createDetector } from '../../yolo26/detector.ts';
 import { COCO_NAMES, decodeDetections } from '../../yolo26/pipeline.ts';
@@ -104,11 +105,11 @@ export async function createObjectDetector(
     return {
       labels,
       async detectObjects(image, options = {}) {
-        if (disposed) throw new Error('object detector is disposed');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'object detector is disposed');
         const { confidenceThreshold = 0.3, maxDetections = 300 } = options;
         const run = queue.then(() => detector.run(preprocessor.process(image, pixels)));
         queue = run.catch(() => undefined);
-        const { levels } = await run;
+        const { levels } = await run.catch(rethrowRunError);
         const scale = preprocessor.scaleOptions(image);
         return decodeDetections(levels, {
           numClasses,
@@ -138,7 +139,7 @@ export async function createObjectDetector(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }
 

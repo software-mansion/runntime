@@ -1,7 +1,13 @@
 /** Speech to text task: 16 kHz mono audio in, as a clip or live from the
  *  microphone, text out. Runs Moonshine on the initRunntime() device. */
 
-import { createResourceScope, defaultRoot, supportsF16, warmUp } from '../../../core/index.ts';
+import {
+  createResourceScope,
+  defaultRoot,
+  RunntimeError,
+  supportsF16,
+  warmUp,
+} from '../../../core/index.ts';
 import {
   fetchJson,
   openWeights,
@@ -9,6 +15,7 @@ import {
   type LoadOptions,
   type ModelPath,
 } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import { models } from '../../models.ts';
 import { analyzeSegment } from '../../moonshine/segmenter.ts';
 import { moonshineTokenizerAsset } from '../../moonshine/tokenizer.ts';
@@ -129,7 +136,7 @@ export async function createSpeechToText(
     const enqueue = (audio: Float32Array) => {
       const run = queue.then(() => transcriber.transcribe(audio));
       queue = run.catch(() => undefined);
-      return run;
+      return run.catch(rethrowRunError);
     };
 
     let live: Session | undefined;
@@ -179,23 +186,28 @@ export async function createSpeechToText(
 
     return {
       async transcribe(audio) {
-        if (disposed) throw new Error('speech to text is disposed');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'speech to text is disposed');
         if (!(audio instanceof Float32Array)) {
-          throw new Error('transcribe: audio must be a Float32Array');
+          throw new RunntimeError('INVALID_ARGUMENT', 'transcribe: audio must be a Float32Array');
         }
         if (audio.length < transcriber.minSamples) return '';
         return (await enqueue(audio)).text;
       },
       stream() {
-        if (disposed) throw new Error('speech to text is disposed');
-        if (live) throw new Error('stream: a stream is open, stop it first');
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'speech to text is disposed');
+        if (live)
+          throw new RunntimeError('INVALID_ARGUMENT', 'stream: a stream is open, stop it first');
         live = { chunks: [], length: 0, fresh: 0, stopped: false, wake: () => {} };
         return liveLoop(live);
       },
       streamInsert(samples) {
-        if (!live || live.stopped) throw new Error('streamInsert: no stream is open');
+        if (!live || live.stopped)
+          throw new RunntimeError('INVALID_ARGUMENT', 'streamInsert: no stream is open');
         if (!(samples instanceof Float32Array)) {
-          throw new Error('streamInsert: samples must be a Float32Array');
+          throw new RunntimeError(
+            'INVALID_ARGUMENT',
+            'streamInsert: samples must be a Float32Array',
+          );
         }
         // A copy: recorders reuse the array they hand out.
         live.chunks.push(samples.slice());
@@ -222,7 +234,7 @@ export async function createSpeechToText(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err);
   }
 }
 

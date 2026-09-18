@@ -8,6 +8,7 @@ import {
   gpuExecutor,
   materialized,
   resizeBilinear2d,
+  RunntimeError,
   tensor3d,
   toChw,
   toHwc4,
@@ -35,7 +36,8 @@ export interface Estimator {
   dispose(): void;
 }
 
-const mismatch = (message: string) => new Error(`depthart weights: ${message}`);
+const mismatch = (message: string) =>
+  new RunntimeError('CHECKPOINT_MISMATCH', `depthart weights: ${message}`);
 
 export function variantFromStateDict(sd: LazyStateDict): DepthartVariant {
   const width = sd.tensors.get('pretrained.network.1.proj.c.weight')?.shape[0];

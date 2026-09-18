@@ -95,6 +95,14 @@ header.header {
   color: var(--text-primary);
 }
 
+/* A page outside any group is a link, not a heading. */
+.sidebar-content a.large {
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: inherit;
+  color: var(--text-muted);
+}
+
 .sidebar-content a {
   font-size: 1rem;
   color: var(--text-muted);
