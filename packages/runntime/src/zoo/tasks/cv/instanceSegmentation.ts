@@ -120,7 +120,12 @@ export async function createInstanceSegmenter(
         const run = queue.then(() => detector.run(preprocessor.process(image, pixels)));
         queue = run.catch(() => undefined);
         const { levels, proto } = await run.catch(rethrowRunError);
-        if (!proto) throw new Error('yolo26 segment: the forward pass gave no mask prototypes');
+        if (!proto) {
+          throw new RunntimeError(
+            'EXECUTION_FAILED',
+            'yolo26 segment: the forward pass gave no mask prototypes',
+          );
+        }
         const scale = preprocessor.scaleOptions(image);
         const toInput = resizeTransform(scale);
         // Mask maps are at the prototype resolution, a quarter of the input.
@@ -166,7 +171,7 @@ export async function createInstanceSegmenter(
     };
   } catch (err) {
     scope.dispose();
-    throw asLoadError(err);
+    throw asLoadError(err, opts.signal);
   }
 }
 

@@ -21,6 +21,7 @@ import {
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { splitIntoChunks, type ChunkOpts } from '../moonshine/chunking.ts';
 import { buildRopeTables } from '../moonshine/rope.ts';
 import { decodeTokens, type MoonshineTokenizer } from '../moonshine/tokenizer.ts';
@@ -52,10 +53,9 @@ export async function createTranscriber(
 ): Promise<Transcriber> {
   const root = defaultRoot();
   if (sd.metadata['model'] && sd.metadata['model'] !== 'moonshine-streaming') {
-    throw new RunntimeError(
-      'CHECKPOINT_MISMATCH',
-      `moonshine-streaming weights: file is for model '${sd.metadata['model']}', ` +
-        `expected 'moonshine-streaming'`,
+    throw checkpointMismatch(
+      'moonshine-streaming weights',
+      `file is for model '${sd.metadata['model']}', expected 'moonshine-streaming'`,
     );
   }
   const cfg = opts.cfg ?? presetFromStateDict(sd);

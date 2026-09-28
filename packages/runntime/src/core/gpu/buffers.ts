@@ -10,6 +10,7 @@ import {
   type ValueMeta,
 } from '../graph/value.ts';
 import { f16ToF32, f32ArrayToF16Bits } from '../weights/convert.ts';
+import { RunntimeError } from '../error.ts';
 import { defaultRoot } from './context.ts';
 
 /** Raw upload and readback utilities. Uploads go through `queue.writeBuffer`
@@ -22,7 +23,8 @@ import { defaultRoot } from './context.ts';
 export function checkBindable(root: TgpuRoot, bytes: number, what: string): void {
   const cap = root.device?.limits?.maxStorageBufferBindingSize;
   if (cap !== undefined && bytes > cap) {
-    throw new Error(
+    throw new RunntimeError(
+      'UNSUPPORTED_DEVICE',
       `${what}: ${(bytes / 1e6).toFixed(1)} MB exceeds this device's ` +
         `maxStorageBufferBindingSize of ${(cap / 1e6).toFixed(1)} MB — no shader can bind it. ` +
         'Halve the model (nn.Module.half()) or use a quantized weight format.',

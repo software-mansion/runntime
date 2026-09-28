@@ -49,28 +49,33 @@ try {
 
 ## Codes
 
-| Code                  | When                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------ |
-| `LOAD_FAILED`         | The weights, tokenizer or config could not be fetched, read or uploaded.                               |
-| `LOAD_ABORTED`        | The `signal` passed to the `create` call fired.                                                        |
-| `CHECKPOINT_MISMATCH` | The weights file does not match the model, for example a segment checkpoint given to object detection. |
-| `UNSUPPORTED_DEVICE`  | The device lacks a feature the model needs, today `shader-f16` for the vision models.                  |
-| `EXECUTION_FAILED`    | The GPU rejected the work, returned unusable output, or the device was lost during a call.             |
-| `INVALID_ARGUMENT`    | A value you passed is wrong: a wrong image byte count, a `topk` of 0, text that is not a string.       |
-| `RESOURCE_DISPOSED`   | The model was disposed and cannot run again.                                                           |
+| Code                  | When                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `LOAD_FAILED`         | The weights, tokenizer or config could not be fetched, read or uploaded.                                                             |
+| `LOAD_ABORTED`        | The `signal` passed to the `create` call fired.                                                                                      |
+| `CHECKPOINT_MISMATCH` | The weights file does not match the model, for example a segment checkpoint given to object detection.                               |
+| `UNSUPPORTED_DEVICE`  | The device lacks a feature the model needs, today `shader-f16` for the vision models, or a weight is too big for the device to bind. |
+| `NOT_INITIALIZED`     | No device yet: `initRunntime(root)` was not called before the `create` call.                                                         |
+| `EXECUTION_FAILED`    | The GPU rejected the work, returned unusable output, or the device was lost during a call.                                           |
+| `INVALID_ARGUMENT`    | A value you passed is wrong: a wrong image byte count, a `topk` of 0, text that is not a string.                                     |
+| `RESOURCE_DISPOSED`   | The model was disposed and cannot run again.                                                                                         |
 
-The first four come from the `create` call, the last three from the model
-methods. A `create` call can also throw `INVALID_ARGUMENT` when an option
-is wrong.
+`LOAD_FAILED`, `LOAD_ABORTED`, `CHECKPOINT_MISMATCH`, `UNSUPPORTED_DEVICE`
+and `NOT_INITIALIZED` come from the `create` call, the other three from the
+model methods. A `create` call can also throw `INVALID_ARGUMENT` when an
+option is wrong, and `EXECUTION_FAILED` when the GPU fails while the model
+uploads or warms up.
 
 The full list of codes is exported as `RUNNTIME_ERROR_CODES`, and the
 type of one code as `RunntimeErrorCode`.
 
 ## Cancelling a load
 
-Every `create` call takes an `AbortSignal`. When it fires, the download
-stops and the call throws `LOAD_ABORTED`. Use it when the user leaves the
-page or picks another model before the first one is ready.
+Every `create` call takes an `AbortSignal`. Use it when the user leaves the
+page or picks another model before the first one is ready. When it fires,
+the load stops, at the latest when its current step ends, and the call
+throws `LOAD_ABORTED`. This works for any reason you pass to `abort()`. The
+reason is in `err.cause`.
 
 ```ts
 const controller = new AbortController();

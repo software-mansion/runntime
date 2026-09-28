@@ -14,6 +14,7 @@ import {
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { YOLO26_CONFIG, YOLO26_SCALES, scaleChannels, type Yolo26Variant } from './config.ts';
 import { Yolo26Model, type Yolo26Task } from './model.ts';
 import type { ProtoData, RawLevel } from './pipeline.ts';
@@ -48,8 +49,7 @@ export function taskFromStateDict(sd: LazyStateDict): Yolo26Task {
   return 'detect';
 }
 
-const mismatch = (message: string) =>
-  new RunntimeError('CHECKPOINT_MISMATCH', `yolo26 weights: ${message}`);
+const mismatch = (message: string) => checkpointMismatch('yolo26 weights', message);
 
 const STEM_CHANNELS = Object.fromEntries(
   (Object.keys(YOLO26_SCALES) as Yolo26Variant[]).map((v) => [

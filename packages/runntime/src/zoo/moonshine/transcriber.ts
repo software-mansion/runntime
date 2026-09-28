@@ -22,6 +22,7 @@ import {
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { presetFromStateDict, type MoonshineConfig } from './config.ts';
 import { splitIntoChunks, type ChunkOpts } from './chunking.ts';
 import { buildRopeTables } from './rope.ts';
@@ -78,9 +79,9 @@ export async function createTranscriber(
 ): Promise<Transcriber> {
   const root = defaultRoot();
   if (sd.metadata['model'] && sd.metadata['model'] !== 'moonshine') {
-    throw new RunntimeError(
-      'CHECKPOINT_MISMATCH',
-      `moonshine weights: file is for model '${sd.metadata['model']}', expected 'moonshine'`,
+    throw checkpointMismatch(
+      'moonshine weights',
+      `file is for model '${sd.metadata['model']}', expected 'moonshine'`,
     );
   }
   const cfg = opts.cfg ?? presetFromStateDict(sd);

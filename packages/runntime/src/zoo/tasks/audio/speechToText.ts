@@ -234,7 +234,7 @@ export async function createSpeechToText(
     };
   } catch (err) {
     scope.dispose();
-    throw asLoadError(err);
+    throw asLoadError(err, opts.signal);
   }
 }
 

@@ -135,6 +135,6 @@ export async function createImageClassifier(
     };
   } catch (err) {
     scope.dispose();
-    throw asLoadError(err);
+    throw asLoadError(err, opts.signal);
   }
 }

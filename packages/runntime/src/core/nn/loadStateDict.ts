@@ -3,6 +3,7 @@
  *  host memory is one tensor's working set. */
 import type { TgpuRoot } from 'typegpu';
 import { uploadF16, uploadF32, uploadU32 } from '../gpu/buffers.ts';
+import { RunntimeError } from '../error.ts';
 import { defaultRoot } from '../gpu/context.ts';
 import { inGpuErrorScopes } from '../gpu/errorScopes.ts';
 import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
@@ -125,7 +126,8 @@ async function bindStateDict(
   const missing = params.filter(([n]) => !sd.tensors.has(n)).map(([n]) => n);
   const unexpected = [...sd.tensors.keys()].filter((n) => !paramNames.has(n));
   if (missing.length || unexpected.length) {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       'loadStateDict: state dict does not match model.' +
         (missing.length ? ` missing: ${list(missing)}.` : '') +
         (unexpected.length ? ` unexpected: ${list(unexpected)}.` : ''),
@@ -145,7 +147,8 @@ async function bindStateDict(
     const numel = t.shape.reduce((a, b) => a * b, 1);
     const expected = numel;
     if (expected !== p.shape.elems) {
-      throw new Error(
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
         `loadStateDict: '${name}' checkpoint shape [${t.shape}] (${numel} elems) != model ${JSON.stringify(p.shape.dims)} (${p.shape.elems} ${p.shape.dtype === 'quantW' ? 'words' : 'elems'})`,
       );
     }

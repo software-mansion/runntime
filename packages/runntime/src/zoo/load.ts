@@ -9,7 +9,7 @@ import {
   type RangeSource,
   type WeightCache,
 } from '../core/index.ts';
-import { asLoadError, isAbort } from './errors.ts';
+import { asLoadError, isAbort, messageOf } from './errors.ts';
 
 /** Where the weights come from: a URL, or any byte-range reader. */
 export type ModelPath = string | RangeSource;
@@ -36,8 +36,8 @@ export function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /** Opens a safetensors file and reads its header. Tensor bytes download
- *  later, during loadStateDict. A failure is LOAD_FAILED and names the file it
- *  came from, an abort LOAD_ABORTED. */
+ *  later, in loadStateDict. Fails with LOAD_FAILED, naming the file, or
+ *  LOAD_ABORTED. */
 export async function openWeights(
   modelPath: ModelPath,
   opts: LoadOptions = {},
@@ -52,14 +52,14 @@ export async function openWeights(
   } catch (err) {
     if (isRunntimeError(err)) throw err;
     const where = typeof modelPath === 'string' ? modelPath : 'weights';
-    throw new RunntimeError('LOAD_FAILED', `${where}: ${(err as Error).message}`, { cause: err });
+    throw new RunntimeError('LOAD_FAILED', `${where}: ${messageOf(err)}`, { cause: err });
   }
 }
 
 /** Downloads and parses a JSON file (a tokenizer, a config). With a cache,
- *  the bytes are saved under `cacheId` (the file name by default) and the
- *  next load reads them from there. A failure is LOAD_FAILED and names the URL
- *  it came from, an abort LOAD_ABORTED. */
+ *  the bytes are saved under `cacheId` (the file name by default) and reused
+ *  on the next load. Fails with LOAD_FAILED, naming the URL, or
+ *  LOAD_ABORTED. */
 export async function fetchJson<T>(
   url: string,
   opts: Pick<LoadOptions, 'cache' | 'cacheId' | 'signal'> = {},
@@ -70,8 +70,8 @@ export async function fetchJson<T>(
     try {
       res = await fetch(url, { signal: opts.signal });
     } catch (err) {
-      if (isAbort(err)) throw asLoadError(err);
-      throw new RunntimeError('LOAD_FAILED', `${url}: ${(err as Error).message}`, { cause: err });
+      if (opts.signal?.aborted || isAbort(err)) throw asLoadError(err, opts.signal);
+      throw new RunntimeError('LOAD_FAILED', `${url}: ${messageOf(err)}`, { cause: err });
     }
     if (!res.ok) throw new RunntimeError('LOAD_FAILED', `${url}: HTTP ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());

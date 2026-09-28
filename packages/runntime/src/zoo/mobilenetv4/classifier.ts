@@ -14,6 +14,7 @@ import {
   writeF32,
   type LazyStateDict,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { MOBILENETV4_CONV_S, type Mnv4Config } from './config.ts';
 import { MobileNetV4Model } from './model.ts';
 
@@ -24,8 +25,7 @@ export interface Classifier {
   dispose(): void;
 }
 
-const mismatch = (message: string) =>
-  new RunntimeError('CHECKPOINT_MISMATCH', `mobilenetv4 weights: ${message}`);
+const mismatch = (message: string) => checkpointMismatch('mobilenetv4 weights', message);
 
 export function assertCheckpoint(sd: LazyStateDict, cfg: Mnv4Config): void {
   const stem = sd.tensors.get('conv_stem.weight');

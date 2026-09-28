@@ -1,5 +1,5 @@
-/** An error with a short `code` field. Apps check the code, not the message,
- *  which is text for people and can change between versions. */
+/** An error with a `code`. Apps check the code, not the message. The
+ *  message is for people and can change between versions. */
 
 export const RUNNTIME_ERROR_CODES = [
   /** Weights, a tokenizer or a config could not be fetched, read or uploaded. */
@@ -10,12 +10,14 @@ export const RUNNTIME_ERROR_CODES = [
   'CHECKPOINT_MISMATCH',
   /** The device lacks a feature the task needs. */
   'UNSUPPORTED_DEVICE',
-  /** The GPU rejected or failed the work. */
+  /** The GPU failed to run the work. */
   'EXECUTION_FAILED',
   /** A value passed by the caller is wrong. */
   'INVALID_ARGUMENT',
-  /** The runner is disposed and cannot run again. */
+  /** The model was disposed and cannot run again. */
   'RESOURCE_DISPOSED',
+  /** initRunntime(root) was not called, so there is no device. */
+  'NOT_INITIALIZED',
 ] as const;
 
 export type RunntimeErrorCode = (typeof RUNNTIME_ERROR_CODES)[number];
@@ -28,13 +30,13 @@ export class RunntimeError<C extends RunntimeErrorCode = RunntimeErrorCode> exte
     this.code = code;
   }
 }
-// On the prototype, so the stack header says RunntimeError. A class field
-// would be set too late.
+// Set on the prototype so stack traces say RunntimeError. A class field is
+// set too late for that.
 RunntimeError.prototype.name = 'RunntimeError';
 
-/** True when `value` is a RunntimeError, with this `code` when one is given.
- *  Checks the `name` and `code` fields, not the class, so it also works when
- *  a page has two copies of the library. */
+/** True when `value` is a RunntimeError, with this `code` if one is given.
+ *  Checks `name` and `code`, not the class, so it works even when a page
+ *  loads two copies of the library. */
 export function isRunntimeError<C extends RunntimeErrorCode>(
   value: unknown,
   code?: C,

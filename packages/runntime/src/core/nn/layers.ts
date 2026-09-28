@@ -1,5 +1,6 @@
 /** Stock nn layers: each holds Parameters and calls the matching op. */
 
+import { RunntimeError } from '../error.ts';
 import { groupNorm, linear, rmsNorm } from '../graph/compose.ts';
 import {
   type ConvAct,
@@ -122,7 +123,8 @@ export class Linear extends Module {
       tensor.shape[0] !== this.outFeatures ||
       tensor.shape[1] !== this.inFeatures
     ) {
-      throw new Error(
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
         `Linear: ${name} has shape ${JSON.stringify(tensor.shape)}, ` +
           `expected torch layout [${this.outFeatures}, ${this.inFeatures}]`,
       );
@@ -193,7 +195,8 @@ export class Conv1d extends Module {
       tensor.shape[1] !== this.inChannels ||
       tensor.shape[2] !== this.kernelSize
     ) {
-      throw new Error(
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
         `Conv1d: ${name} has shape ${JSON.stringify(tensor.shape)}, ` +
           `expected torch layout [${this.outChannels}, ${this.inChannels}, ${this.kernelSize}]`,
       );

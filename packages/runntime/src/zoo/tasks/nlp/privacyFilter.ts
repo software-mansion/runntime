@@ -80,6 +80,6 @@ export async function createPrivacyFilter(
     };
   } catch (err) {
     scope.dispose();
-    throw asLoadError(err);
+    throw asLoadError(err, opts.signal);
   }
 }

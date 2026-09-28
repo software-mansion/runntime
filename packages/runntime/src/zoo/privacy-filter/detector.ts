@@ -5,12 +5,13 @@
 
 import {
   defaultRoot,
-  RunntimeError,
+  isRunntimeError,
   supportsF16,
   toArray,
   warmUp,
   type LazyStateDict,
 } from '../../core/index.ts';
+import { checkpointMismatch, messageOf } from '../errors.ts';
 import { buildLabelInfo, V2_NER_CLASS_NAMES, ZERO_BIASES, type ViterbiBiases } from './config.ts';
 import { createTokenizer } from './tokenizer.ts';
 import { ViterbiDecoder } from './viterbi.ts';
@@ -27,8 +28,7 @@ export interface LoadedPrivacyFilterModel {
   weightFormat: string;
 }
 
-const mismatch = (message: string) =>
-  new RunntimeError('CHECKPOINT_MISMATCH', `privacy-filter weights: ${message}`);
+const mismatch = (message: string) => checkpointMismatch('privacy-filter weights', message);
 
 export async function loadPrivacyFilterModel(
   sd: LazyStateDict,
@@ -43,7 +43,8 @@ export async function loadPrivacyFilterModel(
     try {
       transformHfPrivacyFilterStateDict(sd);
     } catch (err) {
-      throw mismatch((err as Error).message);
+      if (isRunntimeError(err)) throw err;
+      throw mismatch(messageOf(err));
     }
   }
   if (sd.metadata['model'] !== 'privacy-filter') {

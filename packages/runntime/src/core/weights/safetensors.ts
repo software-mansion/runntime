@@ -2,6 +2,7 @@
  *  data_offsets are payload-relative; this module stores absolute file
  *  offsets. */
 
+import { RunntimeError } from '../error.ts';
 import { bf16ToF32, f16ToF32 } from './convert.ts';
 import type { WeightCache } from './cache.ts';
 import { cachedRangeSource } from './cachedSource.ts';
@@ -354,21 +355,33 @@ function fileTensor(name: string, info: SafeTensorInfo, source: RangeSource): Fi
       if (info.dtype === 'F32') return toF32(bytes);
       if (info.dtype === 'BF16') return bf16ToF32(toHalfwords(bytes));
       if (info.dtype === 'F16') return f16ToF32(toHalfwords(bytes));
-      throw new Error(`tensor ${name}: cannot decode ${info.dtype} to f32`);
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `tensor ${name}: cannot decode ${info.dtype} to f32`,
+      );
     },
     async halfWords() {
       if (info.dtype !== 'F16')
-        throw new Error(`tensor ${name}: halfWords() needs F16, got ${info.dtype}`);
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `tensor ${name}: halfWords() needs F16, got ${info.dtype}`,
+        );
       return toWords(await fetchBytes());
     },
     async words() {
       if (info.dtype !== 'U32')
-        throw new Error(`tensor ${name}: words() needs U32, got ${info.dtype}`);
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `tensor ${name}: words() needs U32, got ${info.dtype}`,
+        );
       return toWords(await fetchBytes());
     },
     async u16() {
       if (info.dtype !== 'BF16' && info.dtype !== 'F16')
-        throw new Error(`tensor ${name}: u16() needs BF16 or F16, got ${info.dtype}`);
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `tensor ${name}: u16() needs BF16 or F16, got ${info.dtype}`,
+        );
       return toHalfwords(await fetchBytes());
     },
   };
@@ -478,7 +491,10 @@ export async function fromSafetensors(
   if (opts.cache) {
     cacheId = opts.cacheId ?? (typeof src === 'string' ? src.split('/').pop() : undefined);
     if (!cacheId) {
-      throw new Error('fromSafetensors: cache with a RangeSource src needs an explicit cacheId');
+      throw new RunntimeError(
+        'INVALID_ARGUMENT',
+        'fromSafetensors: cache with a RangeSource src needs an explicit cacheId',
+      );
     }
   }
   const cached = (inner: RangeSource) =>
