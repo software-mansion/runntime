@@ -99,7 +99,10 @@ export async function createTranscriber(
     return padded;
   };
 
-  const transcribeUtterance = async (rawAudio: Float32Array): Promise<TranscribeResult> => {
+  const transcribeUtterance = async (
+    rawAudio: Float32Array,
+    tokensPerSecond: number,
+  ): Promise<TranscribeResult> => {
     perf?.onPhase?.('encode');
     const t0 = performance.now();
     const audio = padToFrames(rawAudio);
@@ -116,7 +119,7 @@ export async function createTranscriber(
 
     const maxTokens = Math.min(
       DECODE_POSITIONS,
-      Math.ceil((rawAudio.length / SAMPLE_RATE) * TOKENS_PER_SECOND),
+      Math.ceil((rawAudio.length / SAMPLE_RATE) * tokensPerSecond),
     );
     // Hand the pinned cross K/V back to the pool.
     const release = (kvs: readonly { k: Value; v: Value }[]) => {
@@ -190,11 +193,14 @@ export async function createTranscriber(
     sampleRate: SAMPLE_RATE,
   };
 
-  const transcribeAll = async (audio: Float32Array): Promise<TranscribeResult> => {
+  const transcribeAll = async (
+    audio: Float32Array,
+    tokensPerSecond: number,
+  ): Promise<TranscribeResult> => {
     const chunks = splitIntoChunks(audio, chunkOpts);
-    if (chunks.length === 1) return transcribeUtterance(audio);
+    if (chunks.length === 1) return transcribeUtterance(audio, tokensPerSecond);
     const results: TranscribeResult[] = [];
-    for (const chunk of chunks) results.push(await transcribeUtterance(chunk));
+    for (const chunk of chunks) results.push(await transcribeUtterance(chunk, tokensPerSecond));
     return {
       ids: results.flatMap((r) => r.ids),
       text: results
@@ -224,9 +230,12 @@ export async function createTranscriber(
   // calls run one at a time: each waits for the previous one to settle.
   let inFlight: Promise<unknown> = Promise.resolve();
   let disposed = false;
-  const transcribe = (audio: Float32Array): Promise<TranscribeResult> => {
+  const transcribe = (
+    audio: Float32Array,
+    tokensPerSecond = TOKENS_PER_SECOND,
+  ): Promise<TranscribeResult> => {
     if (disposed) return Promise.reject(new Error('transcriber is disposed'));
-    const job = inFlight.then(() => transcribeAll(audio));
+    const job = inFlight.then(() => transcribeAll(audio, tokensPerSecond));
     inFlight = job.catch(() => undefined);
     return job;
   };
