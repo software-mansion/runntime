@@ -24,6 +24,9 @@ pnpm monorepo, Node 22 or newer:
 There is no test suite in this repo. Verification is typecheck, lint and the
 docs build.
 
+Before writing or reviewing code, comments or docs, read
+[.claude/skills/code-style/SKILL.md](.claude/skills/code-style/SKILL.md).
+
 ## Why it is built this way
 
 - Ops never touch the GPU. `matmul(a, b)` validates shapes and returns a
