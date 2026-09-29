@@ -40,8 +40,9 @@ export interface TranscribeResult {
 export interface Transcriber {
   readonly minSamples: number;
   /** Calls run one at a time: one made while another is in flight waits for
-   *  it, so overlapping calls never share the decode caches. */
-  transcribe(audio: Float32Array): Promise<TranscribeResult>;
+   *  it, so overlapping calls never share the decode caches. The decode
+   *  stops after `tokensPerSecond` tokens per second of audio, default 6.5. */
+  transcribe(audio: Float32Array, tokensPerSecond?: number): Promise<TranscribeResult>;
   dispose(): void;
 }
 
@@ -117,7 +118,10 @@ export async function createTranscriber(
   // Per-position greedy ids, read back once per burst.
   const idsBuf = tensor(root, new Float32Array(cfg.maxPositions), [cfg.maxPositions, 1]);
 
-  const transcribeUtterance = async (audio: Float32Array): Promise<TranscribeResult> => {
+  const transcribeUtterance = async (
+    audio: Float32Array,
+    tokensPerSecond: number,
+  ): Promise<TranscribeResult> => {
     perf?.onPhase?.('encode');
     const t0 = performance.now();
     const frames = stemFrames(audio.length);
@@ -136,7 +140,7 @@ export async function createTranscriber(
 
     const maxTokens = Math.min(
       cfg.maxPositions,
-      Math.ceil((audio.length / SAMPLE_RATE) * TOKENS_PER_SECOND),
+      Math.ceil((audio.length / SAMPLE_RATE) * tokensPerSecond),
     );
     // Hand the pinned cross K/V back to the pool.
     const release = (kvs: readonly { k: Value; v: Value }[]) => {
@@ -210,11 +214,14 @@ export async function createTranscriber(
     sampleRate: SAMPLE_RATE,
   };
 
-  const transcribeAll = async (audio: Float32Array): Promise<TranscribeResult> => {
+  const transcribeAll = async (
+    audio: Float32Array,
+    tokensPerSecond: number,
+  ): Promise<TranscribeResult> => {
     const chunks = splitIntoChunks(audio, chunkOpts);
-    if (chunks.length === 1) return transcribeUtterance(audio);
+    if (chunks.length === 1) return transcribeUtterance(audio, tokensPerSecond);
     const results: TranscribeResult[] = [];
-    for (const chunk of chunks) results.push(await transcribeUtterance(chunk));
+    for (const chunk of chunks) results.push(await transcribeUtterance(chunk, tokensPerSecond));
     return {
       ids: results.flatMap((r) => r.ids),
       text: results
@@ -244,10 +251,13 @@ export async function createTranscriber(
   // calls run one at a time: each waits for the previous one to settle.
   let inFlight: Promise<unknown> = Promise.resolve();
   let disposed = false;
-  const transcribe = (audio: Float32Array): Promise<TranscribeResult> => {
+  const transcribe = (
+    audio: Float32Array,
+    tokensPerSecond = TOKENS_PER_SECOND,
+  ): Promise<TranscribeResult> => {
     if (disposed)
       return Promise.reject(new RunntimeError('RESOURCE_DISPOSED', 'transcriber is disposed'));
-    const job = inFlight.then(() => transcribeAll(audio));
+    const job = inFlight.then(() => transcribeAll(audio, tokensPerSecond));
     inFlight = job.catch(() => undefined);
     return job;
   };
