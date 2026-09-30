@@ -16,7 +16,7 @@ import { createMinilmTokenizer, minilmTokenizerAsset } from '../../minilm/tokeni
 import { models } from '../../models.ts';
 
 /** What to load. Every field is optional; a missing one comes from
- *  models.textEmbedding.ALL_MINILM_L6_V2.default. */
+ *  models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT. */
 export interface TextEmbedderModel {
   /** The safetensors checkpoint. */
   readonly modelPath?: ModelPath;

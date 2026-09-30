@@ -15,7 +15,7 @@ with the entity type.
 
 ## Quick start
 
-```ts
+```ts twoslash
 import { createPrivacyFilter, models } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
@@ -104,7 +104,9 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
+import { createPrivacyFilter } from 'runntime/zoo';
+// ---cut---
 // Your own copy of the file.
 await createPrivacyFilter({ modelPath: '/models/privacy-filter/model.safetensors' });
 ```
@@ -129,7 +131,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createOpfsCache, createPrivacyFilter, models } from 'runntime/zoo';
 
 const filter = await createPrivacyFilter(models.privacyFilter.PRIVACY_FILTER.DEFAULT, {

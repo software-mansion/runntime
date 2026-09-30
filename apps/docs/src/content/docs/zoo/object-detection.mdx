@@ -14,14 +14,16 @@ sits in the image.
 
 ## Quick start
 
-```ts
+```ts twoslash
+declare const canvas: HTMLCanvasElement;
+// ---cut---
 import { createObjectDetector, imageBufferFromImageData, models } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
 const detector = await createObjectDetector(models.objectDetection.YOLO26.DEFAULT);
 
 // 2. Get the pixels of an image, here from a canvas the picture is drawn on.
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d')!;
 const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
 
 // 3. Find the objects.
@@ -125,7 +127,7 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
 import { createObjectDetector, models } from 'runntime/zoo';
 
 // The medium size.
@@ -166,7 +168,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createObjectDetector, createOpfsCache, models } from 'runntime/zoo';
 
 const detector = await createObjectDetector(models.objectDetection.YOLO26.DEFAULT, {

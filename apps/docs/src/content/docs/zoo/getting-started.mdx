@@ -84,7 +84,7 @@ yarn add runntime
 
 Once per page, before you create any model:
 
-```ts
+```ts twoslash
 import { initRunntime } from 'runntime/zoo';
 import tgpu from 'typegpu';
 
@@ -128,7 +128,7 @@ its generality in speed. One `initRunntimeBackend()` call replaces that backend
 with ruNNtime. It only changes anything for the models ruNNtime supports,
 everything else keeps loading on ONNX Runtime.
 
-```ts
+```ts twoslash
 import { initRunntimeBackend } from 'runntime/zoo/transformers';
 import { pipeline } from '@huggingface/transformers';
 
