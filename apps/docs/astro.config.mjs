@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import react from '@astrojs/react';
 import starlightSidebarTopics from 'starlight-sidebar-topics';
+import { createStarlightTypeDocPlugin } from 'starlight-typedoc';
 import typegpuPlugin from 'unplugin-typegpu/vite';
 import fs from 'node:fs';
 import { ExpressiveCodeTheme } from '@astrojs/starlight/expressive-code';
@@ -13,6 +14,22 @@ const monoDark = ExpressiveCodeTheme.fromJSONString(
 const monoLight = ExpressiveCodeTheme.fromJSONString(
   fs.readFileSync(new URL('./src/styles/code-theme-light.jsonc', import.meta.url), 'utf-8'),
 );
+
+// One TypeDoc run per published entry point, so each gets its own
+// sidebar group and output folder under src/content/docs/api.
+const [zooTypeDoc, zooTypeDocGroup] = createStarlightTypeDocPlugin();
+const [transformersTypeDoc, transformersTypeDocGroup] = createStarlightTypeDocPlugin();
+
+/** TypeDoc options shared by both runs. */
+const typeDocOptions = {
+  tsconfig: '../../packages/runntime/tsconfig.json',
+  typeDoc: {
+    // Members tagged @internal in their doc comment stay out of the reference.
+    excludeInternal: true,
+    readme: 'none',
+    entryFileName: 'index',
+  },
+};
 
 const base = `${(process.env.BASE_PATH ?? '/runntime').replace(/\/$/, '')}/`;
 
@@ -112,6 +129,7 @@ export default defineConfig({
         starlightSidebarTopics(
           [
             {
+              id: 'zoo',
               label: 'Zoo',
               link: '/zoo/getting-started/',
               // Any Starlight icon works here: components.css hides it and
@@ -146,14 +164,35 @@ export default defineConfig({
                   ],
                 },
                 { label: 'Benchmarks', slug: 'zoo/benchmarks' },
+                {
+                  label: 'API reference',
+                  collapsed: true,
+                  items: [zooTypeDocGroup, transformersTypeDocGroup],
+                },
               ],
             },
           ],
           {
             // The splash landing page belongs to no topic.
             exclude: ['/'],
+            // The generated index pages sit outside the sidebar groups.
+            topics: { zoo: ['/api/**'] },
           },
         ),
+        // Run after the topics: they fill the placeholder groups under
+        // Zoo > API reference.
+        zooTypeDoc({
+          ...typeDocOptions,
+          entryPoints: ['../../packages/runntime/src/zoo/index.ts'],
+          output: 'api/zoo',
+          sidebar: { label: 'runntime/zoo', collapsed: true },
+        }),
+        transformersTypeDoc({
+          ...typeDocOptions,
+          entryPoints: ['../../packages/runntime/src/zoo/transformers/index.ts'],
+          output: 'api/transformers',
+          sidebar: { label: 'runntime/zoo/transformers', collapsed: true },
+        }),
       ],
     }),
     react(),

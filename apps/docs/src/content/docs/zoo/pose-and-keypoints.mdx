@@ -15,14 +15,16 @@ the GPU.
 
 ## Quick start
 
-```ts
+```ts twoslash
+declare const canvas: HTMLCanvasElement;
+// ---cut---
 import { createKeypointDetector, imageBufferFromImageData, models } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
 const detector = await createKeypointDetector(models.keypointDetection.YOLO26_POSE.DEFAULT);
 
 // 2. Get the pixels of an image, here from a canvas the picture is drawn on.
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d')!;
 const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
 
 // 3. Find the people.
@@ -82,7 +84,12 @@ Skip landmarks below about 0.5 when drawing.
 
 `detector.skeleton` lists which landmarks connect, as pairs of names:
 
-```ts
+```ts twoslash
+import type { KeypointDetection, KeypointDetector } from 'runntime/zoo';
+declare const detector: KeypointDetector;
+declare const people: KeypointDetection[];
+declare const ctx: CanvasRenderingContext2D;
+// ---cut---
 for (const person of people) {
   for (const [a, b] of detector.skeleton) {
     const from = person.landmarks[a];
@@ -173,7 +180,7 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
 import { createKeypointDetector, models } from 'runntime/zoo';
 
 // The medium size.
@@ -214,7 +221,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createKeypointDetector, createOpfsCache, models } from 'runntime/zoo';
 
 const detector = await createKeypointDetector(models.keypointDetection.YOLO26_POSE.DEFAULT, {
