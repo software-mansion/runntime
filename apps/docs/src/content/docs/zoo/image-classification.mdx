@@ -19,14 +19,16 @@ food, tools and household objects.
 
 ## Quick start
 
-```ts
+```ts twoslash
+declare const canvas: HTMLCanvasElement;
+// ---cut---
 import { createImageClassifier, imageBufferFromImageData, models } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
 const classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT);
 
 // 2. Get the pixels of an image, here from a canvas the picture is drawn on.
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d')!;
 const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
 
 // 3. Classify it.
@@ -129,7 +131,10 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
+import { createImageClassifier } from 'runntime/zoo';
+declare const myLabels: string[];
+// ---cut---
 // Weights hosted by you, class names in another language, no cropping.
 await createImageClassifier({
   modelPath: '/models/mobilenetv4/model.safetensors',
@@ -164,7 +169,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createImageClassifier, createOpfsCache, models } from 'runntime/zoo';
 
 const classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT, {

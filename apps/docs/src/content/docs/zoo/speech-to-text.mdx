@@ -14,7 +14,9 @@ the classic or the streaming family.
 
 ## Quick start
 
-```ts
+```ts twoslash
+declare const audio: Float32Array;
+// ---cut---
 import { createSpeechToText, models } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
@@ -45,7 +47,15 @@ with `streamStop`. The samples come from a microphone recorder of your
 choice, such as an `AudioWorklet` on an `AudioContext` opened at
 `SPEECH_SAMPLE_RATE`.
 
-```ts
+```ts twoslash
+// @filename: recorder.ts
+export declare const recorder: {
+  start(sampleRate: number, onSamples: (samples: Float32Array) => void): void;
+  stop(): void;
+};
+// @filename: index.ts
+declare function render(committed: string, nonCommitted: string): void;
+// ---cut---
 import { createSpeechToText, models, SPEECH_SAMPLE_RATE } from 'runntime/zoo';
 import { recorder } from './recorder'; // Your microphone capture.
 
@@ -114,14 +124,18 @@ interface SpeechStreamUpdate {
 The model takes a `Float32Array` of mono samples at 16 kHz. Two helpers
 turn what you have into that:
 
-```ts
+```ts twoslash
+declare const file: File;
+declare const micSamples: Float32Array;
+declare const audioContext: AudioContext;
+// ---cut---
 import { decodeAudio, resampleAudio } from 'runntime/zoo';
 
 // A file or a fetch response: wav, mp3, ogg, anything the browser plays.
 const audio = await decodeAudio(await file.arrayBuffer());
 
 // Raw microphone samples recorded at another rate.
-const audio = await resampleAudio(micSamples, audioContext.sampleRate);
+const micAudio = await resampleAudio(micSamples, audioContext.sampleRate);
 ```
 
 ```ts
@@ -158,7 +172,7 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
 import { createSpeechToText, models } from 'runntime/zoo';
 
 // The base size: more accurate, slower.
@@ -202,7 +216,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createOpfsCache, createSpeechToText, models } from 'runntime/zoo';
 
 const stt = await createSpeechToText(models.speechToText.MOONSHINE.TINY.DEFAULT, {

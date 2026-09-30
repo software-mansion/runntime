@@ -16,8 +16,8 @@ const DEPTHART_WEIGHTS_URLS: Record<string, string> = {
 export const DEPTHART_MODEL_IDS = Object.keys(DEPTHART_WEIGHTS_URLS);
 
 /** `weightsUrl`: a safetensors export of a Fengxue93/DepthART relative
- *  checkpoint (tools/export_weights_depthart.py); defaults to the hosted
- *  export for the hub id. The variant is read from the file. */
+ *  checkpoint. Defaults to the hosted export for the hub id. The variant is
+ *  read from the file. */
 export function depthartLoader(
   weightsUrl?: string,
   opts: {

@@ -55,8 +55,8 @@ export interface FusedReadback {
 
 export type RunntimeExecutor = Executor & Readback & Releaser & CaptureExecutor & FusedReadback;
 
-/** Sets the default device and returns its executor. Call it once at startup;
- *  tensor(), toArray() and loadStateDict() then need no root. */
+/** Sets the device every model runs on and returns its executor. Call it
+ *  once at startup, before the first create<Task>(). */
 export function initRunntime(root: TgpuRoot): RunntimeExecutor {
   setDefaultRoot(root);
   let ex = executorPerRoot.get(root) as RunntimeExecutor | undefined;

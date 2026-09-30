@@ -15,7 +15,9 @@ code stays the same.
 
 <Tabs syncKey="engine">
 <TabItem label="ruNNtime">
-```ts
+```ts twoslash
+declare const texts: string[];
+// ---cut---
 import { initRunntimeBackend } from 'runntime/zoo/transformers';
 import { pipeline } from '@huggingface/transformers';
 
@@ -27,7 +29,9 @@ const out = await pipe(texts, { pooling: 'mean', normalize: true });
 ````
 </TabItem>
 <TabItem label="stock ONNX">
-```ts
+```ts twoslash
+declare const texts: string[];
+// ---cut---
 import { pipeline } from '@huggingface/transformers';
 
 const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
@@ -43,14 +47,14 @@ and `normalize` keep working exactly as before.
 
 ## Supported models
 
-| pipeline task                  | model id                                                                          | runs as                                |
-| ------------------------------ | --------------------------------------------------------------------------------- | -------------------------------------- |
-| `feature-extraction`           | `Xenova/all-MiniLM-L6-v2`, `sentence-transformers/all-MiniLM-L6-v2`               | MiniLM-L6 sentence embedder            |
-| `token-classification`         | `openai/privacy-filter`                                                           | privacy filter, personal data spans    |
-| `automatic-speech-recognition` | `onnx-community/moonshine-tiny-ONNX`, `onnx-community/moonshine-base-ONNX`        | Moonshine speech to text               |
-| `object-detection`             | `onnx-community/yolo26n-ONNX`, `onnx-community/yolo26s-ONNX`, `onnx-community/yolo26m-ONNX` | YOLO26 detector              |
-| `depth-estimation`             | `onnx-community/depth-anything-v2-small`, `onnx-community/depth-anything-v2-base` | DepthART relative depth, s and b       |
-| `image-classification`         | `onnx-community/mobilenetv4_conv_small.e2400_r224_in1k`                           | MobileNetV4-Conv-S ImageNet classifier |
+| pipeline task                  | model id                                                                                    | runs as                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `feature-extraction`           | `Xenova/all-MiniLM-L6-v2`, `sentence-transformers/all-MiniLM-L6-v2`                         | MiniLM-L6 sentence embedder            |
+| `token-classification`         | `openai/privacy-filter`                                                                     | privacy filter, personal data spans    |
+| `automatic-speech-recognition` | `onnx-community/moonshine-tiny-ONNX`, `onnx-community/moonshine-base-ONNX`                  | Moonshine speech to text               |
+| `object-detection`             | `onnx-community/yolo26n-ONNX`, `onnx-community/yolo26s-ONNX`, `onnx-community/yolo26m-ONNX` | YOLO26 detector                        |
+| `depth-estimation`             | `onnx-community/depth-anything-v2-small`, `onnx-community/depth-anything-v2-base`           | DepthART relative depth, s and b       |
+| `image-classification`         | `onnx-community/mobilenetv4_conv_small.e2400_r224_in1k`                                     | MobileNetV4-Conv-S ImageNet classifier |
 
 Every id works with `initRunntimeBackend()` alone: the weights come from the
 [software-mansion](https://huggingface.co/software-mansion) `runntime-*`
@@ -68,7 +72,9 @@ could not be fetched) throws with the cause attached.
 To load everything else with ONNX Runtime instead, pass
 `fallbackToOnnx: true`:
 
-```ts
+```ts twoslash
+import { initRunntimeBackend } from 'runntime/zoo/transformers';
+// ---cut---
 await initRunntimeBackend({ fallbackToOnnx: true });
 ```
 
@@ -78,7 +84,10 @@ supported model whose ruNNtime load fails also falls back, and that case is
 reported with `console.warn`. To check which engine a model actually runs
 on, use `isRunntimeModel`:
 
-```ts
+```ts twoslash
+import { pipeline } from '@huggingface/transformers';
+const pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+// ---cut---
 import { isRunntimeModel } from 'runntime/zoo/transformers';
 
 isRunntimeModel(pipe.model); // true when it runs on ruNNtime
@@ -111,7 +120,9 @@ Pass `models` when you use your own checkpoint of a supported architecture:
 a fine-tuned MiniLM, or a YOLO26 size that is not hosted. Each built-in
 loader takes the URL of your safetensors file:
 
-```ts
+```ts twoslash
+import { pipeline } from '@huggingface/transformers';
+// ---cut---
 import { initRunntimeBackend, minilmLoader, yolo26Loader } from 'runntime/zoo/transformers';
 
 await initRunntimeBackend({
@@ -141,7 +152,7 @@ Most apps never call this, `initRunntimeBackend()` does it for them. Use it only
 when your app already runs ruNNtime on its own GPU device, so the plugin shares
 that device instead of creating a second one:
 
-```ts
+```ts twoslash
 import { initRunntime } from 'runntime/zoo';
 import { registerRunntimeBackend } from 'runntime/zoo/transformers';
 import tgpu from 'typegpu';
