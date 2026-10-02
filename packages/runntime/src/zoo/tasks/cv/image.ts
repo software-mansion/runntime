@@ -1,5 +1,7 @@
 /** Raw CPU image types shared by every vision task. */
 
+import { RunntimeError } from '../../../core/index.ts';
+
 /** Pixel formats an ImageBuffer can carry: which channels, in what order. */
 export type ImageFormat = 'rgb' | 'rgba' | 'bgr' | 'bgra' | 'gray';
 
@@ -31,7 +33,10 @@ export type ResizeMode = 'stretch' | 'letterbox' | 'crop';
 /** Throws unless `width` and `height` are positive integers. */
 export function checkImageSize(width: number, height: number, what = 'image'): void {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
-    throw new Error(`${what}: ${width}x${height} is not a positive size`);
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `${what}: ${width}x${height} is not a positive size`,
+    );
   }
 }
 
@@ -45,7 +50,8 @@ export function imageBuffer(
   checkImageSize(width, height);
   const expected = width * height * FORMAT_CHANNELS[format];
   if (data.length !== expected) {
-    throw new Error(
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
       `image: ${data.length} bytes for ${width}x${height} ${format}, expected ${expected}`,
     );
   }

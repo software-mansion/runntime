@@ -106,6 +106,12 @@ export {
 export type { GpuOpTime, GpuPerfSink, GpuSubmitTiming } from './gpu/perf.ts';
 export { defaultRoot, resetRunntime, supportsF16 } from './gpu/context.ts';
 export { inGpuErrorScopes, warmUp } from './gpu/errorScopes.ts';
+export {
+  RUNNTIME_ERROR_CODES,
+  RunntimeError,
+  isRunntimeError,
+  type RunntimeErrorCode,
+} from './error.ts';
 export { createResourceScope, type Disposable, type ResourceScope } from './lifetime.ts';
 export { BufferPool } from './gpu/bufferPool.ts';
 export { packQuantColSlice } from './weights/quantPack.ts';

@@ -6,6 +6,7 @@
  *  max_position_embeddings disagrees with the checkpoints. */
 
 import type { LazyStateDict } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 
 export interface MoonshineConfig {
   readonly dModel: number;
@@ -56,10 +57,11 @@ export function presetFromStateDict(sd: LazyStateDict): MoonshineConfig {
   const embedding = sd.tensors.get('model.decoder.embed_tokens.weight');
   const width = embedding?.shape[1];
   for (const cfg of [MOONSHINE_TINY, MOONSHINE_BASE]) if (cfg.dModel === width) return cfg;
-  throw new Error(
+  throw checkpointMismatch(
+    'moonshine weights',
     embedding === undefined
-      ? 'moonshine weights: no token embedding, not a Moonshine checkpoint'
-      : `moonshine weights: embedding width ${width} matches no known size`,
+      ? 'no token embedding, not a Moonshine checkpoint'
+      : `embedding width ${width} matches no known size`,
   );
 }
 
@@ -67,7 +69,8 @@ type Json = Record<string, unknown>;
 
 function num(json: Json, key: string): number {
   const v = json[key];
-  if (typeof v !== 'number') throw new Error(`moonshine config: '${key}' missing or not a number`);
+  if (typeof v !== 'number')
+    throw checkpointMismatch('moonshine config', `'${key}' missing or not a number`);
   return v;
 }
 
@@ -79,38 +82,49 @@ export function configFromCheckpoint(json: Json): MoonshineConfig {
     (json.partial_rotary_factor as number | undefined) ??
     (ropeParams.partial_rotary_factor as number | undefined);
   if (typeof ropeTheta !== 'number' || typeof partialRotary !== 'number') {
-    throw new Error(
-      'moonshine config: rope_theta/partial_rotary_factor missing (checked top-level and rope_parameters)',
+    throw checkpointMismatch(
+      'moonshine config',
+      'rope_theta/partial_rotary_factor missing (checked top-level and rope_parameters)',
     );
   }
 
   const dModel = num(json, 'hidden_size');
   const heads = num(json, 'encoder_num_attention_heads');
   if (num(json, 'decoder_num_attention_heads') !== heads) {
-    throw new Error('moonshine config: encoder/decoder attention heads differ');
+    throw checkpointMismatch('moonshine config', 'encoder/decoder attention heads differ');
   }
   for (const key of ['encoder_num_key_value_heads', 'decoder_num_key_value_heads']) {
     if (json[key] !== undefined && json[key] !== heads) {
-      throw new Error(`moonshine config: '${key}' != attention heads — model assumes MHA`);
+      throw checkpointMismatch(
+        'moonshine config',
+        `'${key}' != attention heads — model assumes MHA`,
+      );
     }
   }
   if (json.attention_bias !== false) {
-    throw new Error('moonshine config: attention_bias must be false — loader folds no biases');
+    throw checkpointMismatch(
+      'moonshine config',
+      'attention_bias must be false — loader folds no biases',
+    );
   }
   if (dModel % heads !== 0) {
-    throw new Error(`moonshine config: hidden_size ${dModel} not divisible by ${heads} heads`);
+    throw checkpointMismatch(
+      'moonshine config',
+      `hidden_size ${dModel} not divisible by ${heads} heads`,
+    );
   }
   const headDim = dModel / heads;
   const rotaryDim = Math.floor(headDim * partialRotary); // HF: int(head_dim · factor)
   if (rotaryDim <= 0 || rotaryDim % 2 !== 0 || rotaryDim > headDim) {
-    throw new Error(
-      `moonshine config: derived rotaryDim ${rotaryDim} invalid for headDim ${headDim}`,
+    throw checkpointMismatch(
+      'moonshine config',
+      `derived rotaryDim ${rotaryDim} invalid for headDim ${headDim}`,
     );
   }
 
   const bos = num(json, 'bos_token_id');
   if (json.decoder_start_token_id !== undefined && json.decoder_start_token_id !== bos) {
-    throw new Error('moonshine config: decoder_start_token_id != bos_token_id');
+    throw checkpointMismatch('moonshine config', 'decoder_start_token_id != bos_token_id');
   }
 
   return Object.freeze({
@@ -132,8 +146,9 @@ export function configFromCheckpoint(json: Json): MoonshineConfig {
 export function assertConfigMatches(parsed: MoonshineConfig, preset: MoonshineConfig): void {
   for (const key of Object.keys(preset) as (keyof MoonshineConfig)[]) {
     if (parsed[key] !== preset[key]) {
-      throw new Error(
-        `moonshine config: checkpoint ${key}=${parsed[key]} != preset ${preset[key]}`,
+      throw checkpointMismatch(
+        'moonshine config',
+        `checkpoint ${key}=${parsed[key]} != preset ${preset[key]}`,
       );
     }
   }

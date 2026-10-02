@@ -1,4 +1,4 @@
-import { inGpuErrorScopes, toArray } from '../../core/index.ts';
+import { inGpuErrorScopes, RunntimeError, toArray } from '../../core/index.ts';
 import type { LabelInfo } from './config.ts';
 import type { EagerModel } from './model.ts';
 import { detectedSpansFromLabels, type DetectedSpan } from './spans.ts';
@@ -40,10 +40,16 @@ export function assembleDetect(deps: {
     // reported error (e.g. robust-access clamping). Real logits are never
     // all-zero (33 biased classes) and never non-finite.
     if (!logits.every(Number.isFinite)) {
-      throw new Error('GPU returned non-finite logits — inference failed on this device');
+      throw new RunntimeError(
+        'EXECUTION_FAILED',
+        'GPU returned non-finite logits — inference failed on this device',
+      );
     }
     if (logits.every((v) => v === 0)) {
-      throw new Error('GPU returned all-zero logits — inference failed on this device');
+      throw new RunntimeError(
+        'EXECUTION_FAILED',
+        'GPU returned all-zero logits — inference failed on this device',
+      );
     }
     const t2 = performance.now();
     const logProbs = logSoftmaxRows(logits, 33);

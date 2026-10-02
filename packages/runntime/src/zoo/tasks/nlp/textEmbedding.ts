@@ -1,7 +1,13 @@
 /** Text embedding task: text in, one unit-length vector out. Runs
  *  all-MiniLM-L6-v2 on the initRunntime() device. */
 
-import { createResourceScope, defaultRoot, supportsF16, warmUp } from '../../../core/index.ts';
+import {
+  createResourceScope,
+  defaultRoot,
+  RunntimeError,
+  supportsF16,
+  warmUp,
+} from '../../../core/index.ts';
 import {
   fetchJson,
   openWeights,
@@ -9,6 +15,7 @@ import {
   type LoadOptions,
   type ModelPath,
 } from '../../load.ts';
+import { asLoadError, rethrowRunError } from '../../errors.ts';
 import { EMBEDDING_DIM, MINILM_L6 } from '../../minilm/config.ts';
 import { createMinilmEmbedCore } from '../../minilm/embedCore.ts';
 import { MinilmModel } from '../../minilm/model.ts';
@@ -99,7 +106,7 @@ export async function createTextEmbedder(
 
     let disposed = false;
     const guard = () => {
-      if (disposed) throw new Error('text embedder is disposed');
+      if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'text embedder is disposed');
     };
 
     const embedTokens = async (ids: readonly number[]): Promise<Float32Array> =>
@@ -132,11 +139,20 @@ export async function createTextEmbedder(
       dim: EMBEDDING_DIM,
       async embed(input) {
         guard();
-        return embedTokens(tokenizer.encode(input));
+        if (typeof input !== 'string') {
+          throw new RunntimeError('INVALID_ARGUMENT', 'embed: input must be a string');
+        }
+        return embedTokens(tokenizer.encode(input)).catch(rethrowRunError);
       },
       async embedBatch(inputs) {
         guard();
-        return embedTokensBatch(inputs.map((t) => tokenizer.encode(t)));
+        if (!Array.isArray(inputs) || !inputs.every((t) => typeof t === 'string')) {
+          throw new RunntimeError(
+            'INVALID_ARGUMENT',
+            'embedBatch: inputs must be an array of strings',
+          );
+        }
+        return embedTokensBatch(inputs.map((t) => tokenizer.encode(t))).catch(rethrowRunError);
       },
       dispose() {
         disposed = true;
@@ -145,6 +161,6 @@ export async function createTextEmbedder(
     };
   } catch (err) {
     scope.dispose();
-    throw err;
+    throw asLoadError(err, opts.signal);
   }
 }

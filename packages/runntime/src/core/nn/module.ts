@@ -2,6 +2,7 @@
  *  assigning a Parameter, Buffer or Module field registers it. */
 
 import type { TgpuRoot } from 'typegpu';
+import { RunntimeError } from '../error.ts';
 import type { Executor, Readback } from '../graph/evalCore.ts';
 import { maybeDefaultRoot, supportsF16 } from '../gpu/context.ts';
 import { toArray } from '../gpu/eval.ts';
@@ -199,7 +200,8 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
     // first real dispatch fail there instead.
     const checkRoot = root ?? maybeDefaultRoot();
     if (checkRoot && !supportsF16(checkRoot)) {
-      throw new Error(
+      throw new RunntimeError(
+        'UNSUPPORTED_DEVICE',
         "half(): this device has no shader-f16 — check supportsF16() first, and request it with tgpu.init({ device: { optionalFeatures: ['shader-f16'] } })",
       );
     }

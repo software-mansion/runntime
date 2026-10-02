@@ -1,6 +1,7 @@
-/** Default-device state behind initRunntime(). Import-free, so buffers.ts can
- *  resolve the default root without a cycle through the executor. */
+/** The default device set by initRunntime(). No engine imports, so
+ *  buffers.ts can use it without an import cycle. */
 import type { TgpuRoot } from 'typegpu';
+import { RunntimeError } from '../error.ts';
 
 let currentRoot: TgpuRoot | undefined;
 
@@ -16,7 +17,10 @@ export function supportsF16(root: TgpuRoot = defaultRoot()): boolean {
 
 export function defaultRoot(): TgpuRoot {
   if (!currentRoot) {
-    throw new Error('no default device — call initRunntime(root) first, or pass root explicitly');
+    throw new RunntimeError(
+      'NOT_INITIALIZED',
+      'no default device — call initRunntime(root) first, or pass root explicitly',
+    );
   }
   return currentRoot;
 }

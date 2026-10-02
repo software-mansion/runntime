@@ -5,6 +5,7 @@
  *  loader failures throw; fallbackToOnnx warns and uses ONNX instead. */
 
 import { AutoConfig, PreTrainedModel, type PretrainedConfig } from '@huggingface/transformers';
+import { isRunntimeError, RunntimeError } from '../../core/index.ts';
 import { MINILM_MODEL_IDS, minilmLoader } from './minilm/loader.ts';
 import { PRIVACY_FILTER_MODEL_IDS, privacyFilterLoader } from './privacy-filter/loader.ts';
 import { MOONSHINE_MODEL_IDS, moonshineLoader } from './moonshine/loader.ts';
@@ -52,7 +53,9 @@ export function registerRunntimeBackend(opts: RegisterRunntimeBackendOpts = {}):
         return await loader.load(modelId, config);
       } catch (e) {
         if (!fallbackToOnnx) {
-          throw new Error(
+          // Keep the loader's code, like CHECKPOINT_MISMATCH.
+          throw new RunntimeError(
+            isRunntimeError(e) ? e.code : 'LOAD_FAILED',
             `runntime backend: loading '${modelId}' failed. ` +
               `Pass fallbackToOnnx: true to load it on ONNX instead.`,
             { cause: e },

@@ -11,13 +11,14 @@
  *  checkpoint size. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import type { MinilmConfig } from './config.ts';
 
 const qualify = (prefix: string, name: string): string => (prefix ? `${prefix}.${name}` : name);
 
 function take(sd: LazyStateDict, name: string): LazyTensor {
   const t = sd.tensors.get(name);
-  if (!t) throw new Error(`minilm state dict: missing tensor '${name}'`);
+  if (!t) throw checkpointMismatch('minilm state dict', `missing tensor '${name}'`);
   sd.tensors.delete(name);
   return t;
 }

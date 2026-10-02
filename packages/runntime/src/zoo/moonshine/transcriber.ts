@@ -14,6 +14,7 @@ import {
   defaultRoot,
   evalValues,
   gpuExecutor,
+  RunntimeError,
   slice,
   tensor,
   writeRows,
@@ -21,6 +22,7 @@ import {
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { presetFromStateDict, type MoonshineConfig } from './config.ts';
 import { splitIntoChunks, type ChunkOpts } from './chunking.ts';
 import { buildRopeTables } from './rope.ts';
@@ -77,8 +79,9 @@ export async function createTranscriber(
 ): Promise<Transcriber> {
   const root = defaultRoot();
   if (sd.metadata['model'] && sd.metadata['model'] !== 'moonshine') {
-    throw new Error(
-      `moonshine weights: file is for model '${sd.metadata['model']}', expected 'moonshine'`,
+    throw checkpointMismatch(
+      'moonshine weights',
+      `file is for model '${sd.metadata['model']}', expected 'moonshine'`,
     );
   }
   const cfg = opts.cfg ?? presetFromStateDict(sd);
@@ -242,7 +245,8 @@ export async function createTranscriber(
   let inFlight: Promise<unknown> = Promise.resolve();
   let disposed = false;
   const transcribe = (audio: Float32Array): Promise<TranscribeResult> => {
-    if (disposed) return Promise.reject(new Error('transcriber is disposed'));
+    if (disposed)
+      return Promise.reject(new RunntimeError('RESOURCE_DISPOSED', 'transcriber is disposed'));
     const job = inFlight.then(() => transcribeAll(audio));
     inFlight = job.catch(() => undefined);
     return job;

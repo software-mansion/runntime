@@ -4,6 +4,7 @@
 import { channelAffine, nn, pad2d, type ConvAct } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { requireTensor } from '../errors.ts';
 
 const { BatchNorm2d, Conv2d, Module, Parameter } = nn;
 
@@ -61,11 +62,7 @@ export class BatchNormC extends Module {
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const key = (n: string) => (prefix ? `${prefix}.${n}` : n);
-    const at = (n: string): LazyTensor => {
-      const t = sd.tensors.get(key(n));
-      if (!t) throw new Error(`BatchNormC at '${prefix}': missing '${n}' in the state dict`);
-      return t;
-    };
+    const at = (n: string): LazyTensor => requireTensor(sd, key(n), `BatchNormC at '${prefix}'`);
     const [g, b, m, v] = [at('weight'), at('bias'), at('running_mean'), at('running_var')];
     const c = this.channels;
     const eps = this.eps;
@@ -138,11 +135,7 @@ export class RepDW extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     // prefix is empty when this module is the root.
     const key = (name: string) => (prefix ? `${prefix}.${name}` : name);
-    const at = (name: string): LazyTensor => {
-      const t = sd.tensors.get(key(name));
-      if (!t) throw new Error(`RepDW at '${prefix}': missing '${name}' in the state dict`);
-      return t;
-    };
+    const at = (name: string): LazyTensor => requireTensor(sd, key(name), `RepDW at '${prefix}'`);
     const kw = at('conv.c.weight');
     const [innerG, innerB, innerM, innerV] = [
       at('conv.bn.weight'),

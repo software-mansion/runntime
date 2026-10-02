@@ -1,5 +1,5 @@
-/** runntime/zoo root: what a zoo user calls. Setup, load options and the
- *  input and result types every task shares. Each task runner
+/** runntime/zoo root: what a zoo user calls. Setup, load options, errors
+ *  and the input and result types every task shares. Each task runner
  *  (create<Task>) adds its export here. Building blocks under tasks/ stay
  *  internal; the package imports them by path. */
 
@@ -7,7 +7,11 @@ export {
   bufferSource,
   createOpfsCache,
   initRunntime,
+  isRunntimeError,
+  RUNNTIME_ERROR_CODES,
+  RunntimeError,
   type RangeSource,
+  type RunntimeErrorCode,
   type WeightCache,
 } from '../core/index.ts';
 

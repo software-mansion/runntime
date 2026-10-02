@@ -7,6 +7,8 @@
  *  moonshineTokenizerAsset, read from a Hub tokenizer.json or the compact
  *  file tools/export_moonshine_tokenizer.py writes. */
 
+import { checkpointMismatch } from '../errors.ts';
+
 export interface MoonshineTokenizer {
   version: number;
   bosId: number;
@@ -49,7 +51,7 @@ interface HfTokenizerJson {
 }
 
 export function moonshineTokenizerAsset(json: unknown): MoonshineTokenizer {
-  const bad = (why: string) => new Error(`moonshine tokenizer: ${why}`);
+  const bad = (why: string) => checkpointMismatch('moonshine tokenizer', why);
   if (typeof json !== 'object' || json === null) throw bad('not a JSON object');
 
   if ('vocab' in json && Array.isArray(json.vocab)) {
