@@ -1,0 +1,189 @@
+---
+title: Image classification
+description: Tell what an image shows.
+---
+
+import { Classify } from '../../../demos/Classify.tsx';
+
+Image classification assigns an image to one of a fixed set of classes.
+You pass in the pixels and get back the classes ranked by probability:
+what the image most likely shows, and how sure the model is of each
+answer. Unlike [object detection](/zoo/object-detection/), which locates
+several objects with bounding boxes, classification labels the image as a
+whole.
+
+`createImageClassifier` runs
+[MobileNetV4](https://huggingface.co/software-mansion/runntime-mobilenetv4)
+Conv-Small, trained on ImageNet-1k: 1000 classes of animals, vehicles,
+food, tools and household objects.
+
+## Quick start
+
+```ts
+import { createImageClassifier, imageBufferFromImageData, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT);
+
+// 2. Get the pixels of an image, here from a canvas the picture is drawn on.
+const ctx = canvas.getContext('2d');
+const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
+
+// 3. Classify it.
+const classes = await classifier.classify(image, { topk: 5 });
+
+// 4. Use the result: the five most likely classes, best first.
+for (const { label, confidence } of classes) {
+  console.log(label, confidence);
+}
+// minibus 0.59
+// police van, police wagon, paddy wagon, patrol wagon, wagon, black Maria 0.11
+// trolleybus, trolley coach, trackless trolley 0.07
+// ...
+
+// 5. Free the GPU memory when done.
+classifier.dispose();
+```
+
+The example reads one picture off a canvas. A video or a camera works the
+same way: draw each frame on the canvas and call `classify` again, the
+classifier is loaded once.
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+The model runs in half precision, so the device needs `shader-f16`.
+
+## Try it yourself
+
+Your camera, frame by frame through `classify()` on your GPU, with the five
+most likely classes under each frame. Point it at a cup, a keyboard, a dog.
+The dashed square is what the model sees: everything outside it is cropped
+away. No camera? The sample picture goes through the same call.
+
+<Classify client:only="react" />
+
+## Results
+
+`classify` returns the classes best first: the `topk` most likely ones, or
+all 1000 when `topk` is not given. Each entry is:
+
+```ts
+interface Classification {
+  label: string; // the class name: 'minibus', 'golden retriever', ...
+  classId: number; // the same as a number, index into classifier.labels
+  confidence: number; // how sure the model is, 0 to 1
+}
+```
+
+The confidences of all 1000 classes sum to 1. A low top score means the
+model is torn between a few similar classes: in the example above the next
+guesses are all vans and buses too.
+
+## Methods
+
+```ts
+function createImageClassifier(
+  model?: ImageClassifierModel,
+  options?: LoadOptions,
+): Promise<ImageClassifier>;
+
+interface ImageClassifier {
+  readonly labels: readonly string[];
+  readonly inputSize: number;
+  classify(
+    image: ImageBuffer,
+    options?: ClassifyOptions,
+  ): Promise<(Classification & { label: string })[]>;
+  dispose(): void;
+}
+
+interface ClassifyOptions {
+  readonly topk?: number; // default: every class
+}
+```
+
+- `classify(image, options?)` returns the most likely classes, best first.
+  `image` is an `ImageBuffer` of any size. Build one with
+  `imageBufferFromImageData(imageData)` from a canvas, or
+  `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
+  `bgra`, `bgr` or `gray` bytes.
+  `topk` caps how many come back.
+- `labels` are the class names, by class index.
+- `inputSize` is the model input width and height, 224.
+- `dispose()` frees the GPU memory.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. Every field is optional. `models.imageClassification` has the
+ready-made config, so the quick start passes it as is.
+
+```ts
+interface ImageClassifierModel {
+  readonly modelPath?: ModelPath;
+  readonly labels?: readonly string[]; // 1000 names, ImageNet by default
+  readonly resizeMode?: 'crop' | 'stretch' | 'letterbox'; // default 'crop'
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+// Weights hosted by you, class names in another language, no cropping.
+await createImageClassifier({
+  modelPath: '/models/mobilenetv4/model.safetensors',
+  labels: myLabels,
+  resizeMode: 'stretch',
+});
+```
+
+- **modelPath** - the weights, a `model.safetensors` file of MobileNetV4
+  with the 1000 ImageNet classes. Default: the file on the Hugging Face
+  Hub, so there is nothing to host. Point it at your own copy to serve the
+  weights yourself.
+- **labels** - the class names, one per class, 1000 of them. Default: the
+  ImageNet names in English.
+- **resizeMode** - how the image fits the model input. `crop` (default)
+  cuts the middle 87.5% of the centered square, the crop the model was
+  evaluated with; `stretch` distorts, `letterbox` pads.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createImageClassifier, createOpfsCache, models } from 'runntime/zoo';
+
+const classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights in the browser, so the next
+  visit loads them without the network. `createOpfsCache(name)` is the
+  built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                                              | Config                                   | Weights      | Classes     | Input   |
+| ---------------------------------------------------------------------------------- | ---------------------------------------- | ------------ | ----------- | ------- |
+| [MobileNetV4-Conv-S](https://huggingface.co/software-mansion/runntime-mobilenetv4) | `models.imageClassification.MOBILENETV4` | f16, 10.3 MB | ImageNet-1k | 224×224 |

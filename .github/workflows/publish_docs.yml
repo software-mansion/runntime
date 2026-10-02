@@ -1,5 +1,7 @@
 name: Publish to GitHub Pages
 
+# Two builds on every push to main: apps/docs/src/content/docs goes to
+# /runntime/next/, apps/docs/stable goes to the site root.
 on:
   push:
     branches:
@@ -9,25 +11,46 @@ on:
       - 'apps/docs/**'
       - 'packages/runntime/**'
   workflow_dispatch:
+# Runs push gh-pages one at a time.
+concurrency:
+  group: publish-docs
+  cancel-in-progress: false
 jobs:
   publish:
     if: github.repository == 'software-mansion/runntime'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      # Same for the two targets in one run.
+      max-parallel: 1
+      matrix:
+        target: [next, stable]
     steps:
       - name: Check out
         uses: actions/checkout@v6
+        with:
+          # The version label comes from the newest tag.
+          fetch-depth: 0
+
+      - name: Use the stable pages
+        if: matrix.target == 'stable'
+        run: rm -rf apps/docs/src/content/docs && cp -R apps/docs/stable apps/docs/src/content/docs
 
       - name: Generate docs
+        env:
+          BASE_PATH: ${{ matrix.target == 'stable' && '/runntime' || '/runntime/next' }}
         run: >-
-          git config --local user.email "action@github.com"
-          && git config --local user.name "GitHub Action"
+          export DOCS_VERSION="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo Latest)"
           && corepack enable
           && pnpm install --frozen-lockfile
           && pnpm --filter docs... run build
 
       - name: Publish generated content to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@releases/v3
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          FOLDER: apps/docs/dist
-          BRANCH: gh-pages
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          folder: apps/docs/dist
+          branch: gh-pages
+          # An empty target is the root. A root deploy leaves next/ alone.
+          target-folder: ${{ matrix.target == 'stable' && '' || 'next' }}
+          clean-exclude: next

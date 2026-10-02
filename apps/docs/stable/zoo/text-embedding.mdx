@@ -1,0 +1,168 @@
+---
+title: Text embedding
+description: Turn text into vectors for search and similarity.
+---
+
+import { SemanticSearch } from '../../../demos/SemanticSearch.tsx';
+
+Text embedding turns text into a vector of numbers that captures its
+meaning. Texts about the same thing get similar vectors, which makes the
+vectors useful for semantic search, text classification, clustering and
+finding duplicates.
+
+`createTextEmbedder` runs
+[all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+and returns vectors of 384 numbers.
+
+## Quick start
+
+```ts
+import { createTextEmbedder, models, similarity } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const embedder = await createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT);
+
+// 2. Turn text into vectors.
+const query = await embedder.embed('how do I reset my password');
+const answers = await embedder.embedBatch([
+  'Click "Forgot password" on the login page.',
+  'Our office is open from 9 to 5.',
+]);
+
+// 3. Compare them.
+similarity(query, answers[0]!); // 0.68, related
+similarity(query, answers[1]!); // 0.05, unrelated
+
+// 4. Free the GPU memory when done.
+embedder.dispose();
+```
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+
+## Try it yourself
+
+Ten support answers, embedded once with `embedBatch()`. Each search embeds
+the query with `embed()` and ranks the ten by `similarity()`, on your GPU.
+
+<SemanticSearch client:only="react" />
+
+## Methods
+
+```ts
+function createTextEmbedder(
+  model?: TextEmbedderModel,
+  options?: LoadOptions,
+): Promise<TextEmbedder>;
+
+interface TextEmbedder {
+  readonly dim: number;
+  embed(text: string): Promise<Float32Array>;
+  embedBatch(texts: readonly string[]): Promise<Float32Array[]>;
+  dispose(): void;
+}
+```
+
+- `embed(text)` turns one text into one vector of `dim` numbers.
+- `embedBatch(texts)` does many texts in one go. Much faster than calling
+  `embed()` in a loop. One vector per text, in the same order.
+- `dim` is the length of every vector, 384 for the default model.
+- `dispose()` frees the GPU memory.
+
+### Helpers
+
+```ts
+function similarity(a: Float32Array, b: Float32Array): number;
+```
+
+- `similarity(a, b)` is the cosine similarity of two vectors from the
+  embedder, a number from -1 to 1. 1 means the same meaning, near 0
+  unrelated.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models` holds ready-made ones: `DEFAULT`, the f16 weights (45 MB)
+run in f16 where the device has `shader-f16` and in f32 elsewhere; `F16`,
+the same file with f16 forced; `F32`, the f32 weights (91 MB) run in f32.
+Pass one as is, copy it with a field changed, or point at your own files.
+
+```ts
+interface TextEmbedderModel {
+  readonly modelPath?: ModelPath;
+  readonly tokenizerPath?: string;
+  readonly dtype?: 'f32' | 'f16';
+  readonly maxTokens?: number; // default 256
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+import { createTextEmbedder, models } from 'runntime/zoo';
+
+// Full precision: twice the download, results move by about 1e-3.
+await createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.F32);
+
+// The same model, shorter texts.
+await createTextEmbedder({ ...models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT, maxTokens: 128 });
+
+// Your own copy of the files.
+await createTextEmbedder({
+  modelPath: '/models/minilm/model.safetensors',
+  tokenizerPath: '/models/minilm/tokenizer.json',
+});
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. The original file
+  from the Hub works as is, in f16 or f32.
+- **tokenizerPath** - the `tokenizer.json` file next to it.
+- **dtype** - `'f16'` or `'f32'`. `f16` runs the model in half precision,
+  half the GPU memory, and needs a device with `shader-f16`. Default: `f16`
+  where the device has it, `f32` elsewhere. Either loads any weight file.
+- **maxTokens** - longest text in tokens, 256 by default. Longer text is
+  cut.
+
+Every field is optional. A missing one comes from
+`models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT`.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createOpfsCache, createTextEmbedder, models } from 'runntime/zoo';
+
+const embedder = await createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights and tokenizer in the browser, so
+  the next visit loads them without the network. `createOpfsCache(name)` is
+  the built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                                                 | Config                                  | Language | Max tokens | Embedding dimensions | Weights              |
+| ------------------------------------------------------------------------------------- | --------------------------------------- | -------- | ---------- | -------------------- | -------------------- |
+| [all-MiniLM-L6-v2](https://huggingface.co/software-mansion/runntime-all-MiniLM-L6-v2) | `models.textEmbedding.ALL_MINILM_L6_V2` | English  | 256        | 384                  | f16 45 MB, f32 91 MB |

@@ -1,0 +1,178 @@
+---
+title: Depth estimation
+description: How far each pixel of an image is.
+---
+
+import { Depth } from '../../../demos/Depth.tsx';
+
+Depth estimation tells how far away each part of an image is. You pass in
+the pixels and get back a depth map: one number per pixel, smaller for
+what is nearer to the camera. The numbers are relative, not meters: they order
+the scene from near to far within one image.
+
+`createDepthEstimator` runs
+[DepthART](https://huggingface.co/software-mansion/runntime-depthart) on the
+GPU.
+
+Through the [transformers.js plugin](/zoo/migrating-from-transformers-js/),
+DepthART runs under the Depth Anything V2 model ids,
+`onnx-community/depth-anything-v2-small` and `-base`. transformers.js has no
+DepthART, so a `depth-estimation` pipeline with one of those ids runs
+DepthART, not Depth Anything. The map comes back at 448×448 with smaller
+for nearer, the opposite of Depth Anything.
+
+## Quick start
+
+```ts
+import { createDepthEstimator, imageBufferFromImageData, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const estimator = await createDepthEstimator(models.depthEstimation.DEPTHART.DEFAULT);
+
+// 2. Get the pixels of an image, here from a canvas the picture is drawn on.
+const ctx = canvas.getContext('2d');
+const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
+
+// 3. Estimate the depth.
+const depth = await estimator.estimateDepth(image);
+
+// 4. Use it: one value per pixel of the 448×448 map, row by row, smaller = nearer.
+const { width, height, data } = depth;
+const center = data[(height / 2) * width + width / 2];
+
+// 5. Free the GPU memory when done.
+estimator.dispose();
+```
+
+The example reads one picture off a canvas. A video or a camera works the
+same way: draw each frame on the canvas and call `estimateDepth` again, the
+estimator is loaded once.
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+The model runs in half precision, so the device needs `shader-f16`.
+
+## Try it yourself
+
+Your camera, frame by frame through `estimateDepth()` on your GPU. The map
+is colored near to far, warm to cold, and stretched over the frame. No
+camera? The sample picture goes through the same call.
+
+<Depth client:only="react" />
+
+## Results
+
+`estimateDepth` returns one depth map:
+
+```ts
+interface DepthMap {
+  width: number; // 448
+  height: number; // 448
+  data: Float32Array; // width × height values, row by row, smaller = nearer
+}
+```
+
+The map covers the whole image, scaled to the model's 448×448 input, so
+the value for a pixel `(x, y)` of the image sits at
+`data[Math.floor(y * height / image.height) * width + Math.floor(x * width / image.width)]`.
+
+## Methods
+
+```ts
+function createDepthEstimator(
+  model?: DepthEstimatorModel,
+  options?: LoadOptions,
+): Promise<DepthEstimator>;
+
+interface DepthEstimator {
+  readonly inputSize: number;
+  estimateDepth(image: ImageBuffer): Promise<DepthMap>;
+  dispose(): void;
+}
+```
+
+- `estimateDepth(image)` returns one depth map for the image.
+  `image` is an `ImageBuffer` of any size. Build one with
+  `imageBufferFromImageData(imageData)` from a canvas, or
+  `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
+  `bgra`, `bgr` or `gray` bytes.
+- `inputSize` is the width and height of every returned map, 448.
+- `dispose()` frees the GPU memory.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models.depthEstimation.DEPTHART` holds ready-made ones: `S` (13 MB,
+the `DEFAULT`) and `B` (24 MB, more detail, slower). Pass one as is, copy it
+with a field changed, or point at your own safetensors export of a DepthART
+relative checkpoint.
+
+```ts
+interface DepthEstimatorModel {
+  readonly modelPath?: ModelPath;
+  readonly variant?: 'b' | 's';
+  readonly resizeMode?: 'stretch' | 'letterbox' | 'crop'; // default 'stretch'
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+import { createDepthEstimator, models } from 'runntime/zoo';
+
+// The base size.
+await createDepthEstimator(models.depthEstimation.DEPTHART.B);
+
+// Your own copy of the file.
+await createDepthEstimator({ modelPath: '/models/depthart-s/model.safetensors' });
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. Default:
+  `models.depthEstimation.DEPTHART.DEFAULT.modelPath`.
+- **variant** - the model size, `b` or `s`. Read from the weights by
+  default.
+- **resizeMode** - how the image fits the model input. `stretch` (default)
+  scales width and height separately, so the map covers the whole image.
+  `letterbox` pads, `crop` cuts the centered square.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createDepthEstimator, createOpfsCache, models } from 'runntime/zoo';
+
+const estimator = await createDepthEstimator(models.depthEstimation.DEPTHART.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights in the browser, so the next
+  visit loads them without the network. `createOpfsCache(name)` is the
+  built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                                   | Config                              | Weights      | Input   | Output                 |
+| ----------------------------------------------------------------------- | ----------------------------------- | ------------ | ------- | ---------------------- |
+| [DepthART](https://huggingface.co/software-mansion/runntime-depthart) s | `models.depthEstimation.DEPTHART.S` | f16, 12.6 MB | 448×448 | 448×448 relative depth |
+| [DepthART](https://huggingface.co/software-mansion/runntime-depthart) b | `models.depthEstimation.DEPTHART.B` | f16, 23.6 MB | 448×448 | 448×448 relative depth |

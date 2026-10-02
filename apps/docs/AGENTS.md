@@ -20,3 +20,20 @@ Consult these guides before working on related tasks:
 - [Adding or managing content](https://docs.astro.build/en/guides/content-collections/)
 - [Adding styles or using Tailwind](https://docs.astro.build/en/guides/styling/)
 - [Supporting multiple languages](https://docs.astro.build/en/guides/internationalization/)
+
+## Versions
+
+The site is published twice from one source. `src/content/docs` is the next
+version, live at `/runntime/next/`. `stable/` holds the pages of the released
+version, live at `/runntime/`. Both build on every push to main.
+
+- Fix the live docs: edit the page in `stable/`, and the same page in
+  `src/content/docs` when the fix applies there too.
+- Release: copy the next pages over the stable ones, from `apps/docs`.
+
+```
+rm -rf stable && cp -R src/content/docs stable
+```
+
+The sidebar in `astro.config.mjs` is shared. An entry whose page is missing
+from the build is dropped.

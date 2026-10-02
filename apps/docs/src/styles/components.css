@@ -136,6 +136,14 @@ header.header {
   color: var(--text-primary);
 }
 
+/* ── Version banner ─────────────────────────────────────────────────── */
+
+/* Starlight's bar, a bit larger. */
+.sl-banner {
+  font-size: var(--sl-text-base);
+  padding-block: 1rem;
+}
+
 /* ── Table of contents ──────────────────────────────────────────────── */
 
 starlight-toc nav {

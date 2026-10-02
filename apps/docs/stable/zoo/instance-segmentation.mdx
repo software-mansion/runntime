@@ -1,0 +1,232 @@
+---
+title: Instance segmentation
+description: Find objects in an image, each with a pixel mask.
+---
+
+import { Segment } from '../../../demos/Segment.tsx';
+
+Instance segmentation finds the objects in an image and which pixels belong
+to each one. You pass in the pixels and get back a list: what each object
+is, how sure the model is, where it sits, and a mask of its shape.
+
+`createInstanceSegmenter` runs
+[YOLO26 segment](https://docs.ultralytics.com/models/yolo26/) by Ultralytics
+on the GPU.
+
+## Quick start
+
+```ts
+import { createInstanceSegmenter, imageBufferFromImageData, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const segmenter = await createInstanceSegmenter(models.instanceSegmentation.YOLO26_SEG.DEFAULT);
+
+// 2. Get the pixels of an image, here from a canvas the picture is drawn on.
+const ctx = canvas.getContext('2d');
+const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
+
+// 3. Find the objects.
+const objects = await segmenter.segmentInstances(image);
+
+// 4. Use the results.
+for (const { label, confidence, box, mask } of objects) {
+  console.log(label, confidence, box, mask.width, mask.height);
+}
+// bus 0.92 { format: 'xyxy', xmin: 27, ymin: 229, xmax: 803, ymax: 726 } 115 74
+// person 0.89 { format: 'xyxy', xmin: 220, ymin: 406, xmax: 345, ymax: 857 } 19 67
+// ...
+
+// 5. Free the GPU memory when done.
+segmenter.dispose();
+```
+
+The example reads one picture off a canvas. A video or a camera works the
+same way: draw each frame on the canvas and call `segmentInstances` again,
+the segmenter is loaded once.
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+The model runs in half precision, so the device needs `shader-f16`.
+
+## Try it yourself
+
+Your camera, frame by frame through `segmentInstances()` on your GPU. Each
+mask is stretched over its object's `box` in one `drawImage` call. No camera?
+The sample picture goes through the same call.
+
+<Segment client:only="react" />
+
+## Results
+
+`segmentInstances` returns a list with one entry per object found, best
+first. Nothing found gives an empty list. Each entry is:
+
+```ts
+interface InstanceSegmentation {
+  label: string; // what it is: 'person', 'bus', ... one of the 80 COCO classes
+  classId: number; // the same as a number, index into segmenter.labels
+  confidence: number; // how sure the model is, 0 to 1
+  box: { format: 'xyxy'; xmin: number; ymin: number; xmax: number; ymax: number };
+  mask: ImageBuffer; // which pixels of the box are the object
+}
+
+interface ImageBuffer {
+  data: Uint8Array; // width × height bytes, row by row: 0 outside, 255 inside
+  width: number;
+  height: number;
+  format: 'gray';
+  layout: 'hwc';
+}
+```
+
+The mask is a small gray image, about a quarter of the model input's
+resolution, that covers the object's `box`: stretch it over the box when
+drawing. Values between 0 and 255 lie along the object's edge, so they
+blend cleanly.
+
+## Drawing a mask
+
+Turn the mask into an `ImageData`, then draw it scaled over `box`:
+
+```ts
+const layer = new OffscreenCanvas(1, 1);
+const layerCtx = layer.getContext('2d');
+
+for (const { box, mask } of objects) {
+  layer.width = mask.width;
+  layer.height = mask.height;
+  const pixels = layerCtx.createImageData(mask.width, mask.height);
+  for (let i = 0; i < mask.data.length; i++) {
+    pixels.data[i * 4] = 255; // red
+    pixels.data[i * 4 + 3] = mask.data[i] >> 1; // half transparent inside
+  }
+  layerCtx.putImageData(pixels, 0, 0);
+  const { xmin, ymin, xmax, ymax } = box;
+  ctx.drawImage(layer, xmin, ymin, xmax - xmin, ymax - ymin);
+}
+```
+
+## Methods
+
+```ts
+function createInstanceSegmenter(
+  model?: InstanceSegmenterModel,
+  options?: LoadOptions,
+): Promise<InstanceSegmenter>;
+
+interface InstanceSegmenter {
+  readonly labels: readonly string[];
+  segmentInstances(
+    image: ImageBuffer,
+    options?: SegmentInstancesOptions,
+  ): Promise<InstanceSegmentation[]>;
+  dispose(): void;
+}
+
+interface SegmentInstancesOptions {
+  readonly confidenceThreshold?: number; // default 0.3
+  readonly maxDetections?: number; // default 300
+}
+```
+
+- `segmentInstances(image, options?)` returns the objects in the image, best
+  first, each with its mask. `image` is an `ImageBuffer` of any size. Build one with
+  `imageBufferFromImageData(imageData)` from a canvas, or
+  `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
+  `bgra`, `bgr` or `gray` bytes.
+  `confidenceThreshold` drops
+  objects scored below it, `maxDetections` caps how many come back.
+- `labels` are the class names, by class index. COCO's 80 for a standard
+  checkpoint, `class 0`, `class 1`, ... for a custom one.
+- `dispose()` frees the GPU memory.
+
+YOLO26 picks one box per object on its own, so there is no IoU threshold.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models.instanceSegmentation.YOLO26_SEG` holds ready-made ones: `N`
+(5 MB, the `DEFAULT`), `S` (20 MB) and `M` (45 MB, more accurate, slower). Pass one as
+is, copy it with a field changed, or point at your own safetensors export
+of an Ultralytics YOLO26 segment checkpoint.
+
+```ts
+interface InstanceSegmenterModel {
+  readonly modelPath?: ModelPath;
+  readonly variant?: 'n' | 's' | 'm' | 'l' | 'x';
+  readonly inputSize?: number; // default 640
+  readonly resizeMode?: 'letterbox' | 'stretch' | 'crop'; // default 'letterbox'
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts
+import { createInstanceSegmenter, models } from 'runntime/zoo';
+
+// The medium size.
+await createInstanceSegmenter(models.instanceSegmentation.YOLO26_SEG.M);
+
+// Faster, for a camera loop.
+await createInstanceSegmenter({
+  ...models.instanceSegmentation.YOLO26_SEG.DEFAULT,
+  inputSize: 512,
+  resizeMode: 'crop',
+});
+
+// Your own copy of the file.
+await createInstanceSegmenter({ modelPath: '/models/yolo26n-seg/model.safetensors' });
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. Default:
+  `models.instanceSegmentation.YOLO26_SEG.DEFAULT.modelPath`.
+- **variant** - the model size, `n`, `s`, `m`, `l` or `x`. Read from the
+  weights by default.
+- **inputSize** - model input width and height, a multiple of 32. Default 640. Smaller is faster, misses more small objects, and gives coarser
+  masks.
+- **resizeMode** - how the image fits the model input. `letterbox`
+  (default) pads, `stretch` distorts, `crop` cuts the centered square.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts
+import { createInstanceSegmenter, createOpfsCache, models } from 'runntime/zoo';
+
+const segmenter = await createInstanceSegmenter(models.instanceSegmentation.YOLO26_SEG.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights in the browser, so the next
+  visit loads them without the network. `createOpfsCache(name)` is the
+  built-in one.
+- **onProgress** - called while the weights upload to the GPU, with bytes
+  done and bytes total. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to cancel a load in progress.
+
+## Supported models
+
+| Model                                                                           | Config                                     | Classes | Input             | Weights    |
+| ------------------------------------------------------------------------------- | ------------------------------------------ | ------- | ----------------- | ---------- |
+| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) n | `models.instanceSegmentation.YOLO26_SEG.N` | COCO-80 | 640×640 (default) | f16, 5 MB  |
+| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) s | `models.instanceSegmentation.YOLO26_SEG.S` | COCO-80 | 640×640 (default) | f16, 20 MB |
+| [YOLO26 segment](https://huggingface.co/software-mansion/runntime-yolo26-seg) m | `models.instanceSegmentation.YOLO26_SEG.M` | COCO-80 | 640×640 (default) | f16, 45 MB |
+
+Your own export of the other sizes, `s`, `l` and `x`, loads through
+`modelPath` too.

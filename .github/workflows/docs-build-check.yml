@@ -43,3 +43,9 @@ jobs:
         # The trailing dots build what docs depends on first: the library's
         # dist is not checked in, so docs has nothing to import without it.
         run: pnpm --filter docs... run build
+      - name: Generate the stable docs
+        # The stable pages use the same components, a rename can break them.
+        run: >-
+          rm -rf apps/docs/src/content/docs
+          && cp -R apps/docs/stable apps/docs/src/content/docs
+          && pnpm --filter docs run build
