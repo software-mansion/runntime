@@ -139,10 +139,19 @@ export async function createTextEmbedder(
       dim: EMBEDDING_DIM,
       async embed(input) {
         guard();
+        if (typeof input !== 'string') {
+          throw new RunntimeError('INVALID_ARGUMENT', 'embed: input must be a string');
+        }
         return embedTokens(tokenizer.encode(input)).catch(rethrowRunError);
       },
       async embedBatch(inputs) {
         guard();
+        if (!Array.isArray(inputs) || !inputs.every((t) => typeof t === 'string')) {
+          throw new RunntimeError(
+            'INVALID_ARGUMENT',
+            'embedBatch: inputs must be an array of strings',
+          );
+        }
         return embedTokensBatch(inputs.map((t) => tokenizer.encode(t))).catch(rethrowRunError);
       },
       dispose() {

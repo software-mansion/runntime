@@ -34,14 +34,15 @@ try {
   return await classifier.classify(image, { topk: 5 });
 } catch (err) {
   if (isRunntimeError(err, 'INVALID_ARGUMENT')) showBadImageMessage();
-  if (isRunntimeError(err, 'EXECUTION_FAILED')) {
-    // The device was lost. Load again and retry once.
-    classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT);
-    return await classifier.classify(image, { topk: 5 });
-  }
+  if (isRunntimeError(err, 'EXECUTION_FAILED')) showGpuErrorMessage();
   throw err;
 }
 ```
+
+`EXECUTION_FAILED` can mean the device was lost. A lost device takes every
+model on it, and loading again on the same device fails too. To recover,
+create a new device with `tgpu.init()`, pass it to `initRunntime()`, then
+load the models again.
 
 `isRunntimeError(err)` without a code tells a ruNNtime error from any other.
 `err.cause` holds the original error where there is one, like the failed
