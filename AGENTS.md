@@ -67,7 +67,11 @@ docs build.
 - Commits follow Conventional Commits (`feat`, `fix`, `perf`, `refactor`,
   `docs`, `chore`, scopes `core`, `zoo`, `docs`), header up to 120
   characters. CI runs the docs build on every pull request that touches
-  `apps/docs` or `packages/runntime`, and deploys the docs to Pages on push
-  to `main`. The npm publish is a manual workflow.
+  `apps/docs` or `packages/runntime`. The npm publish is a manual workflow.
+- The docs site is published from the `docs` branch, not from `main`. Work
+  lands on `main`; merging `main` into `docs` deploys it to Pages, usually
+  right after an npm release. A fix for the live site goes in a pull request
+  against `docs`, then `docs` is merged back into `main`. Both of these merges
+  use a merge commit, never squash, or the two branches drift apart.
 - Benchmark numbers on the docs pages come from measured runs. Never edit or
   derive one by hand.

@@ -13,6 +13,8 @@ on:
   pull_request:
     branches:
       - main
+      # Pull requests that publish the docs, or fix the live site.
+      - docs
     paths:
       - 'apps/docs/**'
       - '.github/workflows/docs-build-check.yml'
