@@ -1,0 +1,135 @@
+name: 🐛 Bug report
+description: Report an issue with ruNNtime here.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+
+        Before you proceed, make sure to check whether there are similar issues in the repository.
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Required information
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of ruNNtime is affected? Pick "Not sure" if you don't know.
+      options:
+        - Zoo (task runners, runntime/zoo or runntime/zoo/transformers)
+        - Core (engine, ops, kernels)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Please provide a clear, concise and descriptive explanation of what the bug is. Include screenshots or a video if needed. Tell us what you were expecting to happen instead of what is happening now.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide a detailed list of steps that reproduce the issue.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: repro
+    attributes:
+      label: Link to a reproduction
+      description: |
+        Please provide a link to a repository on GitHub under your username, or a StackBlitz / CodeSandbox, that reproduces the issue.
+        Here are some tips for providing a minimal example: https://stackoverflow.com/help/mcve.
+        Issues without a reproduction are likely to stale.
+      placeholder: Link to a GitHub repository or an online sandbox
+    validations:
+      required: false
+
+  - type: input
+    id: runntime-version
+    attributes:
+      label: ruNNtime version
+      description: What version of runntime are you using?
+      placeholder: 0.0.1
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: What browser and version are you running in?
+      placeholder: ex. Chrome 138, Safari 26
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: What operating system and version are you running on?
+      placeholder: ex. macOS 26.0, Windows 11, Android 15
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Additional information
+
+        Providing as much information as possible greatly helps us with reproducing the issues.
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: What GPU is the model running on? You can find it at chrome://gpu or webgpureport.org.
+      placeholder: ex. Apple M2 Pro, NVIDIA RTX 4070
+
+  - type: dropdown
+    id: features
+    attributes:
+      label: WebGPU features
+      description: Which optional features does your adapter support? Check webgpureport.org.
+      multiple: true
+      options:
+        - subgroups
+        - shader-f16
+        - Neither
+        - Don't know
+
+  - type: input
+    id: ai-model
+    attributes:
+      label: AI model
+      description: What AI models are you using?
+      placeholder: ex. Qwen3 0.6B, Whisper tiny
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output and performance logs
+      description: Paste any errors or warnings from the browser console, and performance numbers if relevant (load time, tokens/s, memory usage).
+      render: shell
+
+  - type: dropdown
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      description: I searched for similar issues in the repository.
+      options:
+        - 'Yes'
+    validations:
+      required: true
