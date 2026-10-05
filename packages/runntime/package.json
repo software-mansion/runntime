@@ -45,14 +45,16 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "prepack": "node ../../scripts/sync-readme.mjs && pnpm run build"
+    "prepack": "node ../../scripts/sync-readme.mjs && pnpm run build",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit"
   },
   "dependencies": {
     "js-tiktoken": "^1.0.20"
   },
   "peerDependencies": {
-    "typegpu": "^0.12.5",
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "typegpu": "^0.12.5"
   },
   "peerDependenciesMeta": {
     "@huggingface/transformers": {
@@ -64,7 +66,8 @@
     "@types/node": "^25.9.2",
     "@webgpu/types": "^0.1.60",
     "tsdown": "^0.23.0",
+    "typegpu": "^0.12.5",
     "unplugin-typegpu": "^0.12.3",
-    "typegpu": "^0.12.5"
+    "vitest": "^5.0.3"
   }
 }
