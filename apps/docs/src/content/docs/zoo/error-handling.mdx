@@ -1,0 +1,93 @@
+---
+title: Error handling
+description: The error codes the zoo throws and how to catch them.
+---
+
+Every factory and every model method in the zoo throws `RunntimeError`
+when something goes wrong. It is a regular `Error` with an extra `code`
+field. Check `err.code` to decide what to do. The message is text for
+people and can change between versions, so do not compare it.
+
+## Catching errors
+
+`isRunntimeError(err, code)` tells you whether `err` is a ruNNtime error
+with that code. It also narrows the type, so `err.code` and `err.cause`
+are typed inside the branch.
+
+```ts
+import { createImageClassifier, isRunntimeError, models } from 'runntime/zoo';
+
+let classifier;
+try {
+  classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT);
+} catch (err) {
+  if (isRunntimeError(err, 'UNSUPPORTED_DEVICE')) showNoF16Message();
+  if (isRunntimeError(err, 'LOAD_FAILED')) showOfflineMessage();
+  throw err;
+}
+```
+
+The same works for a model method:
+
+```ts
+try {
+  return await classifier.classify(image, { topk: 5 });
+} catch (err) {
+  if (isRunntimeError(err, 'INVALID_ARGUMENT')) showBadImageMessage();
+  if (isRunntimeError(err, 'EXECUTION_FAILED')) showGpuErrorMessage();
+  throw err;
+}
+```
+
+`EXECUTION_FAILED` can mean the device was lost. A lost device takes every
+model on it, and loading again on the same device fails too. To recover,
+create a new device with `tgpu.init()`, pass it to `initRunntime()`, then
+load the models again.
+
+`isRunntimeError(err)` without a code tells a ruNNtime error from any other.
+`err.cause` holds the original error where there is one, like the failed
+`fetch`.
+
+## Codes
+
+| Code                  | When                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `LOAD_FAILED`         | The weights, tokenizer or config could not be fetched, read or uploaded.                                                             |
+| `LOAD_ABORTED`        | The `signal` passed to the `create` call fired.                                                                                      |
+| `CHECKPOINT_MISMATCH` | The weights file does not match the model, for example a segment checkpoint given to object detection.                               |
+| `UNSUPPORTED_DEVICE`  | The device lacks a feature the model needs, today `shader-f16` for the vision models, or a weight is too big for the device to bind. |
+| `NOT_INITIALIZED`     | No device yet: `initRunntime(root)` was not called before the `create` call.                                                         |
+| `EXECUTION_FAILED`    | The GPU rejected the work, returned unusable output, or the device was lost during a call.                                           |
+| `INVALID_ARGUMENT`    | A value you passed is wrong: a wrong image byte count, a `topk` of 0, text that is not a string.                                     |
+| `RESOURCE_DISPOSED`   | The model was disposed and cannot run again.                                                                                         |
+
+`LOAD_FAILED`, `LOAD_ABORTED`, `CHECKPOINT_MISMATCH`, `UNSUPPORTED_DEVICE`
+and `NOT_INITIALIZED` come from the `create` call, the other three from the
+model methods. A `create` call can also throw `INVALID_ARGUMENT` when an
+option is wrong, and `EXECUTION_FAILED` when the GPU fails while the model
+uploads or warms up.
+
+The full list of codes is exported as `RUNNTIME_ERROR_CODES`, and the
+type of one code as `RunntimeErrorCode`.
+
+## Cancelling a load
+
+Every `create` call takes an `AbortSignal`. Use it when the user leaves the
+page or picks another model before the first one is ready. When it fires,
+the load stops, at the latest when its current step ends, and the call
+throws `LOAD_ABORTED`. This works for any reason you pass to `abort()`. The
+reason is in `err.cause`.
+
+```ts
+const controller = new AbortController();
+cancelButton.onclick = () => controller.abort();
+
+try {
+  classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT, {
+    signal: controller.signal,
+  });
+} catch (err) {
+  if (isRunntimeError(err, 'LOAD_ABORTED')) return; // the user cancelled
+  throw err;
+}
+```

@@ -6,6 +6,7 @@ import {
   evalValues,
   gpuExecutor,
   materialized,
+  RunntimeError,
   tensor3d,
   uploadF32,
   warmUp,
@@ -13,6 +14,7 @@ import {
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { YOLO26_CONFIG, YOLO26_SCALES, scaleChannels, type Yolo26Variant } from './config.ts';
 import { Yolo26Model, type Yolo26Task } from './model.ts';
 import type { ProtoData, RawLevel } from './pipeline.ts';
@@ -47,7 +49,7 @@ export function taskFromStateDict(sd: LazyStateDict): Yolo26Task {
   return 'detect';
 }
 
-const mismatch = (message: string) => new Error(`yolo26 weights: ${message}`);
+const mismatch = (message: string) => checkpointMismatch('yolo26 weights', message);
 
 const STEM_CHANNELS = Object.fromEntries(
   (Object.keys(YOLO26_SCALES) as Yolo26Variant[]).map((v) => [
@@ -83,7 +85,10 @@ export async function createDetector(
   const { strides } = YOLO26_CONFIG;
   const size = opts.inputSize ?? YOLO26_CONFIG.inputSize;
   if (!Number.isInteger(size) || size <= 0 || size % 32 !== 0) {
-    throw new Error(`inputSize: ${size} is not a positive multiple of 32`);
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `inputSize: ${size} is not a positive multiple of 32`,
+    );
   }
   const found = variantFromStateDict(sd);
   const variant = opts.variant ?? found;

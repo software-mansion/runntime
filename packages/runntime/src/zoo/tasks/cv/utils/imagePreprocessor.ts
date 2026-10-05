@@ -2,6 +2,7 @@
  *  out. Resizes (stretch / letterbox / crop), converts the pixel format,
  *  moves channels first and normalizes, all in one pass over the output. */
 
+import { RunntimeError } from '../../../../core/index.ts';
 import { checkImageSize, FORMAT_CHANNELS, type ImageBuffer, type ResizeMode } from '../image.ts';
 import type { ScaleBoxOptions } from '../ops/box.ts';
 import { resizeTransform, type Size } from '../ops/point.ts';
@@ -52,7 +53,10 @@ const RGB_INDEX = {
 function perChannel(v: number | readonly number[], name: string): [number, number, number] {
   if (typeof v === 'number') return [v, v, v];
   if (v.length !== 3) {
-    throw new Error(`normalize.${name}: expected 3 values, got ${v.length}`);
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `normalize.${name}: expected 3 values, got ${v.length}`,
+    );
   }
   return [v[0]!, v[1]!, v[2]!];
 }
@@ -104,7 +108,10 @@ export function createImagePreprocessor(
   const interpolation = options.interpolation ?? 'linear';
   const cropFraction = options.cropFraction ?? 1;
   if (!(cropFraction > 0 && cropFraction <= 1)) {
-    throw new Error(`cropFraction: expected a number in (0, 1], got ${cropFraction}`);
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `cropFraction: expected a number in (0, 1], got ${cropFraction}`,
+    );
   }
   const padValue = options.padValue ?? 114;
   const alpha = perChannel(options.normalizeOpts?.alpha ?? 1 / 255, 'alpha');
@@ -121,13 +128,14 @@ export function createImagePreprocessor(
   const process = (input: ImageBuffer, out?: Float32Array): Float32Array => {
     out ??= new Float32Array(3 * hw);
     if (out.length !== 3 * hw) {
-      throw new Error(`out: ${out.length} floats, expected ${3 * hw}`);
+      throw new RunntimeError('INVALID_ARGUMENT', `out: ${out.length} floats, expected ${3 * hw}`);
     }
     checkImageSize(input.width, input.height);
     const ch = FORMAT_CHANNELS[input.format];
     const { data } = input;
     if (data.length !== input.width * input.height * ch) {
-      throw new Error(
+      throw new RunntimeError(
+        'INVALID_ARGUMENT',
         `image: ${data.length} bytes for ${input.width}x${input.height} ${input.format}`,
       );
     }

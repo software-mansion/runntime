@@ -7,6 +7,8 @@
  *  tools/export_minilm_tokenizer.py writes. Parity cases in
  *  tokenizer_cases.json pin the exact ids per input. */
 
+import { checkpointMismatch } from '../errors.ts';
+
 export interface MinilmTokenizerAsset {
   version: number;
   doLowerCase: boolean;
@@ -32,7 +34,7 @@ interface HfTokenizerJson {
 }
 
 export function minilmTokenizerAsset(json: unknown, maxTokens?: number): MinilmTokenizerAsset {
-  const bad = (why: string) => new Error(`minilm tokenizer: ${why}`);
+  const bad = (why: string) => checkpointMismatch('minilm tokenizer', why);
   if (typeof json !== 'object' || json === null) throw bad('not a JSON object');
 
   if ('vocab' in json && Array.isArray(json.vocab)) {
@@ -132,7 +134,7 @@ function basicTokenize(text: string, doLowerCase: boolean): string[] {
 
 export function createMinilmTokenizer(asset: MinilmTokenizerAsset): MinilmTokenizer {
   if (asset.version !== 1) {
-    throw new Error(`minilm tokenizer: unsupported asset version ${asset.version}`);
+    throw checkpointMismatch('minilm tokenizer', `unsupported asset version ${asset.version}`);
   }
   const tokenToId = new Map<string, number>();
   asset.vocab.forEach((token, id) => tokenToId.set(token, id));

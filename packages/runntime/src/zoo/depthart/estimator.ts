@@ -19,6 +19,7 @@ import {
   type RunntimeExecutor,
   type Value,
 } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import { DEPTHART_B_448, DEPTHART_S_448, DepthartModel, type DepthartConfig } from './model.ts';
 
 export type DepthartVariant = 'b' | 's';
@@ -35,7 +36,7 @@ export interface Estimator {
   dispose(): void;
 }
 
-const mismatch = (message: string) => new Error(`depthart weights: ${message}`);
+const mismatch = (message: string) => checkpointMismatch('depthart weights', message);
 
 export function variantFromStateDict(sd: LazyStateDict): DepthartVariant {
   const width = sd.tensors.get('pretrained.network.1.proj.c.weight')?.shape[0];

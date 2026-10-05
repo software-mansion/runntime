@@ -11,6 +11,7 @@
  *  still sums to the checkpoint size. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { checkpointMismatch } from '../errors.ts';
 import type { MoonshineConfig } from './config.ts';
 
 export const qualify = (prefix: string, name: string): string =>
@@ -18,7 +19,7 @@ export const qualify = (prefix: string, name: string): string =>
 
 export function take(sd: LazyStateDict, name: string): LazyTensor {
   const t = sd.tensors.get(name);
-  if (!t) throw new Error(`moonshine state dict: missing tensor '${name}'`);
+  if (!t) throw checkpointMismatch('moonshine state dict', `missing tensor '${name}'`);
   sd.tensors.delete(name);
   return t;
 }
@@ -34,7 +35,10 @@ export function stackRows(
   let rows = 0;
   for (const { t } of parts) {
     if (t.shape.length !== 2 || t.shape[1] !== cols) {
-      throw new Error(`moonshine state dict: stackRows part shape [${t.shape}] != [_, ${cols}]`);
+      throw checkpointMismatch(
+        'moonshine state dict',
+        `stackRows part shape [${t.shape}] != [_, ${cols}]`,
+      );
     }
     rows += t.shape[0]!;
   }

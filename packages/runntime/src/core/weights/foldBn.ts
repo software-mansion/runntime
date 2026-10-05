@@ -4,6 +4,7 @@
  *  Per out-channel: scale = gamma / sqrt(var + eps), weight' = weight · scale,
  *  bias' = beta + (bias − mean) · scale. Grouping does not matter, since the
  *  scaling is per out-channel row either way. */
+import { RunntimeError } from '../error.ts';
 import { derivedTensor, type LazyStateDict, type LazyTensor } from './safetensors.ts';
 
 export function foldBnIntoConv(
@@ -20,7 +21,8 @@ export function foldBnIntoConv(
   const variance = bn('running_var');
   const weight = sd.tensors.get(`${convPrefix}.weight`);
   if (!gamma || !beta || !variance || !weight) {
-    throw new Error(
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
       `foldBnIntoConv: incomplete pair — need ${convPrefix}.weight + ${bnPrefix}.{weight,bias,running_mean,running_var}`,
     );
   }

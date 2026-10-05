@@ -40,6 +40,7 @@ import {
 } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
 import { derivedTensor, type LazyStateDict } from '../../core/index.ts';
+import { requireTensor } from '../errors.ts';
 import { Conv2dBN, RepDW } from './layers.ts';
 
 const { Module, Parameter } = nn;
@@ -95,8 +96,7 @@ export class SS2D extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     // prefix is empty when this module is the root.
     const key = prefix ? `${prefix}.A_logs` : 'A_logs';
-    const src = sd.tensors.get(key);
-    if (!src) throw new Error(`SS2D at '${prefix}': missing 'A_logs' in the state dict`);
+    const src = requireTensor(sd, key, `SS2D at '${prefix}'`);
     sd.tensors.set(
       key,
       derivedTensor(

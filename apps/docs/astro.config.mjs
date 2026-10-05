@@ -118,18 +118,32 @@ export default defineConfig({
               // paints the squirrel, since Starlight ships no animals.
               icon: 'rocket',
               items: [
-                { label: 'Getting started', slug: 'zoo/getting-started' },
-                { label: 'Text embedding', slug: 'zoo/text-embedding' },
-                { label: 'Speech to text', slug: 'zoo/speech-to-text' },
-                { label: 'Privacy filter', slug: 'zoo/privacy-filter' },
-                { label: 'Object detection', slug: 'zoo/object-detection' },
-                { label: 'Instance segmentation', slug: 'zoo/instance-segmentation' },
-                { label: 'Pose & keypoints', slug: 'zoo/pose-and-keypoints' },
-                { label: 'Depth estimation', slug: 'zoo/depth-estimation' },
-                { label: 'Image classification', slug: 'zoo/image-classification' },
                 {
-                  label: 'Migrating from transformers.js',
-                  slug: 'zoo/migrating-from-transformers-js',
+                  label: 'Fundamentals',
+                  items: [{ label: 'Getting started', slug: 'zoo/getting-started' }],
+                },
+                {
+                  label: 'Models',
+                  items: [
+                    { label: 'Text embedding', slug: 'zoo/text-embedding' },
+                    { label: 'Speech to text', slug: 'zoo/speech-to-text' },
+                    { label: 'Privacy filter', slug: 'zoo/privacy-filter' },
+                    { label: 'Object detection', slug: 'zoo/object-detection' },
+                    { label: 'Instance segmentation', slug: 'zoo/instance-segmentation' },
+                    { label: 'Pose & keypoints', slug: 'zoo/pose-and-keypoints' },
+                    { label: 'Depth estimation', slug: 'zoo/depth-estimation' },
+                    { label: 'Image classification', slug: 'zoo/image-classification' },
+                  ],
+                },
+                {
+                  label: 'Guides',
+                  items: [
+                    { label: 'Error handling', slug: 'zoo/error-handling' },
+                    {
+                      label: 'Migrating from transformers.js',
+                      slug: 'zoo/migrating-from-transformers-js',
+                    },
+                  ],
                 },
                 { label: 'Benchmarks', slug: 'zoo/benchmarks' },
               ],
