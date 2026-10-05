@@ -27,6 +27,9 @@ import { SPEECH_SAMPLE_RATE } from './audioInput.ts';
 const TICK_SAMPLES = SPEECH_SAMPLE_RATE / 2;
 /** Speech this long commits even without a pause. */
 const MAX_SEGMENT_SECONDS = 15;
+/** Decode budget of a preview, 1.5x the transcriber's default. A preview
+ *  often ends mid-word, so the default cuts good text before its EOS. */
+const PREVIEW_TOKENS_PER_SECOND = 10;
 
 /** The two Moonshine families. Each has its own weights and decoder. */
 export type SpeechToTextArch = 'moonshine' | 'moonshine-streaming';
@@ -133,8 +136,8 @@ export async function createSpeechToText(
     let disposed = false;
     // Calls run one after another: the model reuses its caches between clips.
     let queue: Promise<unknown> = Promise.resolve();
-    const enqueue = (audio: Float32Array) => {
-      const run = queue.then(() => transcriber.transcribe(audio));
+    const enqueue = (audio: Float32Array, tokensPerSecond?: number) => {
+      const run = queue.then(() => transcriber.transcribe(audio, tokensPerSecond));
       queue = run.catch(() => undefined);
       return run.catch(rethrowRunError);
     };
@@ -159,15 +162,22 @@ export async function createSpeechToText(
             sampleRate: SPEECH_SAMPLE_RATE,
             maxSegmentSeconds: MAX_SEGMENT_SECONDS,
           });
+          const commit = final || segment.shouldFinalize;
           let text = '';
           if (segment.hasSpeech && audio.length >= transcriber.minSamples) {
-            text = (await enqueue(audio)).text.trim();
+            const result = await enqueue(audio, commit ? undefined : PREVIEW_TOKENS_PER_SECOND);
+            text = result.text.trim();
+            // On audio cut mid-word the model can loop: it runs into the token
+            // cap without EOS, or repeats a phrase. Such a preview is not
+            // shown, the previous one stays until the next tick.
+            const looped = result.ids.at(-1) !== tokenizer.eosId || repeatsPhrase(text);
+            if (!commit && looped) text = last.nonCommitted;
           } else if (segment.seconds >= MAX_SEGMENT_SECONDS) {
             // Silence is never transcribed, so only its last second stays.
             keepTail(session, SPEECH_SAMPLE_RATE);
           }
           let committed = last.committed;
-          if (final || segment.shouldFinalize) {
+          if (commit) {
             if (text) committed = committed ? `${committed} ${text}` : text;
             text = '';
             session.chunks = [];
@@ -247,6 +257,18 @@ function concat(chunks: Float32Array[], length: number): Float32Array {
     at += c.length;
   }
   return out;
+}
+
+/** True when some three words in a row appear twice. */
+function repeatsPhrase(text: string): boolean {
+  const words = text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+  const seen = new Set<string>();
+  for (let i = 0; i + 3 <= words.length; i++) {
+    const phrase = words.slice(i, i + 3).join(' ');
+    if (seen.has(phrase)) return true;
+    seen.add(phrase);
+  }
+  return false;
 }
 
 /** Drops chunks from the front until about `samples` remain. */
