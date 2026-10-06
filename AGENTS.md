@@ -21,8 +21,7 @@ pnpm monorepo, Node 22 or newer:
 - `scripts/sync-readme.mjs`: copies the root `README.md` into the package on
   prepack. Edit the root file, the package copy is generated and gitignored.
 
-There is no test suite in this repo. Verification is typecheck, lint and the
-docs build.
+Verification is typecheck, lint, unit tests and the docs build.
 
 Before writing or reviewing code, comments or docs, read
 [.claude/skills/code-style/SKILL.md](.claude/skills/code-style/SKILL.md).
@@ -83,3 +82,29 @@ Before writing or reviewing code, comments or docs, read
   use a merge commit, never squash, or the two branches drift apart.
 - Benchmark numbers on the docs pages come from measured runs. Never edit or
   derive one by hand.
+
+## How to write tests
+
+- Vitest, configured in `packages/runntime/vitest.config.ts`. `pnpm test`
+  runs everything, `pnpm --filter runntime test:unit` only the Node tests.
+- Tests live in `packages/runntime/test`, never in `src`, and the test path
+  mirrors the source path: `src/core/weights/convert.ts` is tested in
+  `test/core/weights/convert.test.ts`. Import the source with its `.ts`
+  extension.
+- `*.test.ts` runs in Node with no GPU. `*.gpu.test.ts` is reserved for
+  tests that need real WebGPU in a browser; that project is not set up yet.
+  CI runners have no GPU, so anything that needs one cannot run in CI.
+- Write the test once and put the cases in a list that `it.each` runs.
+  Adding a case should be one line.
+- Expected values come from the math, worked out by hand or from Hugging
+  Face / PyTorch, never from running our code and copying its output. A CPU
+  reference for a kernel is a plain loop written from the formula, not one
+  that reuses the kernel's helpers, or a bug in them passes in both.
+- A bug fix adds a case that fails without the fix.
+- Compare floats with a tolerance (`|got - want| <= atol + rtol * |want|`)
+  and let NaN fail. For f16, round the inputs to f16 before computing the
+  reference.
+- No snapshots of generated WGSL. They break on every refactor and catch
+  nothing.
+- A test that needs a device feature the machine lacks (`shader-f16`,
+  `subgroups`) skips with a reason. It never passes silently.
