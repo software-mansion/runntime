@@ -38,5 +38,8 @@ jobs:
         run: pnpm lint
       - name: Check formatting
         run: pnpm format:check
+      # Node tests only: the runners have no GPU for the gpu project.
+      - name: Unit tests
+        run: pnpm --filter runntime test:unit
       - name: Build the package
         run: pnpm --filter runntime run build
