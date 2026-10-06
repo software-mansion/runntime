@@ -113,6 +113,9 @@ export function permuteConvTransposeF16(
   k: number,
 ): Uint16Array {
   const kk = k * k;
+  if (src.length !== cIn * cOut * kk) {
+    throw new Error(`permuteConvTransposeF16: length ${src.length} != ${cIn}×${cOut}×${k}×${k}`);
+  }
   const dst = new Uint16Array(cIn * cOut * kk);
   for (let ci = 0; ci < cIn; ci++) {
     const srcBase = ci * cOut * kk;
@@ -133,6 +136,9 @@ export function packConvHwc4F16(
   kW: number,
 ): Uint16Array {
   const kk = kH * kW;
+  if (src.length !== cOut * cIn * kk) {
+    throw new Error(`packConvHwc4F16: length ${src.length} != ${cOut}×${cIn}×${kH}×${kW}`);
+  }
   const ob = Math.ceil(cOut / 4);
   const ib = Math.ceil(cIn / 4);
   const dst = new Uint16Array(ob * ib * kk * 16);
@@ -149,6 +155,9 @@ export function packConvHwc4F16(
 
 export function packDwHwc4F16(src: Uint16Array, c: number, kH: number, kW: number): Uint16Array {
   const kk = kH * kW;
+  if (src.length !== c * kk) {
+    throw new Error(`packDwHwc4F16: length ${src.length} != ${c}×${kH}×${kW}`);
+  }
   const dst = new Uint16Array(Math.ceil(c / 4) * kk * 4);
   for (let ch = 0; ch < c; ch++) {
     for (let t = 0; t < kk; t++) {

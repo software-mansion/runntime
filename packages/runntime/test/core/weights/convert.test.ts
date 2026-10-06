@@ -242,6 +242,10 @@ describe('permuteConvTransposeF16', () => {
       new Uint16Array(want),
     );
   });
+
+  it('rejects a wrong length', () => {
+    expect(() => permuteConvTransposeF16(new Uint16Array(3), 2, 2, 1)).toThrow(/length 3/);
+  });
 });
 
 describe('packConvHwc4F16', () => {
@@ -294,6 +298,10 @@ describe('packConvHwc4F16', () => {
   ])('$name', ({ cOut, cIn, kH, kW, src, want }) => {
     expect(packConvHwc4F16(new Uint16Array(src), cOut, cIn, kH, kW)).toEqual(want);
   });
+
+  it('rejects a wrong length', () => {
+    expect(() => packConvHwc4F16(new Uint16Array(3), 2, 2, 1, 1)).toThrow(/length 3/);
+  });
 });
 
 describe('packDwHwc4F16', () => {
@@ -319,5 +327,9 @@ describe('packDwHwc4F16', () => {
     { name: 'empty', c: 0, kH: 1, kW: 1, src: [], want: [] },
   ])('$name', ({ c, kH, kW, src, want }) => {
     expect(packDwHwc4F16(new Uint16Array(src), c, kH, kW)).toEqual(new Uint16Array(want));
+  });
+
+  it('rejects a wrong length', () => {
+    expect(() => packDwHwc4F16(new Uint16Array([1, 2]), 5, 1, 1)).toThrow(/length 2/);
   });
 });
