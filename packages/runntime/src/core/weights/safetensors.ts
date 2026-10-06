@@ -28,6 +28,8 @@ export interface RangeSource {
   read(begin: number, end: number): Promise<Uint8Array>;
 }
 
+/** Wraps bytes already in memory as a RangeSource, for a `modelPath` that is
+ *  not a URL. */
 export function bufferSource(buf: ArrayBuffer | Uint8Array): RangeSource {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   return {

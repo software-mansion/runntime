@@ -3,13 +3,13 @@ import type { TgpuRoot } from 'typegpu';
 import { initRunntime } from '../../core/index.ts';
 import { registerRunntimeBackend, type RegisterRunntimeBackendOpts } from './registry.ts';
 
-/** One-call plugin setup: creates the WebGPU device, points runntime/core at it
- *  and patches transformers.js. Requests subgroups, which the fast matmul
- *  and attention kernels need, and shader-f16, which yolo26 and depthart
- *  require and the other models use when present. Both are optional: a
- *  device lacking either still loads the f32-capable models. Options go
- *  straight to registerRunntimeBackend(), so `models` and `fallbackToOnnx` work
- *  here too. Returns the root for apps that also use TypeGPU directly. */
+/** One-call plugin setup: creates the WebGPU device, runs the models on it
+ *  and patches transformers.js. Requests `subgroups`, which makes matmul and
+ *  attention faster, and `shader-f16`, which the YOLO26 and DepthART models
+ *  need and the others use when present. A device without them still loads
+ *  every model that runs in f32. Options go straight to
+ *  registerRunntimeBackend(), so `models` and `fallbackToOnnx` work here too.
+ *  Returns the root for apps that also use TypeGPU directly. */
 export async function initRunntimeBackend(
   opts: RegisterRunntimeBackendOpts = {},
 ): Promise<TgpuRoot> {

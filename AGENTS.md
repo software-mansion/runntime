@@ -62,6 +62,11 @@ docs build.
   `runntime/zoo` from the library's `dist`, so build the library first or run
   `pnpm --filter docs... run build`. The docs dev server does not watch the
   library: after editing `packages/runntime/src`, rebuild it.
+- Docs code samples are ` ```ts twoslash `: the docs build type-checks
+  them against the built library and fails on an error. Setup the reader does
+  not need (`declare const canvas: HTMLCanvasElement;`) goes above
+  `// ---cut---`. The API reference under `/api/` is generated from the
+  exports and their doc comments by `starlight-typedoc`; do not edit it.
 - Dependency changes go through `pnpm add` / `pnpm install` so `pnpm-lock.yaml`
   follows. CI installs with `--frozen-lockfile` and fails on a stale lockfile.
 - Commits follow Conventional Commits (`feat`, `fix`, `perf`, `refactor`,

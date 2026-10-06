@@ -16,7 +16,7 @@ and returns vectors of 384 numbers.
 
 ## Quick start
 
-```ts
+```ts twoslash
 import { createTextEmbedder, models, similarity } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
@@ -99,7 +99,7 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
 import { createTextEmbedder, models } from 'runntime/zoo';
 
 // Full precision: twice the download, results move by about 1e-3.
@@ -143,7 +143,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createOpfsCache, createTextEmbedder, models } from 'runntime/zoo';
 
 const embedder = await createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT, {

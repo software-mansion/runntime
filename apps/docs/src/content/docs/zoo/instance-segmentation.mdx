@@ -15,14 +15,16 @@ on the GPU.
 
 ## Quick start
 
-```ts
+```ts twoslash
+declare const canvas: HTMLCanvasElement;
+// ---cut---
 import { createInstanceSegmenter, imageBufferFromImageData, models } from 'runntime/zoo';
 
 // 1. Load the model once. The weights download from the Hugging Face Hub.
 const segmenter = await createInstanceSegmenter(models.instanceSegmentation.YOLO26_SEG.DEFAULT);
 
 // 2. Get the pixels of an image, here from a canvas the picture is drawn on.
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d')!;
 const image = imageBufferFromImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
 
 // 3. Find the objects.
@@ -87,9 +89,13 @@ blend cleanly.
 
 Turn the mask into an `ImageData`, then draw it scaled over `box`:
 
-```ts
+```ts twoslash
+import type { InstanceSegmentation } from 'runntime/zoo';
+declare const objects: InstanceSegmentation[];
+declare const ctx: CanvasRenderingContext2D;
+// ---cut---
 const layer = new OffscreenCanvas(1, 1);
-const layerCtx = layer.getContext('2d');
+const layerCtx = layer.getContext('2d')!;
 
 for (const { box, mask } of objects) {
   layer.width = mask.width;
@@ -162,7 +168,7 @@ type ModelPath = string | RangeSource; // a URL, or bytes you already have
 
 Examples:
 
-```ts
+```ts twoslash
 import { createInstanceSegmenter, models } from 'runntime/zoo';
 
 // The medium size.
@@ -204,7 +210,7 @@ interface LoadOptions {
 
 Example:
 
-```ts
+```ts twoslash
 import { createInstanceSegmenter, createOpfsCache, models } from 'runntime/zoo';
 
 const segmenter = await createInstanceSegmenter(models.instanceSegmentation.YOLO26_SEG.DEFAULT, {

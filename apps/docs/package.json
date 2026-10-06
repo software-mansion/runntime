@@ -12,18 +12,23 @@
   "dependencies": {
     "@astrojs/react": "^6.0.2",
     "@astrojs/starlight": "^0.41.7",
-    "runntime": "workspace:*",
     "astro": "^7.1.6",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "runntime": "workspace:*",
     "sharp": "^0.35.3",
     "starlight-sidebar-topics": "^0.8.0",
     "typegpu": "^0.12.5"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@webgpu/types": "^0.1.60",
+    "expressive-code-twoslash": "^0.6.1",
+    "starlight-typedoc": "^0.23.1",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.13.1",
     "unplugin-typegpu": "^0.12.3"
   }
 }

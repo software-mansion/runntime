@@ -14,7 +14,10 @@ people and can change between versions, so do not compare it.
 with that code. It also narrows the type, so `err.code` and `err.cause`
 are typed inside the branch.
 
-```ts
+```ts twoslash
+declare function showNoF16Message(): void;
+declare function showOfflineMessage(): void;
+// ---cut---
 import { createImageClassifier, isRunntimeError, models } from 'runntime/zoo';
 
 let classifier;
@@ -29,9 +32,21 @@ try {
 
 The same works for a model method:
 
-```ts
+```ts twoslash
+import {
+  isRunntimeError,
+  type Classification,
+  type ImageBuffer,
+  type ImageClassifier,
+} from 'runntime/zoo';
+declare const classifier: ImageClassifier;
+declare const image: ImageBuffer;
+declare function showBadImageMessage(): void;
+declare function showGpuErrorMessage(): void;
+declare function showResults(results: (Classification & { label: string })[]): void;
+// ---cut---
 try {
-  return await classifier.classify(image, { topk: 5 });
+  showResults(await classifier.classify(image, { topk: 5 }));
 } catch (err) {
   if (isRunntimeError(err, 'INVALID_ARGUMENT')) showBadImageMessage();
   if (isRunntimeError(err, 'EXECUTION_FAILED')) showGpuErrorMessage();
@@ -78,7 +93,11 @@ the load stops, at the latest when its current step ends, and the call
 throws `LOAD_ABORTED`. This works for any reason you pass to `abort()`. The
 reason is in `err.cause`.
 
-```ts
+```ts twoslash
+import { createImageClassifier, isRunntimeError, models, type ImageClassifier } from 'runntime/zoo';
+declare const cancelButton: HTMLButtonElement;
+let classifier: ImageClassifier;
+// ---cut---
 const controller = new AbortController();
 cancelButton.onclick = () => controller.abort();
 
@@ -87,7 +106,7 @@ try {
     signal: controller.signal,
   });
 } catch (err) {
-  if (isRunntimeError(err, 'LOAD_ABORTED')) return; // the user cancelled
-  throw err;
+  // The user cancelled: nothing to do.
+  if (!isRunntimeError(err, 'LOAD_ABORTED')) throw err;
 }
 ```
