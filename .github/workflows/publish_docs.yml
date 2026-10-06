@@ -1,33 +1,36 @@
 name: Publish to GitHub Pages
 
+# The site is built from the docs branch, not from main. Development lands on
+# main, and merging main into docs is what publishes it. Every push to docs
+# is a deploy, so there is no paths filter.
 on:
   push:
     branches:
-      - main
-    paths:
-      - '.github/workflows/publish_docs.yml'
-      - 'apps/docs/**'
-      - 'packages/runntime/**'
+      - docs
   workflow_dispatch:
+# Runs push gh-pages one at a time.
+concurrency:
+  group: publish-docs
+  cancel-in-progress: false
 jobs:
   publish:
-    if: github.repository == 'software-mansion/runntime'
+    # A manual run picks a branch, main by default. Only docs is published.
+    if: github.repository == 'software-mansion/runntime' && github.ref == 'refs/heads/docs'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out
         uses: actions/checkout@v6
 
       - name: Generate docs
         run: >-
-          git config --local user.email "action@github.com"
-          && git config --local user.name "GitHub Action"
-          && corepack enable
+          corepack enable
           && pnpm install --frozen-lockfile
           && pnpm --filter docs... run build
 
       - name: Publish generated content to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@releases/v3
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          FOLDER: apps/docs/dist
-          BRANCH: gh-pages
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          folder: apps/docs/dist
+          branch: gh-pages
