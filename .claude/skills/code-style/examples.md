@@ -67,6 +67,38 @@ streamInsert(samples) {
 }
 ```
 
+## Type assertion instead of a check
+
+```ts
+// Bad: the cast trusts the config file, a missing key becomes NaN later
+const dModel = json.hidden_size as number;
+
+// Good: typeof narrows, and a bad config is a CHECKPOINT_MISMATCH
+function num(json: Json, key: string): number {
+  const v = json[key];
+  if (typeof v !== 'number')
+    throw checkpointMismatch('moonshine config', `'${key}' missing or not a number`);
+  return v;
+}
+const dModel = num(json, 'hidden_size');
+```
+
+A caught error is `unknown`: anything can be thrown, not only an `Error`.
+
+```ts
+// Bad
+} catch (err) {
+  if ((err as RunntimeError).code) throw err;
+  throw new RunntimeError('LOAD_FAILED', `${where}: ${(err as Error).message}`, { cause: err });
+}
+
+// Good: isRunntimeError is a type guard, messageOf narrows with instanceof
+} catch (err) {
+  if (isRunntimeError(err)) throw err;
+  throw new RunntimeError('LOAD_FAILED', `${where}: ${messageOf(err)}`, { cause: err });
+}
+```
+
 ## Magic number
 
 ```ts

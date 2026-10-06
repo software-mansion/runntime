@@ -46,6 +46,26 @@ Short bad/good pairs are in [examples.md](examples.md).
   every place in its own PR, or suggest it and leave it.
 - Keep a concept in one place. Two copies of the same logic drift apart.
 
+## Types
+
+- Avoid type assertions (`as T`, `as unknown as T`). An assertion makes
+  the compiler trust you, and nothing checks it again when the code
+  around it changes. `as const` is not one of them: keep it.
+- Narrow with `typeof`, `instanceof` or `in` instead. When the same check
+  is needed in more than one place, make it a type guard
+  (`(x: unknown): x is T`), like `isRunntimeError`.
+- Data that comes in as `unknown` gets checked, not cast: a config
+  file, a safetensors header, a caught error. A config that does not fit
+  the model is a `CHECKPOINT_MISMATCH`, a bad caller value an
+  `INVALID_ARGUMENT`. For a caught error, use `isRunntimeError(err)` and
+  `messageOf(err)`.
+- To check an object literal against a type, use `satisfies`, not `as`.
+- Cast only where the types cannot say what is true, like TypeGPU's
+  `d.vec4h` used as `d.Vec4f`, or a `readonly` array that
+  `Array.isArray` does not narrow.
+- `arr[i]!` is fine when a loop bound or a length check already
+  guarantees the index (`noUncheckedIndexedAccess` is on).
+
 ## Comments
 
 - Describe the code as it is now. No history: "changed", "previously",
@@ -84,6 +104,7 @@ Read your own diff and check:
    works?
 2. Does any new helper or type have one caller?
 3. Does any comment talk about the past or repeat the code?
-4. Does it look like the code next to it?
+4. Does any type assertion skip a check the compiler could make?
+5. Does it look like the code next to it?
 
 Fix what you find, then finish.
