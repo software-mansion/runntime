@@ -45,17 +45,18 @@ body:
     validations:
       required: true
 
-  - type: input
-    id: repro
+  - type: dropdown
+    id: platform
     attributes:
-      label: Link to a reproduction
-      description: |
-        Please provide a link to a repository on GitHub under your username, or a StackBlitz / CodeSandbox, that reproduces the issue.
-        Here are some tips for providing a minimal example: https://stackoverflow.com/help/mcve.
-        Issues without a reproduction are likely to stale.
-      placeholder: Link to a GitHub repository or an online sandbox
+      label: Platform
+      description: 'Which platform does the bug affect?'
+      options:
+        - React Native (iOS)
+        - React Native (Android)
+        - Browser (please name which one)
+        - Electron
     validations:
-      required: false
+      required: true
 
   - type: input
     id: runntime-version
@@ -70,17 +71,18 @@ body:
     id: browser
     attributes:
       label: Browser
-      description: What browser and version are you running in?
-      placeholder: ex. Chrome 138, Safari 26
+      description: What browser and version are you running in? Check the browser's About page, e.g. chrome://version in Chrome or Edge. Leave empty for React Native, or give the Electron version for Electron.
+      placeholder: ex. Chrome 138, Safari 26, Electron 38
     validations:
-      required: true
+      required: false
 
   - type: input
     id: os
     attributes:
       label: Operating system
-      description: What operating system and version are you running on?
-      placeholder: ex. macOS 26.0, Windows 11, Android 15
+      description: |
+        What operating system and version are you running on?
+      placeholder: ex. macOS 26.0, Windows 11, Ubuntu 24.04 (kernel 6.8), Android 15
     validations:
       required: true
 

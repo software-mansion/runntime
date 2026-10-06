@@ -12,6 +12,7 @@
 - [ ] Bug fix (change which fixes an issue)
 - [ ] New feature (change which adds functionality)
 - [ ] Documentation update (improves or adds clarity to existing documentation)
+- [ ] Performance (kernel tuning, graph building, anything related to performance)
 - [ ] Other (chores, tests, code style improvements etc.)
 
 ### Testing instructions
