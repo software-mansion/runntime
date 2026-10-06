@@ -250,6 +250,16 @@ describe('parseSafetensorsHeader', () => {
   ])('rejects $name', async ({ file, error }) => {
     await expect(parseSafetensorsHeader(bufferSource(file))).rejects.toThrow(error);
   });
+
+  it.each([
+    { name: 'null', header: null },
+    { name: 'a number', header: 5 },
+    { name: 'an array', header: [] },
+  ])('rejects a header that is $name instead of an object', async ({ header }) => {
+    await expect(parseSafetensorsHeader(bufferSource(fileBytes(header)))).rejects.toThrow(
+      /safetensors: header is not a JSON object/,
+    );
+  });
 });
 
 describe('fromSafetensors', () => {
