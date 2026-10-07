@@ -103,23 +103,27 @@ function memoryCache() {
 
 describe('parseSafetensorsHeader', () => {
   it('reads dtype, shape and absolute offsets', async () => {
+    const aBytes = 2 * 3 * 4; // 6 f32 values, 4 bytes each
+    const bBytes = 5 * 2; // 5 f16 values, 2 bytes each
     const file = tensorFile({
-      a: { dtype: 'F32', shape: [2, 3], bytes: new Uint8Array(24) },
-      b: { dtype: 'F16', shape: [5], bytes: new Uint8Array(10) },
+      a: { dtype: 'F32', shape: [2, 3], bytes: new Uint8Array(aBytes) },
+      b: { dtype: 'F16', shape: [5], bytes: new Uint8Array(bBytes) },
     });
+    // The header stores offsets from the start of the payload; the parser
+    // turns them into positions in the whole file.
     const start = payloadStart(file);
     const { tensors } = await parseSafetensorsHeader(bufferSource(file));
     expect(tensors.get('a')).toEqual({
       dtype: 'F32',
       shape: [2, 3],
       begin: start,
-      end: start + 24,
+      end: start + aBytes,
     });
     expect(tensors.get('b')).toEqual({
       dtype: 'F16',
       shape: [5],
-      begin: start + 24,
-      end: start + 34,
+      begin: start + aBytes, // right after a
+      end: start + aBytes + bBytes,
     });
   });
 
@@ -313,7 +317,8 @@ describe('fromSafetensors', () => {
   it('reports shape, dtype and byte sizes', async () => {
     const sd = await fromSafetensors(bufferSource(file));
     expect(sd.tensors.get('f16')).toMatchObject({ kind: 'file', dtype: 'F16', shape: [3] });
-    expect(sd.tensors.get('f16')!.byteLength).toBe(6);
+    expect(sd.tensors.get('f16')!.byteLength).toBe(3 * 2); // 3 values, 2 bytes each
+    // f32: 3×4, f16: 3×2, bf16: 2×2, u32: 2×4, u8: 1×1
     expect(sd.totalBytes()).toBe(12 + 6 + 4 + 8 + 1);
   });
 
@@ -628,7 +633,7 @@ describe('memoryStateDict', () => {
 
   it('sums byte sizes', () => {
     const sd = memoryStateDict({ a: new Float32Array(3), b: new Uint16Array(5) });
-    expect(sd.totalBytes()).toBe(12 + 10);
+    expect(sd.totalBytes()).toBe(3 * 4 + 5 * 2); // 3 f32 + 5 bf16
   });
 
   it('handles an empty dict', () => {
