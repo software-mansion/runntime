@@ -124,13 +124,16 @@ export async function parseSafetensorsHeader(source: RangeSource): Promise<Safet
     throw new Error(`safetensors: implausible header length ${headerLen}`);
   }
   const headerBytes = await source.read(8, 8 + headerLen);
-  let header: Record<string, unknown>;
+  let header: unknown;
   try {
-    header = JSON.parse(new TextDecoder().decode(headerBytes)) as Record<string, unknown>;
+    header = JSON.parse(new TextDecoder().decode(headerBytes));
   } catch (err) {
     throw new Error(`safetensors: header is not valid JSON: ${(err as Error).message}`, {
       cause: err,
     });
+  }
+  if (typeof header !== 'object' || header === null || Array.isArray(header)) {
+    throw new Error('safetensors: header is not a JSON object');
   }
   // data_offsets are relative to the payload start.
   const dataStart = 8 + headerLen;
