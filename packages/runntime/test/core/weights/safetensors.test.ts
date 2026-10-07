@@ -275,31 +275,31 @@ describe('fromSafetensors', () => {
     u8: { dtype: 'U8', shape: [1], bytes: new Uint8Array([9]) },
   });
 
-  async function tensor(name: string) {
+  async function getTensor(name: string) {
     const sd = await fromSafetensors(bufferSource(file));
     return sd.tensors.get(name)!;
   }
 
   it('decodes F32, F16 and BF16 to f32', async () => {
-    expect(await (await tensor('f32')).f32()).toEqual(new Float32Array([0.5, -2.25, 3]));
-    expect(await (await tensor('f16')).f32()).toEqual(new Float32Array([1.5, -0.25, 1]));
-    expect(await (await tensor('bf16')).f32()).toEqual(new Float32Array([1.5, -0.25]));
+    expect(await (await getTensor('f32')).f32()).toEqual(new Float32Array([0.5, -2.25, 3]));
+    expect(await (await getTensor('f16')).f32()).toEqual(new Float32Array([1.5, -0.25, 1]));
+    expect(await (await getTensor('bf16')).f32()).toEqual(new Float32Array([1.5, -0.25]));
   });
 
   it('gives F16 and BF16 bits unconverted', async () => {
-    expect(await (await tensor('f16')).u16()).toEqual(new Uint16Array([0x3e00, 0xb400, 0x3c00]));
-    expect(await (await tensor('bf16')).u16()).toEqual(new Uint16Array([0x3fc0, 0xbe80]));
+    expect(await (await getTensor('f16')).u16()).toEqual(new Uint16Array([0x3e00, 0xb400, 0x3c00]));
+    expect(await (await getTensor('bf16')).u16()).toEqual(new Uint16Array([0x3fc0, 0xbe80]));
   });
 
   it('packs F16 into u32 words, zero-padding an odd count', async () => {
     // little-endian: the first half sits in the low 16 bits
-    expect(await (await tensor('f16')).halfWords()).toEqual(
+    expect(await (await getTensor('f16')).halfWords()).toEqual(
       new Uint32Array([0xb4003e00, 0x00003c00]),
     );
   });
 
   it('reads U32 words', async () => {
-    expect(await (await tensor('u32')).words()).toEqual(new Uint32Array([7, 0xffffffff]));
+    expect(await (await getTensor('u32')).words()).toEqual(new Uint32Array([7, 0xffffffff]));
   });
 
   it.each([
@@ -308,7 +308,7 @@ describe('fromSafetensors', () => {
     { name: 'halfWords() on BF16', tensor: 'bf16', call: 'halfWords' },
     { name: 'words() on F16', tensor: 'f16', call: 'words' },
   ] as const)('rejects $name with CHECKPOINT_MISMATCH', async ({ tensor: name, call }) => {
-    await expect((await tensor(name))[call]()).rejects.toMatchObject({
+    await expect((await getTensor(name))[call]()).rejects.toMatchObject({
       name: 'RunntimeError',
       code: 'CHECKPOINT_MISMATCH',
     });
