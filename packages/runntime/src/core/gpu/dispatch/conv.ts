@@ -10,6 +10,7 @@ import {
   channelAffineHwc4Handle,
   conv1x1Kind,
   conv2dHwc4Handle,
+  convTiledBlocks,
   copyChHwc4Handle,
   createAvgPool2dHwc4Pipeline,
   createChannelAffineHwc4Pipeline,
@@ -21,6 +22,7 @@ import {
   createToChwPipeline,
   createToHwc4Pipeline,
   createUpsample2dHwc4Pipeline,
+  depthwiseCols,
   moveHwc4Handle,
   resizeBilinearHwc4Handle,
   small1x1Lanes,
@@ -142,6 +144,9 @@ export const conv2dHwc4Spec = defineSpec({
       attrs.groups === 1;
     const kind1x1 = is1x1 ? conv1x1Kind(pixels, cOut) : 0;
     const oneByOne = kind1x1 === 1;
+    const [, hOut, wOut] = node.shape.dims as [number, number, number];
+    const bmb = kind1x1 === 0 && attrs.groups === 1 ? convTiledBlocks(cOut, hOut * wOut) : 0;
+    const depthwise = attrs.groups !== 1;
     return {
       cIn,
       cOut,
@@ -152,9 +157,11 @@ export const conv2dHwc4Spec = defineSpec({
       hasBias: attrs.hasBias,
       hasAct: attrs.hasAct,
       hasAdd: extras?.addend !== undefined ? 1 : 0,
-      kind: kind1x1 !== 0 ? kind1x1 : attrs.groups !== 1 ? 2 : 0,
+      kind: bmb > 0 ? 4 : kind1x1 !== 0 ? kind1x1 : depthwise ? 2 : 0,
       pxT: oneByOne && pixels % 8 === 0 ? 8 : 4,
       ks: kind1x1 === 3 ? small1x1Lanes(cIn) : 0,
+      dwCols: depthwise ? depthwiseCols(attrs.kW, wOut) : 0,
+      bmb,
     };
   },
   pipeline: (root, _dtype, cfg) => createConv2dHwc4Pipeline(root, cfg),

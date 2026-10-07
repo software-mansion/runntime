@@ -53,6 +53,10 @@ export interface Conv2dHwc4Cfg {
   kind: number;
   pxT?: number;
   ks?: number;
+  /** Depthwise (kind 2): output columns per thread. */
+  dwCols?: number;
+  /** Tiled (kind 4): blocks of 4 output channels per workgroup. */
+  bmb?: number;
 }
 
 const makeEpilogue = (cfg: Conv2dHwc4Cfg) => {
@@ -148,6 +152,157 @@ export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
     }
     const pxOut = oy * wOut + ox;
     convLayout.$.out[pxOut * dims.outC4 + dims.outOffB + oB] = epilogue(acc, oB, pxOut);
+  });
+};
+
+// ---------------------------------------------------------------- tiled conv
+// Runs a full conv as a matrix multiply. A workgroup computes 64 output
+// pixels × up to 64 output channels: it loads a block of weights and input
+// pixels into workgroup memory once, and every thread reuses them. Sums in
+// f16. convTiledBlocks picks the convs that use it.
+//
+// Based on webgpu-kernels/ai.onnx.Conv (conv-1x1-gemm-tiled-reg).
+
+const TILED_BN = 64; // output pixels per workgroup
+const TILED_WG_X = 16; // pixel lanes, 4 pixels each
+const TILED_BKG = 8; // K groups (vec4 of input lanes) per K tile
+/** Most channel blocks per workgroup (64 channels). */
+const TILED_MAX_BLOCKS = 16;
+/** Fewer workgroups than this leave the GPU idle. */
+const TILED_MIN_WORKGROUPS = 24;
+/** Outputs under TILED_WIDE_COUT channels need this many pixels for the tiled kernel. */
+const TILED_NARROW_MIN_PIXELS = 6400;
+const TILED_WIDE_COUT = 64;
+const TILED_MIN_COUT = 32;
+
+/** Channel blocks per workgroup: 16, or 8 or 4 for narrow outputs. */
+function tiledBlocks(cOut: number): number {
+  const co4 = Math.ceil(cOut / 4);
+  return co4 >= TILED_MAX_BLOCKS ? TILED_MAX_BLOCKS : co4 > 4 ? 8 : 4;
+}
+
+/** Channel blocks per workgroup when this conv uses the tiled kernel, else 0. */
+export function convTiledBlocks(cOut: number, outPixels: number): number {
+  const bmb = tiledBlocks(cOut);
+  const workgroups = Math.ceil(outPixels / TILED_BN) * Math.ceil(cOut / 4 / bmb);
+  const wins =
+    cOut >= TILED_MIN_COUT &&
+    workgroups >= TILED_MIN_WORKGROUPS &&
+    (cOut >= TILED_WIDE_COUT || outPixels >= TILED_NARROW_MIN_PIXELS);
+  return wins ? bmb : 0;
+}
+
+const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
+  const { kH, kW, stride, padding } = cfg;
+  const ci4 = Math.ceil(cfg.cIn / 4);
+  const co4 = Math.ceil(cfg.cOut / 4);
+  const kk = kH * kW;
+  const kGroups = kk * ci4;
+  const tiles = Math.ceil(kGroups / TILED_BKG);
+  const TILED_BMB = cfg.bmb ?? TILED_MAX_BLOCKS;
+  const TILED_THREADS = TILED_WG_X * (TILED_BMB / 2);
+  const TILED_A_LOADS = (TILED_BKG * TILED_BMB * 4) / TILED_THREADS;
+  const TILED_B_LOADS = (TILED_BKG * TILED_BN) / TILED_THREADS;
+  const tiledA = tgpu.workgroupVar(d.arrayOf(d.vec4h, TILED_BKG * TILED_BMB * 4));
+  const tiledB = tgpu.workgroupVar(d.arrayOf(d.vec4h, TILED_BKG * TILED_BN));
+  const epilogue = makeEpilogue(cfg);
+  return tgpu.computeFn({
+    in: { lid: d.builtin.localInvocationIndex, wid: d.builtin.workgroupId },
+    workgroupSize: [TILED_THREADS],
+  })(({ lid, wid }) => {
+    'use gpu';
+    const dims = convLayout.$.dims;
+    const hOut = d.u32((dims.h + 2 * padding - kH) / stride) + 1;
+    const wOut = d.u32((dims.w + 2 * padding - kW) / stride) + 1;
+    const nPix = hOut * wOut;
+    const tx = lid % TILED_WG_X;
+    const ty = d.u32(lid / TILED_WG_X);
+    const nBase = wid.x * TILED_BN;
+    const oBase = wid.y * TILED_BMB;
+
+    const accs = d.arrayOf(d.vec4h, 8)();
+
+    for (const t of std.range(tiles)) {
+      const kg0 = t * TILED_BKG;
+      // Weights for this K block. Zero past cOut or K.
+      for (const i of tgpu.unroll(std.range(TILED_A_LOADS))) {
+        const e = lid + i * TILED_THREADS;
+        const iL = e % 4;
+        const oBl = d.u32(e / 4) % TILED_BMB;
+        const kgl = d.u32(e / (4 * TILED_BMB));
+        const kg = kg0 + kgl;
+        const oB = oBase + oBl;
+        const tap = d.u32(kg / ci4);
+        const iB = kg % ci4;
+        let v = d.vec4h();
+        if (kg < kGroups && oB < co4) {
+          v = d.vec4h(convLayout.$.w[((oB * ci4 + iB) * kk + tap) * 4 + iL]!);
+        }
+        tiledA.$[e] = d.vec4h(v);
+      }
+      // Input pixels for this K block. Zero in the padding and past the last pixel.
+      for (const i of tgpu.unroll(std.range(TILED_B_LOADS))) {
+        const e = lid + i * TILED_THREADS;
+        const kgl = e % TILED_BKG;
+        const px = d.u32(e / TILED_BKG);
+        const kg = kg0 + kgl;
+        const n = nBase + px;
+        const tap = d.u32(kg / ci4);
+        const iB = kg % ci4;
+        const ky = d.u32(tap / kW);
+        const kx = tap % kW;
+        const oy = d.u32(n / wOut);
+        const ox = n % wOut;
+        const iyP = oy * stride + ky;
+        const ixP = ox * stride + kx;
+        let v = d.vec4h();
+        if (
+          kg < kGroups &&
+          n < nPix &&
+          iyP >= padding &&
+          iyP < dims.h + padding &&
+          ixP >= padding &&
+          ixP < dims.w + padding
+        ) {
+          v = d.vec4h(convLayout.$.x[((iyP - padding) * dims.w + (ixP - padding)) * ci4 + iB]!);
+        }
+        tiledB.$[kgl * TILED_BN + px] = d.vec4h(v);
+      }
+      std.workgroupBarrier();
+
+      for (const kgl of std.range(TILED_BKG)) {
+        const xs = d.arrayOf(d.vec4h, 4)();
+        for (const j of tgpu.unroll(std.range(4))) {
+          xs[j] = d.vec4h(tiledB.$[kgl * TILED_BN + tx * 4 + j]!);
+        }
+        for (const o of tgpu.unroll(std.range(2))) {
+          const wb = (kgl * TILED_BMB + ty * 2 + o) * 4;
+          const w0 = d.vec4h(tiledA.$[wb]!);
+          const w1 = d.vec4h(tiledA.$[wb + 1]!);
+          const w2 = d.vec4h(tiledA.$[wb + 2]!);
+          const w3 = d.vec4h(tiledA.$[wb + 3]!);
+          for (const j of tgpu.unroll(std.range(4))) {
+            const xv = xs[j]!;
+            accs[o * 4 + j] = accs[o * 4 + j]! + xv.x * w0 + xv.y * w1 + xv.z * w2 + xv.w * w3;
+          }
+        }
+      }
+      std.workgroupBarrier();
+    }
+
+    for (const o of tgpu.unroll(std.range(2))) {
+      const oB = oBase + ty * 2 + o;
+      for (const j of tgpu.unroll(std.range(4))) {
+        const n = nBase + tx * 4 + j;
+        if (oB < co4 && n < nPix) {
+          convLayout.$.out[n * dims.outC4 + dims.outOffB + oB] = epilogue(
+            d.vec4h(accs[o * 4 + j]!),
+            oB,
+            n,
+          );
+        }
+      }
+    }
   });
 };
 
@@ -274,10 +429,29 @@ export const makeConv1x1SmallKernel = (cfg: Conv2dHwc4Cfg) => {
   });
 };
 
+/** Maps this narrow or narrower use one column per thread, to keep enough threads. */
+const DW_NARROW_MAX_W = 14;
+/** Kernels this wide use two columns, even on narrow maps. */
+const DW_WIDE_KERNEL = 7;
+
+/** Output columns per depthwise thread. Two columns share input loads; one
+ *  gives more threads. */
+export function depthwiseCols(kW: number, wOut: number): number {
+  return kW === 1 || (wOut <= DW_NARROW_MAX_W && kW < DW_WIDE_KERNEL) ? 1 : 2;
+}
+
+/** Depthwise conv. Each thread computes 1 or 2 neighbouring output pixels of
+ *  one channel block, and neighbouring threads take neighbouring channel
+ *  blocks, so memory reads line up. Each input row is loaded once and reused
+ *  by every tap. Sums in f32.
+ *
+ *  Based on webgpu-kernels/ai.onnx.Conv (conv2d-grouped-large-w4). */
 const makeConvDwKernel = (cfg: Conv2dHwc4Cfg) => {
   const { kH, kW, stride, padding } = cfg;
+  const cols = cfg.dwCols ?? 1;
   const c4n = Math.ceil(cfg.cOut / 4);
   const kk = kH * kW;
+  const span = kW + (cols - 1) * stride;
   const epilogue = makeEpilogue(cfg);
   return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
@@ -287,32 +461,48 @@ const makeConvDwKernel = (cfg: Conv2dHwc4Cfg) => {
     const dims = convLayout.$.dims;
     const hOut = d.u32((dims.h + 2 * padding - kH) / stride) + 1;
     const wOut = d.u32((dims.w + 2 * padding - kW) / stride) + 1;
+    const wRuns = d.u32((wOut + cols - 1) / cols);
     const idx = flatIndex(gid);
-    if (idx >= c4n * hOut * wOut) {
+    if (idx >= c4n * hOut * wRuns) {
       return;
     }
-    const ox = idx % wOut;
-    const oy = d.u32(idx / wOut) % hOut;
-    const cB = d.u32(idx / (wOut * hOut));
+    const cB = idx % c4n;
+    const run = d.u32(idx / c4n) % wRuns;
+    const oy = d.u32(idx / (c4n * wRuns));
+    const ox0 = run * cols;
 
-    let acc = d.vec4h();
-    for (let ky = d.u32(0); ky < kH; ky++) {
+    const accs = d.arrayOf(d.vec4f, cols)();
+    const xs = d.arrayOf(d.vec4f, span)();
+    for (const ky of tgpu.unroll(std.range(kH))) {
       const iyP = oy * stride + ky;
       if (iyP >= padding && iyP < dims.h + padding) {
-        const iy = iyP - padding;
-        for (let kx = d.u32(0); kx < kW; kx++) {
-          const ixP = ox * stride + kx;
+        const rowBase = (iyP - padding) * dims.w;
+        for (const s of tgpu.unroll(std.range(span))) {
+          const ixP = ox0 * stride + s;
+          xs[s] = d.vec4f();
           if (ixP >= padding && ixP < dims.w + padding) {
-            const ix = ixP - padding;
-            acc +=
-              convLayout.$.w[cB * kk + ky * kW + kx]! *
-              convLayout.$.x[(iy * dims.w + ix) * c4n + cB]!;
+            xs[s] = d.vec4f(convLayout.$.x[(rowBase + ixP - padding) * c4n + cB]!);
+          }
+        }
+        for (const kx of tgpu.unroll(std.range(kW))) {
+          const wv = d.vec4f(convLayout.$.w[cB * kk + d.u32(ky * kW + kx)]!);
+          for (const c of tgpu.unroll(std.range(cols))) {
+            accs[c] = accs[c]! + wv * xs[kx + c * stride]!;
           }
         }
       }
     }
-    const pxOut = oy * wOut + ox;
-    convLayout.$.out[pxOut * dims.outC4 + dims.outOffB + cB] = epilogue(acc, cB, pxOut);
+    for (const c of tgpu.unroll(std.range(cols))) {
+      const ox = ox0 + c;
+      if (ox < wOut) {
+        const pxOut = oy * wOut + ox;
+        convLayout.$.out[pxOut * dims.outC4 + dims.outOffB + cB] = epilogue(
+          d.vec4h(accs[c]!),
+          cB,
+          pxOut,
+        );
+      }
+    }
   });
 };
 
@@ -328,6 +518,9 @@ export function createConv2dHwc4Pipeline(root: TgpuRoot, cfg: Conv2dHwc4Cfg) {
   // global id; the two signatures do not unify in one expression.
   if (cfg.kind === 3) {
     return root.createComputePipeline({ compute: makeConv1x1SmallKernel(cfg) });
+  }
+  if (cfg.kind === 4) {
+    return root.createComputePipeline({ compute: makeConvTiledKernel(cfg) });
   }
   const kernel =
     cfg.kind === 1
@@ -372,13 +565,31 @@ export function conv2dHwc4Handle(
   }
   const hOut = Math.floor((h + 2 * cfg.padding - cfg.kH) / cfg.stride) + 1;
   const wOut = Math.floor((w + 2 * cfg.padding - cfg.kW) / cfg.stride) + 1;
-  const name = cfg.kind === 2 ? 'conv2d_hwc4_dw' : 'conv2d_hwc4';
+  if (cfg.kind === 4) {
+    return makeHandle(
+      pipeline,
+      'conv2d_hwc4_tiled',
+      bindGroup,
+      [Math.ceil((hOut * wOut) / TILED_BN), Math.ceil(co4 / (cfg.bmb ?? TILED_MAX_BLOCKS))],
+      `conv2d_hwc4_tiled ${shape}`,
+    );
+  }
+  if (cfg.kind === 2) {
+    const threads = co4 * hOut * Math.ceil(wOut / (cfg.dwCols ?? 1));
+    return makeHandle(
+      pipeline,
+      'conv2d_hwc4_dw',
+      bindGroup,
+      Math.ceil(threads / WORKGROUP_SIZE),
+      `conv2d_hwc4_dw ${shape}`,
+    );
+  }
   return makeHandle(
     pipeline,
-    name,
+    'conv2d_hwc4',
     bindGroup,
     Math.ceil((co4 * hOut * wOut) / WORKGROUP_SIZE),
-    `${name} ${shape}`,
+    `conv2d_hwc4 ${shape}`,
   );
 }
 
