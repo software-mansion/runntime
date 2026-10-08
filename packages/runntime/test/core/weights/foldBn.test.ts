@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { foldBnIntoConv } from '../../../src/core/weights/foldBn.ts';
-import {
-  derivedTensor,
-  memoryStateDict,
-  type MemoryStateDict,
-} from '../../../src/core/weights/safetensors.ts';
+import { memoryStateDict, type MemoryStateDict } from '../../../src/core/weights/safetensors.ts';
 
 /** Values as bf16 bits. Every value used here is exact in bf16. memoryStateDict
  *  decodes bf16 into a fresh array on each read, like a tensor from a file. */
@@ -67,13 +63,14 @@ describe('foldBnIntoConv', () => {
   });
 
   it('reads nothing until the weight or bias is read, then folds once', async () => {
-    const gamma = vi.fn(async () => new Float32Array([2, 0.5]));
     const sd = memoryStateDict({ 'conv.weight': conv, ...bn });
-    sd.tensors.set('bn.weight', derivedTensor([2], gamma));
+    // bf16 tensors decode on every read and never cache, so counting gamma's
+    // reads counts how many times the fold ran
+    const gammaReads = vi.spyOn(sd.tensors.get('bn.weight')!, 'f32');
     foldBnIntoConv(sd, 'conv', 'bn', EPS);
-    expect(gamma).not.toHaveBeenCalled();
+    expect(gammaReads).not.toHaveBeenCalled();
     await Promise.all([sd.tensors.get('conv.weight')!.f32(), sd.tensors.get('conv.bias')!.f32()]);
-    expect(gamma).toHaveBeenCalledOnce();
+    expect(gammaReads).toHaveBeenCalledOnce();
   });
 
   it('does nothing when the batch norm is already folded', () => {
