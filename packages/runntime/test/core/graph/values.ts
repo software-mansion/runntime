@@ -1,6 +1,5 @@
-/** Stand-in inputs for op tests. Ops only read their inputs' shapes, so an
- *  input is a pending Value with no op behind it, and nothing is ever
- *  evaluated. */
+/** Stand-in inputs for graph tests. Ops only read their inputs' shapes, so an
+ *  input is a pending Value with no op behind it, and no GPU is involved. */
 import {
   hwc4Meta,
   materialized,
@@ -33,8 +32,8 @@ export function quantWeight(rows: number, cols: number, bits: 8 | 4): Value {
   return pending({ elems, dtype: 'quantW', dims: [rows, cols] }, 'reshape', []);
 }
 
-/** A caller-owned input that is already on the GPU. Only writeRows checks for
- *  one, and it never touches the buffer, so a stub stands in for it. */
+/** A caller-owned input that is already on the GPU. Nothing reads the buffer,
+ *  only its identity matters, so a stub stands in for it. */
 export function materializedInput(dims: number[], dtype: EagerDtype = 'f32'): Value {
   return materialized(meta(dims, dtype), {} as GpuBufferRef);
 }
