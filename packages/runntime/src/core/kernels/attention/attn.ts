@@ -265,7 +265,8 @@ export function attnSplitLayoutFor(elem: Elem): ReturnType<typeof makeAttnSplitL
 
 export const attnRowsSplitLayout = attnSplitLayoutFor(F32_ELEM);
 
-interface AttnGeoCfg {
+/** Per-layer attention settings the prefill kernels are built from. */
+export interface AttnGeoCfg {
   qHeads: number;
   kvHeads: number;
   headDim: number;

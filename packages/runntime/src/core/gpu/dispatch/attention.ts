@@ -24,10 +24,16 @@ import {
   createAttnDecodePipeline,
   createAttnDecodeSplitPipeline,
 } from '../../kernels/attention/attnDecode.ts';
+import {
+  attnFlashHandle,
+  attnFlashLanes,
+  createAttnFlashPipeline,
+} from '../../kernels/attention/attnFlash.ts';
 import { createRopePipeline, ropeHandle } from '../../kernels/attention/rope.ts';
 import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
-type AttnRoute = 'decode' | 'decodeSplit' | 'batch' | 'rows' | 'rowsSplit' | 'rowsSubgroupSplit';
+type AttnRoute =
+  'decode' | 'decodeSplit' | 'batch' | 'rows' | 'rowsSplit' | 'rowsSubgroupSplit' | 'flash';
 
 /** Chunks per row in the split routes. With segments the longest segment
  *  sets the count; the subgroup pair also serves rows below the chunk size
@@ -65,6 +71,8 @@ export const attnSpec = defineSpec({
     let route: AttnRoute;
     if (qLen === 1) {
       route = kvLen > ATTN_DECODE_CHUNK ? 'decodeSplit' : 'decode';
+    } else if (ctx.subgroupsOk && attnFlashLanes(attrs.headDim) > 0) {
+      route = 'flash';
     } else if (Math.ceil(rowHeads / WORKGROUP_SIZE) > MAX_WORKGROUPS_PER_DIM) {
       route = 'batch';
     } else if (!f16 && ctx.subgroupsOk && rowHeads <= MAX_WORKGROUPS_PER_DIM && splitFits) {
@@ -102,6 +110,8 @@ export const attnSpec = defineSpec({
         return { route: cfg.route, main: createAttnPipeline(root, cfg, elem) };
       case 'rows':
         return { route: cfg.route, main: createAttnRowsPipeline(root, cfg, elem) };
+      case 'flash':
+        return { route: cfg.route, main: createAttnFlashPipeline(root, cfg, elem) };
       case 'rowsSplit':
         return {
           route: cfg.route,
@@ -151,6 +161,8 @@ export const attnSpec = defineSpec({
         return [attnHandle(ctx.root, pipeline.main, args, bufs, elem)];
       case 'rows':
         return [attnRowsHandle(ctx.root, pipeline.main, args, bufs, elem)];
+      case 'flash':
+        return [attnFlashHandle(ctx.root, pipeline.main, args, bufs, elem)];
       case 'rowsSplit':
       case 'rowsSubgroupSplit': {
         const chunks = rowsChunks(effKvLen);
