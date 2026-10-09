@@ -1,6 +1,8 @@
-/** f16 matmul with 32×32 tiles: out = act(a·b + bias) + addend, for K and N
- *  multiples of 4. A workgroup loads 32×32 blocks of a and b into workgroup
- *  memory and every thread reuses them. Sums in f32.
+/** Matmul with 32×32 tiles: out = act(a·b + bias) + addend, for K and N
+ *  multiples of 4, in f16 or f32. A workgroup loads 32×32 blocks of a and b
+ *  into workgroup memory and every thread reuses them. Sums in f32.
+ *
+ *  Rows of a can be further apart than K, which lets conv1d run on this kernel.
  *
  *  Based on webgpu-kernels/ai.onnx.MatMul (matmul-notrans-vec4-tiled-reg). */
 
@@ -9,17 +11,30 @@ import type { TgpuRoot } from 'typegpu';
 import { type FloatBuffer, type KernelHandle, makeHandle } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
+import { type Elem, F32_ELEM } from '../elem.ts';
 
 const Dims = d.struct({ m: d.u32 });
 
-const layout = tgpu.bindGroupLayout({
-  a: { storage: d.arrayOf(d.vec4h), access: 'readonly' },
-  b: { storage: d.arrayOf(d.vec4h), access: 'readonly' },
-  bias: { storage: d.arrayOf(d.vec4h), access: 'readonly' }, // [N/4]; dead when hasBias=0
-  addend: { storage: d.arrayOf(d.vec4h), access: 'readonly' }, // [M,N/4]; dead when hasAdd=0
-  out: { storage: d.arrayOf(d.vec4h), access: 'mutable' },
-  dims: { uniform: Dims },
-});
+function makeLayout(elem: Elem) {
+  return tgpu.bindGroupLayout({
+    a: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
+    b: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
+    bias: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [N/4]; dead when hasBias=0
+    addend: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [M,N/4]; dead when hasAdd=0
+    out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
+    dims: { uniform: Dims },
+  });
+}
+
+const layouts = new Map<string, ReturnType<typeof makeLayout>>();
+function layoutFor(elem: Elem): ReturnType<typeof makeLayout> {
+  let l = layouts.get(elem.key);
+  if (!l) {
+    l = makeLayout(elem);
+    layouts.set(elem.key, l);
+  }
+  return l;
+}
 
 // 32×32 output tile per workgroup, 8×8 threads, 32 K per block.
 const BM = 32;
@@ -31,33 +46,39 @@ const BK = 32;
 /** At K = 32 there is one block and nothing to reuse. */
 const MIN_K = 64;
 
-/** Whether an f16 [M,K]·[K,N] matmul can use this kernel. */
-export function matmulTiledF16Eligible(k: number, n: number): boolean {
+/** Whether a [M,K]·[K,N] matmul can use this kernel. */
+export function matmulTiledVec4Eligible(k: number, n: number): boolean {
   return k >= MIN_K && k % 4 === 0 && n % 4 === 0;
 }
 
-/** K and N are built into the shader; M comes from the uniform. */
-export interface MatmulTiledF16Cfg {
+/** K, N and the row stride of a are built into the shader; M comes from the
+ *  uniform. */
+export interface MatmulTiledVec4Cfg {
   k: number;
   n: number;
   hasBias: number;
   hasAdd: number;
   act?: number;
+  /** Distance between rows of a, in values. K when omitted. */
+  aStride?: number;
 }
 
-function makeMatmulTiledF16Kernel(cfg: MatmulTiledF16Cfg) {
+function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
   const { k, n, hasBias, hasAdd } = cfg;
+  const layout = layoutFor(elem);
+  const storeVec4 = elem.vec4;
   const lanes = WGC * WGR;
   const tm = BM / WGR;
   const bk4 = BK / 4;
   const bn4 = BN / 4;
   const k4 = k / 4;
+  const aStride4 = (cfg.aStride ?? k) / 4;
   const n4 = n / 4;
   const aVecs = (BM * bk4) / lanes;
   const bVecs = (BK * bn4) / lanes;
   const tiles = Math.ceil(k / BK);
-  const tileA = tgpu.workgroupVar(d.arrayOf(d.vec4h, BM * bk4));
-  const tileB = tgpu.workgroupVar(d.arrayOf(d.vec4h, BK * bn4));
+  const tileA = tgpu.workgroupVar(d.arrayOf(elem.vec4, BM * bk4));
+  const tileB = tgpu.workgroupVar(d.arrayOf(elem.vec4, BK * bn4));
   return tgpu.computeFn({
     in: { lid: d.builtin.localInvocationIndex, wid: d.builtin.workgroupId },
     workgroupSize: [lanes],
@@ -76,21 +97,21 @@ function makeMatmulTiledF16Kernel(cfg: MatmulTiledF16Cfg) {
         const e = lid + i * lanes;
         const am = mBase + d.u32(e / bk4);
         const ak4 = t * bk4 + (e % bk4);
-        let v = d.vec4h();
+        let v = storeVec4();
         if (am < m && ak4 < k4) {
-          v = d.vec4h(layout.$.a[am * k4 + ak4]!);
+          v = storeVec4(layout.$.a[am * aStride4 + ak4]!);
         }
-        tileA.$[e] = d.vec4h(v);
+        tileA.$[e] = storeVec4(v);
       }
       for (const i of tgpu.unroll(std.range(bVecs))) {
         const e = lid + i * lanes;
         const bk = t * BK + d.u32(e / bn4);
         const bc4 = nBase4 + (e % bn4);
-        let v = d.vec4h();
+        let v = storeVec4();
         if (bk < k && bc4 < n4) {
-          v = d.vec4h(layout.$.b[bk * n4 + bc4]!);
+          v = storeVec4(layout.$.b[bk * n4 + bc4]!);
         }
-        tileB.$[e] = d.vec4h(v);
+        tileB.$[e] = storeVec4(v);
       }
       std.workgroupBarrier();
 
@@ -120,24 +141,28 @@ function makeMatmulTiledF16Kernel(cfg: MatmulTiledF16Cfg) {
           if (hasAdd > 0) {
             v += d.vec4f(layout.$.addend[row * n4 + c4]!);
           }
-          layout.$.out[row * n4 + c4] = d.vec4h(v);
+          layout.$.out[row * n4 + c4] = storeVec4(v);
         }
       }
     }
   });
 }
 
-/** One pipeline per K, N, epilogue and activation. */
-export function createMatmulTiledF16Pipeline(root: TgpuRoot, cfg: MatmulTiledF16Cfg) {
+/** One pipeline per dtype, K, N, row stride, epilogue and activation. */
+export function createMatmulTiledVec4Pipeline(
+  root: TgpuRoot,
+  cfg: MatmulTiledVec4Cfg,
+  elem: Elem = F32_ELEM,
+) {
   return root
     .with(actSlot, activationFor(cfg.act))
-    .createComputePipeline({ compute: makeMatmulTiledF16Kernel(cfg) });
+    .createComputePipeline({ compute: makeMatmulTiledVec4Kernel(cfg, elem) });
 }
 
 /** One workgroup per 32×32 output tile. */
-export function matmulTiledF16Handle(
+export function matmulTiledVec4Handle(
   root: TgpuRoot,
-  pipeline: ReturnType<typeof createMatmulTiledF16Pipeline>,
+  pipeline: ReturnType<typeof createMatmulTiledVec4Pipeline>,
   m: number,
   n: number,
   buffers: {
@@ -147,14 +172,15 @@ export function matmulTiledF16Handle(
     bias?: FloatBuffer;
     addend?: FloatBuffer;
   },
+  elem: Elem = F32_ELEM,
 ): KernelHandle {
   const dims = cachedUniform(root, Dims, { m });
   // Absent epilogue operands alias `a`; those pipelines never read them.
-  const bindGroup = cachedBindGroup(root, layout, {
+  const bindGroup = cachedBindGroup(root, layoutFor(elem), {
     ...buffers,
     bias: buffers.bias ?? buffers.a,
     addend: buffers.addend ?? buffers.a,
     dims,
   });
-  return makeHandle(pipeline, 'matmulTiledF16', bindGroup, [Math.ceil(n / BN), Math.ceil(m / BM)]);
+  return makeHandle(pipeline, 'matmulTiledVec4', bindGroup, [Math.ceil(n / BN), Math.ceil(m / BM)]);
 }
