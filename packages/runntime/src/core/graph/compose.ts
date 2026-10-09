@@ -2,17 +2,8 @@ import type { SlotAct } from './ops/shared.ts';
 /** Higher-level ops composed from core primitives rather than their own
  *  kernels — the nn-functional layer. Model-specific ones compose in zoo. */
 
-import { add, astype, matmul, mean, meanSquare, mul, rsqrt, sub, transpose } from './ops.ts';
+import { add, matmul, mean, mul, rsqrt, sub, transpose } from './ops.ts';
 import type { Value } from './value.ts';
-
-/** RMSNorm(x[M,N], weight[N], eps) = x * rsqrt(mean(x², -1) + eps) * weight. */
-export function rmsNorm(x: Value, weight: Value, eps = 1e-6): Value {
-  const ms = meanSquare(x); // [M,1] f32 — squares AND holds the sum in f32
-  // rsqrt stays in f32 too; only the finished scale factor narrows, and that
-  // one is small enough to survive (rsqrt(2.9e7) = 1.9e-4).
-  const denom = astype(rsqrt(add(ms, eps)), x.shape.dtype === 'f16' ? 'f16' : 'f32');
-  return mul(mul(x, denom), weight); // col-broadcast then row-broadcast
-}
 
 /** GroupNorm restricted to numGroups = 1: statistics are global over the whole
  *  [M,N] map, not per-row, and the affine is per-column. Variance is biased,

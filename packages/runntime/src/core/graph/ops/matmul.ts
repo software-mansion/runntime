@@ -2,6 +2,8 @@
  *  matmulGather, and the fused gemv+argmax argmaxDot. */
 
 import { pending, Value } from '../value.ts';
+import { cat } from './shape.ts';
+import { MOE_SLOTS } from '../../kernels/matmul/moeQuantW.ts';
 import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from './shared.ts';
 
 /** Options for matmul. `bias` and `addend` are fused epilogue adds, not
@@ -142,84 +144,14 @@ function matmulQuantW(
   );
 }
 
-/** matmulGather's quantW path: out[i] = a[i] · dequant(W[e_i]) + bias[e_i],
- *  with e_i read per row on the GPU. */
-function matmulGatherQuantW(
-  a: Value,
-  w: Value,
-  scales: Value,
-  bias: Value,
-  expertIdx: Value,
-  opts: { bits: 8 | 4; groupSize: number },
-): Value {
-  const [m, k] = want2d('matmulGather', a, ['f32']);
-  const wd = w.shape.dims;
-  if (!wd || wd.length !== 2) {
-    throw new Error('matmulGather: quantW weight must be 2D');
-  }
-  const [r, n] = [wd[0]!, wd[1]!];
-  const { bits, groupSize } = opts;
-  if (bits !== 8 && bits !== 4) throw new Error(`matmulGather: bits must be 8 or 4, got ${bits}`);
-  const perU32 = bits === 8 ? 4 : 8;
-  if (n % perU32 !== 0) throw new Error(`matmulGather: cols ${n} must be divisible by ${perU32}`);
-  if (w.shape.elems !== (r * n) / perU32) {
-    throw new Error(`matmulGather: quantW weight elems ${w.shape.elems} != rows*cols/${perU32}`);
-  }
-  if (r % k !== 0) throw new Error(`matmulGather: w rows ${r} not a multiple of K ${k}`);
-  if (groupSize <= 0 || k % groupSize !== 0)
-    throw new Error(`matmulGather: groupSize ${groupSize} must divide K ${k}`);
-  if (k % 4 !== 0 || groupSize % 4 !== 0) {
-    throw new Error(
-      `matmulGather: K ${k} and groupSize ${groupSize} must be multiples of 4 (blocked-unit tiles)`,
-    );
-  }
-  if (scales.shape.dtype !== 'f32') throw new Error('matmulGather: scales must be f32');
-  if (bias.shape.dtype !== 'f32') throw new Error('matmulGather: bias must be f32');
-  if (expertIdx.shape.dtype !== 'f32' || expertIdx.shape.elems !== m) {
-    throw new Error(
-      `matmulGather: expertIdx must be f32 with ${m} elems, got ${expertIdx.shape.elems}`,
-    );
-  }
-  return pending(
-    { elems: m * n, dtype: 'f32', dims: [m, n] },
-    'matmulGatherQuantW',
-    [a, w, scales, bias, expertIdx],
-    undefined,
-    [bits, groupSize],
-  );
-}
-
 /** Indexed matmul plus bias: out[i] = a[i] · W[e_i] + bias[e_i], with e_i
  *  looked up per row, so routing stays on the GPU with no readback. MLX calls
  *  this gather_qmm.
  *
- *  a and the fused w [E·K, N] share one float dtype, or w is quantW, which
- *  additionally needs scales, bits and groupSize. */
-export function matmulGather(
-  a: Value,
-  w: Value,
-  expertIdx: Value,
-  opts: { bias: Value; scales?: Value; bits?: 8 | 4; groupSize?: number },
-): Value {
-  if (w.shape.dtype === 'f32' || w.shape.dtype === 'f16') {
-    if (opts.scales || opts.bits || opts.groupSize) {
-      throw new Error('matmulGather: scales/bits/groupSize apply to quantW weights only');
-    }
-    return matmulGatherFloat(a, w, opts.bias, expertIdx);
-  }
-  if (w.shape.dtype === 'quantW') {
-    const { scales, bits, groupSize } = opts;
-    if (!scales || !bits || !groupSize) {
-      throw new Error('matmulGather: quantW weights need scales, bits and groupSize');
-    }
-    return matmulGatherQuantW(a, w, scales, opts.bias, expertIdx, { bits, groupSize });
-  }
-  throw new Error(`matmulGather: w must be a float or quantW weight, got ${w.shape.dtype}`);
-}
-
-/** matmulGather's float path. expertIdx holds row numbers, so it stays f32
- *  whatever the model is. N must be divisible by 4. */
-function matmulGatherFloat(a: Value, w: Value, bias: Value, expertIdx: Value): Value {
+ *  a, the fused w [E·K, N] and bias share one float dtype. expertIdx holds
+ *  row numbers, so it stays f32 whatever the model is. N must be divisible
+ *  by 4. */
+export function matmulGather(a: Value, w: Value, expertIdx: Value, opts: { bias: Value }): Value {
   const [m, k, dtype] = want2d('matmulGather', a, FLOAT_DTYPES);
   const [r, n, wDtype] = want2d('matmulGather.w', w, FLOAT_DTYPES);
   if (wDtype !== dtype) {
@@ -227,15 +159,125 @@ function matmulGatherFloat(a: Value, w: Value, bias: Value, expertIdx: Value): V
   }
   if (n % 4 !== 0) throw new Error(`matmulGather: n ${n} must be divisible by 4`);
   if (r % k !== 0) throw new Error(`matmulGather: w rows ${r} not a multiple of K ${k}`);
-  if (bias.shape.dtype !== dtype) {
-    throw new Error(`matmulGather: bias must be ${dtype}, got ${bias.shape.dtype}`);
+  if (opts.bias.shape.dtype !== dtype) {
+    throw new Error(`matmulGather: bias must be ${dtype}, got ${opts.bias.shape.dtype}`);
   }
   if (expertIdx.shape.dtype !== 'f32' || expertIdx.shape.elems !== m) {
     throw new Error(
       `matmulGather: expertIdx must be f32 with ${m} elems, got ${expertIdx.shape.elems}`,
     );
   }
-  return pending({ elems: m * n, dtype, dims: [m, n] }, 'matmulGather', [a, w, bias, expertIdx]);
+  return pending({ elems: m * n, dtype, dims: [m, n] }, 'matmulGather', [
+    a,
+    w,
+    opts.bias,
+    expertIdx,
+  ]);
+}
+
+/** One routed layer's weights for all E experts: quantW w [E·K, N], f32
+ *  scales [E·KG, N] and f32 bias [E, N]. */
+export interface QuantExpertWeight {
+  w: Value;
+  scales: Value;
+  bias: Value;
+}
+
+/** MoE input projections and clamped SwiGLU for top-4 routing. route is
+ *  topk's [T, 8]: 4 expert ids, then 4 gate weights. For token t and slot s
+ *  with expert e, row t·4 + s of the [T·4, N] result is
+ *  swiglu(x[t]·glu.w[e] + glu.bias[e], x[t]·lin.w[e] + lin.bias[e]). */
+export function moeUp(
+  x: Value,
+  route: Value,
+  glu: QuantExpertWeight,
+  lin: QuantExpertWeight,
+  opts: { bits: 8 | 4; groupSize: number },
+): Value {
+  const [t] = want2d('moeUp', x, ['f32']);
+  const n = checkExpertWeight('moeUp', glu, x, route, t, opts);
+  checkExpertWeight('moeUp', lin, x, route, t, opts);
+  if (lin.w.shape.dims![0] !== glu.w.shape.dims![0] || lin.w.shape.dims![1] !== n) {
+    throw new Error('moeUp: glu and lin weights must have the same shape');
+  }
+  return pending(
+    { elems: t * MOE_SLOTS * n, dtype: 'f32', dims: [t * MOE_SLOTS, n] },
+    'moeUp',
+    [x, route, glu.w, glu.scales, lin.w, lin.scales, cat([glu.bias, lin.bias], 0)],
+    undefined,
+    [opts.bits, opts.groupSize],
+  );
+}
+
+/** MoE output projection. Mixes the 4 slots by gate weight and adds the
+ *  residual: out[t] = residual[t] + Σ_s gate_s·(act[t·4 + s]·w[e_s] + bias[e_s]).
+ *  act is moeUp's [T·4, K] result; out is [T, N]. */
+export function moeDown(
+  act: Value,
+  route: Value,
+  out: QuantExpertWeight,
+  residual: Value,
+  opts: { bits: 8 | 4; groupSize: number },
+): Value {
+  const [rows] = want2d('moeDown', act, ['f32']);
+  if (rows % MOE_SLOTS !== 0) {
+    throw new Error(`moeDown: act rows ${rows} must be a multiple of ${MOE_SLOTS}`);
+  }
+  const t = rows / MOE_SLOTS;
+  const n = checkExpertWeight('moeDown', out, act, route, t, opts);
+  if (residual.shape.dtype !== 'f32' || residual.shape.elems !== t * n) {
+    throw new Error(`moeDown: residual must be f32 [${t}, ${n}]`);
+  }
+  return pending(
+    { elems: t * n, dtype: 'f32', dims: [t, n] },
+    'moeDown',
+    [act, route, out.w, out.scales, out.bias, residual],
+    undefined,
+    [opts.bits, opts.groupSize],
+  );
+}
+
+/** Checks one routed layer's weights against its input a [*, K] and the
+ *  route of t tokens. Returns N. */
+function checkExpertWeight(
+  op: string,
+  { w, scales, bias }: QuantExpertWeight,
+  a: Value,
+  route: Value,
+  t: number,
+  opts: { bits: 8 | 4; groupSize: number },
+): number {
+  const { bits, groupSize } = opts;
+  if (bits !== 8 && bits !== 4) throw new Error(`${op}: bits must be 8 or 4, got ${bits}`);
+  const k = a.shape.dims![1]!;
+  const wd = w.shape.dims;
+  if (w.shape.dtype !== 'quantW' || wd?.length !== 2 || wd[0]! % k !== 0) {
+    throw new Error(`${op}: w must be a quantW [E·${k}, N] weight`);
+  }
+  const [r, n] = [wd[0]!, wd[1]!];
+  const experts = r / k;
+  if (w.shape.elems !== (r * n * bits) / 32) {
+    throw new Error(`${op}: quantW weight elems ${w.shape.elems} != rows·cols·${bits}/32`);
+  }
+  if (k % 4 !== 0 || n % 4 !== 0)
+    throw new Error(`${op}: K ${k} and N ${n} must be multiples of 4`);
+  if (groupSize <= 0 || groupSize % 4 !== 0 || k % groupSize !== 0) {
+    throw new Error(`${op}: groupSize ${groupSize} must be a multiple of 4 that divides K ${k}`);
+  }
+  if (scales.shape.dtype !== 'f32' || scales.shape.elems !== (experts * k * n) / groupSize) {
+    throw new Error(`${op}: scales must be f32 [${(experts * k) / groupSize}, ${n}]`);
+  }
+  if (bias.shape.dtype !== 'f32' || bias.shape.elems !== experts * n) {
+    throw new Error(`${op}: bias must be f32 [${experts}, ${n}]`);
+  }
+  if (
+    route.shape.dtype !== 'f32' ||
+    route.shape.dims?.[0] !== t ||
+    route.shape.dims[1] !== 2 * MOE_SLOTS
+  ) {
+    throw new Error(`${op}: route must be topk's f32 [${t}, ${2 * MOE_SLOTS}] output`);
+  }
+  return n;
 }
 
 /** Fused gemv and argmax for greedy decoding: w [V,N] · x [1,N] to the argmax

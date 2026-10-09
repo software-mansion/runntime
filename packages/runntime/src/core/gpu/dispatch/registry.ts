@@ -20,7 +20,7 @@ import {
   swigluSpec,
   tanhSpec,
 } from './elementwise.ts';
-import { layerNormSpec, meanSpec, meanSquareSpec, softmaxSpec, topkSpec } from './reduce.ts';
+import { layerNormSpec, meanSpec, rmsNormSpec, softmaxSpec, topkSpec } from './reduce.ts';
 import { attnSpec, ropeSpec } from './attention.ts';
 import {
   avgPool2dHwc4Spec,
@@ -40,10 +40,11 @@ import {
 import { ssmScanMergeSpec, ssmScanProjectSpec, ssmSelectiveScanSpec } from './ssm.ts';
 import {
   argmaxDotSpec,
-  matmulGatherQuantWSpec,
   matmulGatherSpec,
   matmulQuantWSpec,
   matmulSpec,
+  moeDownSpec,
+  moeUpSpec,
 } from './matmul.ts';
 import {
   astypeSpec,
@@ -79,8 +80,9 @@ export const specs = {
   // matmul
   matmul: matmulSpec,
   matmulQuantW: matmulQuantWSpec,
-  matmulGatherQuantW: matmulGatherQuantWSpec,
   matmulGather: matmulGatherSpec,
+  moeUp: moeUpSpec,
+  moeDown: moeDownSpec,
   argmaxDot: argmaxDotSpec,
   // attention
   attn: attnSpec,
@@ -106,8 +108,8 @@ export const specs = {
   // reduce
   softmax: softmaxSpec,
   mean: meanSpec,
-  meanSquare: meanSquareSpec,
   layerNorm: layerNormSpec,
+  rmsNorm: rmsNormSpec,
   topk: topkSpec,
   // shape
   astype: astypeSpec,

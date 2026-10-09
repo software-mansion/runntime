@@ -1,6 +1,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { flatWorkgroupId, type FloatBuffer, type KernelHandle, makeHandle } from '../common.ts';
+import { cachedBindGroup } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
@@ -121,6 +122,133 @@ export function matmulGemvHandle(
   });
   // One workgroup per TN output columns.
   return makeHandle(pipeline, 'matmulGemv', bindGroup, Math.ceil(n / TN));
+}
+
+// ── vec4 single-row variant (m == 1, n % 4 == 0) ─────────────────────────
+
+/** Single-row matmul for N a multiple of 4. Each thread computes 4 output
+ *  columns over every 32nd row of K, reading b as vec4. A fixed tree in
+ *  workgroup memory adds up the 32 partial sums, so every run gives the same
+ *  result.
+ *
+ *  Based on webgpu-kernels/ai.onnx.MatMul (matmul-vector-matrix-vec4). */
+const VEC_LANES = 8; // 4-column groups per workgroup
+const VEC_SLICES = 32; // threads that split K for one column group
+
+/** Whether a single-row matmul can take the vec4 route. */
+export function matmulGemvVec4Eligible(n: number): boolean {
+  return n % 4 === 0;
+}
+
+interface GemvVec4Cfg {
+  k: number;
+  n: number;
+  hasBias: number;
+  hasAdd: number;
+}
+
+function makeGemvVec4Layout(elem: Elem) {
+  return tgpu.bindGroupLayout({
+    a: { storage: d.arrayOf(elem.scalar), access: 'readonly' }, // [1, K]
+    b: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [K, N/4]
+    bias: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [N/4]; dead when hasBias=0
+    addend: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [1, N/4]; dead when hasAdd=0
+    out: { storage: d.arrayOf(elem.vec4), access: 'mutable' }, // [1, N/4]
+  });
+}
+
+const vec4Layouts = new Map<string, ReturnType<typeof makeGemvVec4Layout>>();
+function gemvVec4Layout(elem: Elem): ReturnType<typeof makeGemvVec4Layout> {
+  let l = vec4Layouts.get(elem.key);
+  if (!l) {
+    l = makeGemvVec4Layout(elem);
+    vec4Layouts.set(elem.key, l);
+  }
+  return l;
+}
+
+const SLICE_STRIDES = Array.from(
+  { length: Math.log2(VEC_SLICES) },
+  (_, level) => VEC_SLICES >> (level + 1),
+);
+
+const partialVec = tgpu.workgroupVar(d.arrayOf(d.vec4f, VEC_LANES * VEC_SLICES));
+
+function makeGemvVec4Kernel(cfg: GemvVec4Cfg, elem: Elem) {
+  const { k, hasBias, hasAdd } = cfg;
+  const n4 = cfg.n / 4;
+  const layout = gemvVec4Layout(elem);
+  const storeVec4 = elem.vec4;
+  return tgpu.computeFn({
+    in: { wid: d.builtin.workgroupId, lid: d.builtin.localInvocationIndex },
+    workgroupSize: [VEC_LANES * VEC_SLICES],
+  })(({ wid, lid }) => {
+    'use gpu';
+    const lane = lid % VEC_LANES;
+    const slice = d.u32(lid / VEC_LANES);
+    const cg = wid.x * VEC_LANES + lane;
+
+    let acc = d.vec4f();
+    if (cg < n4) {
+      for (let j = slice; j < k; j += VEC_SLICES) {
+        acc = acc + d.f32(layout.$.a[j]!) * d.vec4f(layout.$.b[j * n4 + cg]!);
+      }
+    }
+    partialVec.$[lid] = d.vec4f(acc);
+    std.workgroupBarrier();
+    for (const stride of tgpu.unroll(SLICE_STRIDES)) {
+      if (slice < stride) {
+        partialVec.$[lid] = partialVec.$[lid]! + partialVec.$[lid + stride * VEC_LANES]!;
+      }
+      std.workgroupBarrier();
+    }
+
+    if (slice === 0 && cg < n4) {
+      let sum = d.vec4f(partialVec.$[lane]!);
+      if (hasBias > 0) {
+        sum = sum + d.vec4f(layout.$.bias[cg]!);
+      }
+      if (hasAdd > 0) {
+        sum = sum + d.vec4f(layout.$.addend[cg]!);
+      }
+      layout.$.out[cg] = storeVec4(sum);
+    }
+  });
+}
+
+export function createMatmulGemvVec4Pipeline(
+  root: TgpuRoot,
+  cfg: { k: number; n: number; hasBias?: number; hasAdd?: number },
+  elem: Elem = F32_ELEM,
+) {
+  return root.createComputePipeline({
+    compute: makeGemvVec4Kernel(
+      { k: cfg.k, n: cfg.n, hasBias: cfg.hasBias ?? 0, hasAdd: cfg.hasAdd ?? 0 },
+      elem,
+    ),
+  });
+}
+
+export function matmulGemvVec4Handle(
+  root: TgpuRoot,
+  pipeline: ReturnType<typeof createMatmulGemvVec4Pipeline>,
+  n: number,
+  buffers: {
+    a: FloatBuffer;
+    b: FloatBuffer;
+    out: FloatBuffer;
+    bias?: FloatBuffer;
+    addend?: FloatBuffer;
+  },
+  elem: Elem = F32_ELEM,
+): KernelHandle {
+  // Absent epilogue operands alias `b`; those pipelines never read them.
+  const bindGroup = cachedBindGroup(root, gemvVec4Layout(elem), {
+    ...buffers,
+    bias: buffers.bias ?? buffers.b,
+    addend: buffers.addend ?? buffers.b,
+  });
+  return makeHandle(pipeline, 'matmulGemvVec4', bindGroup, Math.ceil(n / 4 / VEC_LANES));
 }
 
 // ── Subgroup small-m variant (4 ≤ m ≤ MATMUL_SMALL_M_MAX_ROWS, m % 4 == 0) ─
