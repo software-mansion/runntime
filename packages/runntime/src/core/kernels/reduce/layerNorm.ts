@@ -9,7 +9,12 @@ import {
 } from '../common.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
-/** Fused LayerNorm in one dispatch, with torch's biased 1/N variance.
+/** Fused LayerNorm in one dispatch, with torch's biased 1/N variance. With
+ *  `rms` set the mean is taken as 0, which makes it RMSNorm. An optional
+ *  residual and output scale make it out = (residual + norm(x)) · scale, the
+ *  post-norm block ending as one dispatch. The weight is read at
+ *  (row·cols + j) mod weightLen, so a weight spanning several rows tiles
+ *  across them (per-head norms over a [T, heads·d] slab viewed as rows of d).
  *
  *  One workgroup per row: threads stride the columns and merge through two tree
  *  reductions — mean, then variance around it, avoiding the sumsq − mean²
@@ -19,13 +24,23 @@ import { type Elem, F32_ELEM } from '../elem.ts';
  *  Everything rides the uniform, so one pipeline serves every width, eps and
  *  bias form. */
 
-const Dims = d.struct({ rows: d.u32, cols: d.u32, eps: d.f32, hasBias: d.u32 });
+const Dims = d.struct({
+  rows: d.u32,
+  cols: d.u32,
+  eps: d.f32,
+  hasBias: d.u32,
+  rms: d.u32,
+  hasResidual: d.u32,
+  outScale: d.f32,
+  weightLen: d.u32,
+});
 
 const makeLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
     weight: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
     bias: { storage: d.arrayOf(elem.scalar), access: 'readonly' }, // dead when hasBias=0
+    residual: { storage: d.arrayOf(elem.scalar), access: 'readonly' }, // dead when hasResidual=0
     out: { storage: d.arrayOf(elem.scalar), access: 'mutable' },
     dims: { uniform: Dims },
   });
@@ -72,7 +87,7 @@ function makeVariant(elem: Elem) {
       }
       std.workgroupBarrier();
     }
-    const m = partial.$[0]! / d.f32(D.cols);
+    const m = std.select(partial.$[0]! / d.f32(D.cols), d.f32(0), D.rms > 0);
     // Every thread has read partial[0]; barrier before the next round's writes.
     std.workgroupBarrier();
 
@@ -100,17 +115,23 @@ function makeVariant(elem: Elem) {
     // Normalize: threads stride the columns again (x is L1-hot by now).
     for (let j = tid; j < D.cols; j += WORKGROUP_SIZE) {
       if (f16) {
-        let v = (d.f32(L.$.x[base + j]!) - m) * inv * d.f32(L.$.weight[j]!);
+        let v = (d.f32(L.$.x[base + j]!) - m) * inv * d.f32(L.$.weight[(base + j) % D.weightLen]!);
         if (D.hasBias > 0) {
           v += d.f32(L.$.bias[j]!);
         }
-        L.$.out[base + j] = d.f16(v);
+        if (D.hasResidual > 0) {
+          v += d.f32(L.$.residual[base + j]!);
+        }
+        L.$.out[base + j] = d.f16(v * D.outScale);
       } else {
-        let v = (L.$.x[base + j]! - m) * inv * L.$.weight[j]!;
+        let v = (L.$.x[base + j]! - m) * inv * L.$.weight[(base + j) % D.weightLen]!;
         if (D.hasBias > 0) {
           v += L.$.bias[j]!;
         }
-        L.$.out[base + j] = v;
+        if (D.hasResidual > 0) {
+          v += L.$.residual[base + j]!;
+        }
+        L.$.out[base + j] = v * D.outScale;
       }
     }
   });
@@ -136,12 +157,36 @@ export function createLayerNormPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) {
 export function layerNormHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createLayerNormPipeline>,
-  args: { rows: number; cols: number; eps: number; hasBias: number },
-  buffers: { x: FloatBuffer; weight: FloatBuffer; bias: FloatBuffer; out: FloatBuffer },
+  args: {
+    rows: number;
+    cols: number;
+    eps: number;
+    hasBias: number;
+    rms?: number;
+    hasResidual?: number;
+    outScale?: number;
+    weightLen?: number;
+  },
+  buffers: {
+    x: FloatBuffer;
+    weight: FloatBuffer;
+    bias: FloatBuffer;
+    residual: FloatBuffer;
+    out: FloatBuffer;
+  },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
   const dims = root
-    .createBuffer(Dims, { rows: args.rows, cols: args.cols, eps: args.eps, hasBias: args.hasBias })
+    .createBuffer(Dims, {
+      rows: args.rows,
+      cols: args.cols,
+      eps: args.eps,
+      hasBias: args.hasBias,
+      rms: args.rms ?? 0,
+      hasResidual: args.hasResidual ?? 0,
+      outScale: args.outScale ?? 1,
+      weightLen: args.weightLen ?? args.cols,
+    })
     .$usage('uniform');
   const bindGroup = root.createBindGroup(layerNormVariant(elem).layout, { ...buffers, dims });
   // One workgroup per row — not one thread.

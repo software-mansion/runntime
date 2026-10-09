@@ -45,6 +45,40 @@ export function layerNorm(x: Value, weight: Value, eps = 1e-5, bias?: Value): Va
   return pending({ elems: m * n, dtype, dims: [m, n] }, 'layerNorm', inputs, eps);
 }
 
+/** Fused RMSNorm over the last dim: x · rsqrt(mean(x²) + eps) · weight, one
+ *  dispatch, statistics in f32. `residual` and `scale` extend it to
+ *  (residual + norm(x)) · scale in the same dispatch. `group` normalizes each
+ *  run of `group` columns on its own (per-head norms); the weight is then
+ *  `group` long, or N long to give each run its own slice. */
+export function rmsNormFused(
+  x: Value,
+  weight: Value,
+  eps = 1e-6,
+  opts: { residual?: Value; scale?: number; group?: number } = {},
+): Value {
+  const [m, n, dtype] = want2d('rmsNorm', x, FLOAT_DTYPES);
+  const { residual, scale = 1, group = n } = opts;
+  if (!Number.isInteger(group) || group < 1 || n % group !== 0) {
+    throw new Error(`rmsNorm: group ${group} must divide the row width ${n}`);
+  }
+  const wl = weight.shape.elems;
+  if (weight.shape.dtype !== dtype || (wl !== group && wl !== n)) {
+    throw new Error(
+      `rmsNorm: weight must be ${dtype} with ${group} or ${n} elems, got (${wl},${weight.shape.dtype})`,
+    );
+  }
+  if (!(eps > 0)) throw new Error(`rmsNorm: eps must be positive, got ${eps}`);
+  if (residual && (residual.shape.dtype !== dtype || residual.shape.elems !== m * n)) {
+    throw new Error(`rmsNorm: residual must be ${dtype} [${m}, ${n}]`);
+  }
+  const inputs = residual ? [x, weight, residual] : [x, weight];
+  return pending({ elems: m * n, dtype, dims: [m, n] }, 'rmsNorm', inputs, eps, [
+    residual ? 1 : 0,
+    scale,
+    group,
+  ]);
+}
+
 /** Router top-k plus softmax over the selected logits, lowest index on ties.
  *  Packed [M, 2k]: ids first, then weights, descending by logit. k=4 only. */
 export function topk(x: Value, k: number): Value {

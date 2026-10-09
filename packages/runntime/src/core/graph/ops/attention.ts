@@ -7,6 +7,9 @@ import { FLOAT_DTYPES, want2d } from './shared.ts';
 /** Finite stand-in for an unbounded window side; attrs never carry ±Inf. */
 const WINDOW_INF = 0x3fffffff;
 
+const MAX_HEAD_DIM = 512;
+const MAX_DECODE_HEAD_DIM = 128;
+
 /** Scaled-dot-product attention over the band-mask family, with GQA and
  *  optional sinks. kvLen is independent of qLen.
  *
@@ -42,7 +45,16 @@ export function sdpa(
   if (kvHeads <= 0 || qHeads % kvHeads !== 0) {
     throw new Error(`sdpa: qHeads ${qHeads} not divisible by kvHeads ${kvHeads}`);
   }
-  if (headDim > 128) throw new Error(`sdpa: headDim ${headDim} exceeds the kernel's max (128)`);
+  // The prefill kernels size their registers per config; decode and the
+  // oversized-grid fallback keep a fixed 128-wide accumulator.
+  if (headDim > MAX_HEAD_DIM) {
+    throw new Error(`sdpa: headDim ${headDim} exceeds the kernel's max (${MAX_HEAD_DIM})`);
+  }
+  if (headDim > MAX_DECODE_HEAD_DIM && q.shape.dims![0] === 1) {
+    throw new Error(
+      `sdpa: decode (qLen 1) supports headDim up to ${MAX_DECODE_HEAD_DIM}, got ${headDim}`,
+    );
+  }
   const lowerWindow = (name: string, w: number): number => {
     if (w === Infinity) return WINDOW_INF;
     if (!Number.isInteger(w) || w < 0) {
@@ -128,8 +140,8 @@ export function sdpaPacked(
   if (kvHeads <= 0 || qHeads % kvHeads !== 0) {
     throw new Error(`sdpaPacked: qHeads ${qHeads} not divisible by kvHeads ${kvHeads}`);
   }
-  if (headDim > 128) {
-    throw new Error(`sdpaPacked: headDim ${headDim} exceeds the kernel's max (128)`);
+  if (headDim > MAX_HEAD_DIM) {
+    throw new Error(`sdpaPacked: headDim ${headDim} exceeds the kernel's max (${MAX_HEAD_DIM})`);
   }
   if (t === 1) throw new Error('sdpaPacked: qLen must be > 1 (decode has no packed route)');
   const lowerWindow = (name: string, win: number): number => {

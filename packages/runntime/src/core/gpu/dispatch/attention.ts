@@ -66,8 +66,20 @@ export const attnSpec = defineSpec({
     if (qLen === 1) {
       route = kvLen > ATTN_DECODE_CHUNK ? 'decodeSplit' : 'decode';
     } else if (Math.ceil(rowHeads / WORKGROUP_SIZE) > MAX_WORKGROUPS_PER_DIM) {
+      if (attrs.headDim > 128) {
+        throw new Error(
+          `sdpa: ${rowHeads} row-heads at headDim ${attrs.headDim} need the batch kernel, which stops at 128`,
+        );
+      }
       route = 'batch';
-    } else if (!f16 && ctx.subgroupsOk && rowHeads <= MAX_WORKGROUPS_PER_DIM && splitFits) {
+    } else if (
+      // Wide heads would spill the rows kernel's per-thread q and acc, so
+      // they take the lane-split route in f16 too.
+      (!f16 || attrs.headDim > 128) &&
+      ctx.subgroupsOk &&
+      rowHeads <= MAX_WORKGROUPS_PER_DIM &&
+      splitFits
+    ) {
       route = 'rowsSubgroupSplit';
     } else if (!f16 && effKvLen > ATTN_ROWS_CHUNK && splitFits) {
       route = 'rowsSplit';

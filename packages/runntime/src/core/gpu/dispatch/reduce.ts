@@ -86,6 +86,46 @@ export const layerNormSpec = defineSpec({
           x: narrowFloat(inputs[0]!, dtype),
           weight: narrowFloat(inputs[1]!, dtype),
           bias,
+          residual: ctx.dummy(floatDtype(dtype)),
+          out: narrowFloat(out, dtype),
+        },
+        elemFor(dtype),
+      ),
+    ];
+  },
+});
+
+export const rmsNormSpec = defineSpec({
+  attrs: (p) => {
+    const [hasResidual, outScale, group] = p.attrs as readonly number[];
+    return { eps: p.scalar!, hasResidual: hasResidual!, outScale: outScale!, group: group! };
+  },
+  cfg: () => undefined,
+  pipeline: (root, dtype) => createLayerNormPipeline(root, elemFor(dtype)),
+  encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
+    const cols = attrs.group;
+    const rows = node.shape.elems / cols;
+    const dtype = node.shape.dtype;
+    const dummy = ctx.dummy(floatDtype(dtype));
+    return [
+      layerNormHandle(
+        ctx.root,
+        pipeline,
+        {
+          rows,
+          cols,
+          eps: attrs.eps,
+          hasBias: 0,
+          rms: 1,
+          hasResidual: attrs.hasResidual,
+          outScale: attrs.outScale,
+          weightLen: node.pending!.inputs[1]!.shape.elems,
+        },
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          weight: narrowFloat(inputs[1]!, dtype),
+          bias: dummy,
+          residual: attrs.hasResidual ? narrowFloat(inputs[2]!, dtype) : dummy,
           out: narrowFloat(out, dtype),
         },
         elemFor(dtype),

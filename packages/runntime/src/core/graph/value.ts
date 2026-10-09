@@ -97,6 +97,7 @@ export type OpName =
   | 'softmax'
   | 'mean'
   | 'meanSquare'
+  | 'rmsNorm'
   | 'layerNorm'
   | 'topk'
   // shape

@@ -20,7 +20,14 @@ import {
   swigluSpec,
   tanhSpec,
 } from './elementwise.ts';
-import { layerNormSpec, meanSpec, meanSquareSpec, softmaxSpec, topkSpec } from './reduce.ts';
+import {
+  layerNormSpec,
+  rmsNormSpec,
+  meanSpec,
+  meanSquareSpec,
+  softmaxSpec,
+  topkSpec,
+} from './reduce.ts';
 import { attnSpec, ropeSpec } from './attention.ts';
 import {
   avgPool2dHwc4Spec,
@@ -108,6 +115,7 @@ export const specs = {
   mean: meanSpec,
   meanSquare: meanSquareSpec,
   layerNorm: layerNormSpec,
+  rmsNorm: rmsNormSpec,
   topk: topkSpec,
   // shape
   astype: astypeSpec,
