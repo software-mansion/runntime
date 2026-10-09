@@ -41,13 +41,13 @@ import {
   matmulQuantWHandle,
 } from '../../kernels/matmul/matmulQuantW.ts';
 import {
-  createMatmulTiledF16Pipeline,
-  matmulTiledF16Eligible,
-  matmulTiledF16Handle,
-} from '../../kernels/matmul/matmulTiledF16.ts';
+  createMatmulTiledVec4Pipeline,
+  matmulTiledVec4Eligible,
+  matmulTiledVec4Handle,
+} from '../../kernels/matmul/matmulTiledVec4.ts';
 import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
-type MatmulRoute = 'plain' | 'gemv' | 'gemvVec4' | 'smallm' | 'tiled' | 'tiledF16';
+type MatmulRoute = 'plain' | 'gemv' | 'gemvVec4' | 'smallm' | 'tiled' | 'tiledVec4';
 
 function smallMEligible(m: number, n: number, subgroupsOk: boolean): boolean {
   return subgroupsOk && m >= 4 && m % 4 === 0 && m <= MATMUL_SMALL_M_MAX_ROWS && n % 4 === 0;
@@ -72,8 +72,8 @@ export const matmulSpec = defineSpec({
     if (!attrs.isView) {
       if (smallMEligible(m, n, ctx.subgroupsOk)) route = 'smallm';
       else if (m === 1 && attrs.act === 0) route = matmulGemvVec4Eligible(n) ? 'gemvVec4' : 'gemv';
+      else if (m >= MATMUL_TILED_MIN_M && matmulTiledVec4Eligible(k, n)) route = 'tiledVec4';
       else if (!f16 && m >= MATMUL_TILED_MIN_M) route = 'tiled';
-      else if (f16 && m >= MATMUL_TILED_MIN_M && matmulTiledF16Eligible(k, n)) route = 'tiledF16';
     }
     return {
       k,
@@ -98,8 +98,8 @@ export const matmulSpec = defineSpec({
         return createMatmulGemvVec4Pipeline(root, cfg, elem);
       case 'tiled':
         return createMatmulTiledPipeline(root, cfg);
-      case 'tiledF16':
-        return createMatmulTiledF16Pipeline(root, cfg);
+      case 'tiledVec4':
+        return createMatmulTiledVec4Pipeline(root, cfg, elem);
       case 'plain':
         return createMatmulPipeline(root, cfg, elem);
     }
@@ -127,8 +127,8 @@ export const matmulSpec = defineSpec({
         return [matmulGemvVec4Handle(ctx.root, pipeline, n, buffers, elem)];
       case 'tiled':
         return [matmulTiledHandle(ctx.root, pipeline, m, n, buffers)];
-      case 'tiledF16':
-        return [matmulTiledF16Handle(ctx.root, pipeline, m, n, buffers)];
+      case 'tiledVec4':
+        return [matmulTiledVec4Handle(ctx.root, pipeline, m, n, buffers, elem)];
       case 'plain':
         return [matmulHandle(ctx.root, pipeline, m, n, buffers, elem, attrs.baseRow)];
     }
