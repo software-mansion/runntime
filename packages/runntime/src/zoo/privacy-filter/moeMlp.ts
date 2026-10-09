@@ -15,6 +15,8 @@ import {
   matmul,
   matmulGather,
   matrix,
+  moeDown,
+  moeUp,
   mul,
   slice,
   swiglu,
@@ -113,9 +115,9 @@ export class EagerMoeMlp extends nn.Module<[Value, Grouping, Value[]], Value> {
 
     const xn = this.norm.forward(x); // [T, H]
     const packed = topk(this.gate.forward(xn), 4); // [T, 8]: 4 ids ‖ 4 weights, on GPU
-    let y: Value | undefined;
 
     if (f === 'f32') {
+      let y: Value | undefined;
       for (let s = 0; s < 4; s++) {
         const ids = slice(packed, 1, s, s + 1);
         // topk's output is f32 in every variant; narrow it to the activation
@@ -134,19 +136,23 @@ export class EagerMoeMlp extends nn.Module<[Value, Grouping, Value[]], Value> {
     const bits = f === 'quantInt8' ? 8 : 4;
     const h = this.dims.hidden;
     const groupSize = this.dims.groupSize ?? h;
-    const gather = (a: Value, w: Value, scales: Value, bias: Value, ids: Value): Value =>
-      matmulGather(a, w, ids, { bias, scales, bits, groupSize });
-    for (let s = 0; s < 4; s++) {
-      const ids = slice(packed, 1, s, s + 1); // [T,1] expert id for slot s
-      const wgt = astype(slice(packed, 1, 4 + s, 5 + s), this.actDtype); // [T,1] gate weight
-      const glu = gather(xn, this.gluWeight.value, this.gluScales!.value, this.gluBias.value, ids);
-      const lin = gather(xn, this.linWeight.value, this.linScales!.value, this.linBias.value, ids);
-      const act = swiglu(glu, lin); // [T, H]
-      const out = gather(act, this.outWeight.value, this.outScales!.value, this.outBias.value, ids);
-      const contrib = mul(out, wgt); // [T,H] × [T,1] col-broadcast
-      y = y ? add(y, contrib) : contrib;
-    }
-    return add(x, y!); // residual folded in
+    const weight = (w: nn.Parameter, scales: nn.Parameter, bias: nn.Parameter) => ({
+      w: w.value,
+      scales: scales.value,
+      bias: bias.value,
+    });
+    const act = moeUp(
+      xn,
+      packed,
+      weight(this.gluWeight, this.gluScales!, this.gluBias),
+      weight(this.linWeight, this.linScales!, this.linBias),
+      { bits, groupSize },
+    );
+    // moeDown adds the residual.
+    return moeDown(act, packed, weight(this.outWeight, this.outScales!, this.outBias), x, {
+      bits,
+      groupSize,
+    });
   }
 
   override forward(x: Value, grouping: Grouping, gateColumns: Value[]): Value {

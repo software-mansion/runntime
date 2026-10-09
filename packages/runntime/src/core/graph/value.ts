@@ -69,8 +69,9 @@ export type OpName =
   // matmul
   | 'matmul'
   | 'matmulQuantW'
-  | 'matmulGatherQuantW'
   | 'matmulGather'
+  | 'moeUp'
+  | 'moeDown'
   | 'argmaxDot'
   // attention
   | 'attn'
@@ -96,8 +97,8 @@ export type OpName =
   // reduce
   | 'softmax'
   | 'mean'
-  | 'meanSquare'
   | 'layerNorm'
+  | 'rmsNorm'
   | 'topk'
   // shape
   | 'astype'

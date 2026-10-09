@@ -1,7 +1,7 @@
 /** Stock nn layers: each holds Parameters and calls the matching op. */
 
 import { RunntimeError } from '../error.ts';
-import { groupNorm, linear, rmsNorm } from '../graph/compose.ts';
+import { groupNorm, linear } from '../graph/compose.ts';
 import {
   type ConvAct,
   type SlotAct,
@@ -11,6 +11,7 @@ import {
   gatherRows,
   gatherRowsFrom,
   layerNorm,
+  rmsNorm,
   sdpa,
   sdpaPacked,
 } from '../graph/ops.ts';
