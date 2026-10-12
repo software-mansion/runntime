@@ -1,6 +1,7 @@
 /** Matmul with 32×32 tiles: out = act(a·b + bias) + addend, for K and N
- *  multiples of 4, in f16 or f32. A workgroup loads 32×32 blocks of a and b
- *  into workgroup memory and every thread reuses them. Sums in f32.
+ *  multiples of 4, in f16 or f32. A workgroup loads blocks of a and b, 8 K
+ *  at a time, into workgroup memory and every thread reuses them. Sums in
+ *  f32.
  *
  *  Rows of a can be further apart than K, which lets conv1d run on this kernel.
  *
@@ -36,14 +37,14 @@ function layoutFor(elem: Elem): ReturnType<typeof makeLayout> {
   return l;
 }
 
-// 32×32 output tile per workgroup, 8×8 threads, 32 K per block.
+// 32×32 output tile per workgroup, 8×8 threads, 8 K per block.
 const BM = 32;
 const BN = 32;
 const WGC = 8;
 const WGR = 8;
-const BK = 32;
+const BK = 8;
 
-/** At K = 32 there is one block and nothing to reuse. */
+/** Below this K there is too little to reuse. */
 const MIN_K = 64;
 
 /** Whether a [M,K]·[K,N] matmul can use this kernel. */

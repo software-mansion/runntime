@@ -1,7 +1,7 @@
 /** Reductions and normalizations over the last dim. */
 
 import { pending, Value } from '../value.ts';
-import { FLOAT_DTYPES, want2d } from './shared.ts';
+import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
 
 /** Mean over the last axis: [M,N] to [M,1]. */
 export function mean(x: Value): Value {
@@ -9,10 +9,33 @@ export function mean(x: Value): Value {
   return pending({ elems: m, dtype, dims: [m, 1] }, 'mean', [x]);
 }
 
-/** Row-wise softmax over the last dim. */
-export function softmax(x: Value): Value {
+/** Row-wise softmax over the last dim.
+ *
+ *  With `segments` ([M, 2] f32, a [start, end) range per row) x is M×M
+ *  attention scores: row r keeps the keys in its range and window, r
+ *  included, and the rest come out 0. Windows default to Infinity. */
+export function softmax(
+  x: Value,
+  opts: { segments?: Value; windowLeft?: number; windowRight?: number } = {},
+): Value {
   const [m, n, dtype] = want2d('softmax', x, FLOAT_DTYPES);
-  return pending({ elems: m * n, dtype, dims: [m, n] }, 'softmax', [x]);
+  const shape = { elems: m * n, dtype, dims: [m, n] };
+  const { segments } = opts;
+  if (!segments) return pending(shape, 'softmax', [x], undefined, [0, 0, 0]);
+  if (m !== n) throw new Error(`softmax: a masked softmax needs square scores, got [${m}, ${n}]`);
+  if (segments.shape.dtype !== 'f32' || segments.shape.elems !== 2 * m) {
+    throw new Error(`softmax: segments must be f32 [${m}, 2]`);
+  }
+  const lower = (name: string, w = Infinity): number => {
+    if (w === Infinity) return WINDOW_INF;
+    if (!Number.isInteger(w) || w < 0) {
+      throw new Error(`softmax: ${name} must be a non-negative integer or Infinity, got ${w}`);
+    }
+    return Math.min(w, WINDOW_INF);
+  };
+  const wl = lower('windowLeft', opts.windowLeft);
+  const wr = lower('windowRight', opts.windowRight);
+  return pending(shape, 'softmax', [x, segments], undefined, [1, wl, wr]);
 }
 
 /** Fused LayerNorm over the last dim, with torch's biased 1/N variance. eps

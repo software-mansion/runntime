@@ -2,10 +2,8 @@
  *  fused rotary embedding. */
 
 import { pending, Value } from '../value.ts';
-import { FLOAT_DTYPES, want2d } from './shared.ts';
+import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
 
-/** Finite stand-in for an unbounded window side; attrs never carry ±Inf. */
-const WINDOW_INF = 0x3fffffff;
 /** Widest head sdpa takes with more than one query row. */
 const MAX_HEAD_DIM = 512;
 /** Widest head the decode kernels (one query row) take. */

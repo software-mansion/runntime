@@ -6,11 +6,15 @@
  *  threads; without, a 64-thread tree in workgroup memory does. A second read
  *  writes exp(x − max) / sum. Sums in f32.
  *
+ *  With a mask, a row reads only the keys in its segment and window and
+ *  writes 0 for the rest.
+ *
  *  Based on webgpu-kernels/ai.onnx.Softmax (softmax-online). */
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
+  type F32Buffer,
   type FloatBuffer,
   flatWorkgroupId,
   type KernelHandle,
@@ -21,7 +25,13 @@ import {
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
-const Dims = d.struct({ rows: d.u32, cols: d.u32 });
+const Dims = d.struct({
+  rows: d.u32,
+  cols: d.u32,
+  masked: d.u32,
+  windowLeft: d.u32,
+  windowRight: d.u32,
+});
 
 /** Start of the running max. A thread with no columns adds (NEG_FLT_MAX, 0),
  *  which changes nothing. */
@@ -63,9 +73,18 @@ const treeMaxSum = (m: number, s: number, tid: number): d.v2f => {
   return d.vec2f(partialMax.$[0]!, partialSum.$[0]!);
 };
 
+/** vec4 i, NEG_FLT_MAX outside [lo, hi) so those lanes come out 0. */
+const keep4 = (v: d.v4f, i: number, lo: number, hi: number): d.v4f => {
+  'use gpu';
+  const col = d.vec4u(i * 4) + d.vec4u(0, 1, 2, 3);
+  const inside = std.and(std.ge(col, d.vec4u(lo)), std.lt(col, d.vec4u(hi)));
+  return std.select(d.vec4f(NEG_FLT_MAX), v, inside);
+};
+
 const makeScalarLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
+    segs: { storage: d.arrayOf(d.f32), access: 'readonly' }, // [rows, 2]; dead when masked=0
     out: { storage: d.arrayOf(elem.scalar), access: 'mutable' },
     dims: { uniform: Dims },
   });
@@ -75,6 +94,7 @@ const makeScalarLayout = (elem: Elem) =>
 const makeVec4Layout = (elem: Elem) =>
   tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
+    segs: { storage: d.arrayOf(d.f32), access: 'readonly' }, // [rows, 2]; dead when masked=0
     out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
     dims: { uniform: Dims },
   });
@@ -111,13 +131,22 @@ function makeSoftmaxVariant(elem: Elem, vec4: boolean, subgroups: boolean) {
     const tid = lid.x;
     const words = D.cols >>> 2;
 
+    // Kept columns [lo, hi).
+    let lo = d.u32(0);
+    let hi = D.cols;
+    if (D.masked > 0) {
+      const segs = vec4 ? V.$.segs : S.$.segs;
+      lo = std.max(d.u32(segs[2 * row]!), row - std.min(row, D.windowLeft));
+      hi = std.min(d.u32(segs[2 * row + 1]!), row + std.min(D.cols - row, D.windowRight + 1));
+    }
+
     // This thread's running (max, sum). A new max rescales the sum so far.
     let m = d.f32(NEG_FLT_MAX);
     let s = d.f32(0);
     if (vec4) {
       const base = row * words;
-      for (let i = tid; i < words; i += wg) {
-        const v = d.vec4f(V.$.x[base + i]!);
+      for (let i = (lo >>> 2) + tid; i < (hi + 3) >>> 2; i += wg) {
+        const v = keep4(d.vec4f(V.$.x[base + i]!), i, lo, hi);
         const mNew = std.max(m, std.max(std.max(v.x, v.y), std.max(v.z, v.w)));
         const e = std.exp(v - d.vec4f(mNew));
         s = s * std.exp(m - mNew) + (e.x + e.y + e.z + e.w);
@@ -125,7 +154,7 @@ function makeSoftmaxVariant(elem: Elem, vec4: boolean, subgroups: boolean) {
       }
     } else {
       const base = row * D.cols;
-      for (let j = tid; j < D.cols; j += wg) {
+      for (let j = lo + tid; j < hi; j += wg) {
         const v = d.f32(S.$.x[base + j]!);
         const mNew = std.max(m, v);
         s = s * std.exp(m - mNew) + std.exp(v - mNew);
@@ -142,14 +171,17 @@ function makeSoftmaxVariant(elem: Elem, vec4: boolean, subgroups: boolean) {
     if (vec4) {
       const base = row * words;
       for (let i = tid; i < words; i += wg) {
-        const v = d.vec4f(V.$.x[base + i]!);
+        const v = keep4(d.vec4f(V.$.x[base + i]!), i, lo, hi);
         V.$.out[base + i] = storeVec4(std.exp(v - d.vec4f(rowMax)) / rowSum);
       }
     } else {
       const base = row * D.cols;
       for (let j = tid; j < D.cols; j += wg) {
-        const v = d.f32(S.$.x[base + j]!);
-        S.$.out[base + j] = storeScalar(std.exp(v - rowMax) / rowSum);
+        let p = d.f32(0);
+        if (j >= lo && j < hi) {
+          p = std.exp(d.f32(S.$.x[base + j]!) - rowMax) / rowSum;
+        }
+        S.$.out[base + j] = storeScalar(p);
       }
     }
   });
@@ -183,11 +215,25 @@ export function createSoftmaxPipeline(
 export function softmaxHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createSoftmaxPipeline>,
-  args: { rows: number; cols: number; vec4: boolean; subgroups: boolean },
-  buffers: { x: FloatBuffer; out: FloatBuffer },
+  args: {
+    rows: number;
+    cols: number;
+    vec4: boolean;
+    subgroups: boolean;
+    /** Key mask from `buffers.segs` and the window; off when omitted. */
+    mask?: { windowLeft: number; windowRight: number };
+  },
+  buffers: { x: FloatBuffer; segs: F32Buffer; out: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = cachedUniform(root, Dims, { rows: args.rows, cols: args.cols });
+  const { rows, cols, mask } = args;
+  const dims = cachedUniform(root, Dims, {
+    rows,
+    cols,
+    masked: mask ? 1 : 0,
+    windowLeft: mask?.windowLeft ?? 0,
+    windowRight: mask?.windowRight ?? 0,
+  });
   const { layout } = softmaxVariant(elem, args.vec4, args.subgroups);
   const bindGroup = cachedBindGroup(root, layout, { ...buffers, dims });
   // One workgroup per row.

@@ -9,7 +9,10 @@ import { createTopkSelectPipeline, topkSelectHandle } from '../../kernels/reduce
 import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 
 export const softmaxSpec = defineSpec({
-  attrs: () => undefined,
+  attrs: (p) => {
+    const [masked, windowLeft, windowRight] = p.attrs as readonly number[];
+    return { masked: masked === 1, windowLeft: windowLeft!, windowRight: windowRight! };
+  },
   // vec4 depends only on cols % 4, so a new width never builds a pipeline.
   cfg: (node, _attrs, ctx) => ({
     vec4: node.shape.dims![1]! % 4 === 0,
@@ -17,15 +20,26 @@ export const softmaxSpec = defineSpec({
   }),
   pipeline: (root, dtype, cfg) =>
     createSoftmaxPipeline(root, elemFor(dtype), cfg.vec4, cfg.subgroups),
-  encode: ({ node, cfg, pipeline, inputs, out, ctx }) => {
+  encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
     const [rows, cols] = node.shape.dims as [number, number];
     const dtype = node.shape.dtype;
+    const { masked, windowLeft, windowRight } = attrs;
     return [
       softmaxHandle(
         ctx.root,
         pipeline,
-        { rows, cols, vec4: cfg.vec4, subgroups: cfg.subgroups },
-        { x: narrowFloat(inputs[0]!, dtype), out: narrowFloat(out, dtype) },
+        {
+          rows,
+          cols,
+          vec4: cfg.vec4,
+          subgroups: cfg.subgroups,
+          mask: masked ? { windowLeft, windowRight } : undefined,
+        },
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          segs: masked ? narrow(inputs[1]!, 'f32') : ctx.dummy('f32'),
+          out: narrowFloat(out, dtype),
+        },
         elemFor(dtype),
       ),
     ];

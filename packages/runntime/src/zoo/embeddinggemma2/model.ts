@@ -8,9 +8,11 @@
  *
  *  Built for few dispatches: q/k/v are one matmul, their per-head norms one
  *  grouped RMSNorm, and every post-norm also adds the residual. GELU rides
- *  the gate matmul's epilogue. */
+ *  the gate matmul's epilogue. Long inputs run attention per head as two
+ *  matmuls around a masked softmax, short ones as one sdpa. */
 
 import {
+  cat,
   matmul,
   mul,
   nn,
@@ -18,6 +20,8 @@ import {
   rope,
   sdpa,
   slice,
+  softmax,
+  transpose,
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
@@ -37,6 +41,12 @@ export interface EmbeddingGemma2Inputs {
   /** Longest segment; sizes the attention key split. */
   maxSegment: number;
 }
+
+/** Longest-input length from which attention runs on matmuls. */
+const MATMUL_ATTENTION_MIN_SEGMENT = 256;
+/** Past this many rows a sliding layer keeps sdpa, which skips the keys
+ *  outside its window. */
+const MATMUL_ATTENTION_MAX_SLIDING_ROWS = 1024;
 
 class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
   readonly input_layernorm: nn.RMSNorm;
@@ -93,21 +103,47 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
     const postNorm = (norm: nn.RMSNorm, y: Value, residual: Value, scale?: number) =>
       rmsNorm(y, norm.scale.value, norm.eps, { residual, scale });
 
-    // Attention: qkv, one grouped norm for all heads, rope q and k, sdpa.
+    // Attention: qkv, one grouped norm for all heads, rope q and k. Columns
+    // of n: q heads, then k heads, then v heads.
     const qkv = this.qkv.forward(this.input_layernorm.forward(x));
     const n = rmsNorm(qkv, this.qkv_norm.value, eps, { group: d });
-    const q = rope(n, cos, sin, { headDim: d, srcStart: 0, width: heads * d });
-    const k = rope(n, cos, sin, { headDim: d, srcStart: heads * d, width: kvHeads * d });
-    const v = slice(n, 1, (heads + kvHeads) * d, (heads + 2 * kvHeads) * d);
-    const a = sdpa(q, k, v, {
-      qHeads: heads,
-      kvHeads,
-      headDim: d,
-      windowLeft: window,
-      windowRight: window,
-      segments: inp.segments,
-      maxSegment: inp.maxSegment,
-    });
+    const roped = (start: number, width: number) =>
+      rope(n, cos, sin, { headDim: d, srcStart: start, width });
+    const vStart = (heads + kvHeads) * d;
+    const rows = x.shape.dims![0]!;
+    const perHead =
+      inp.maxSegment >= MATMUL_ATTENTION_MIN_SEGMENT &&
+      (this.type === 'full' || rows <= MATMUL_ATTENTION_MAX_SLIDING_ROWS);
+    let a: Value;
+    if (perHead) {
+      // softmax(q·kᵀ) · v per head, the softmax masked like sdpa.
+      const kT = Array.from({ length: kvHeads }, (_, h) => transpose(roped((heads + h) * d, d)));
+      const v = Array.from({ length: kvHeads }, (_, h) =>
+        slice(n, 1, vStart + h * d, vStart + (h + 1) * d),
+      );
+      const group = heads / kvHeads;
+      const mask = { segments: inp.segments, windowLeft: window, windowRight: window };
+      const outs = Array.from({ length: heads }, (_, h) => {
+        const g = Math.floor(h / group);
+        return matmul(softmax(matmul(roped(h * d, d), kT[g]!), mask), v[g]!);
+      });
+      a = cat(outs, 1);
+    } else {
+      a = sdpa(
+        roped(0, heads * d),
+        roped(heads * d, kvHeads * d),
+        slice(n, 1, vStart, vStart + kvHeads * d),
+        {
+          qHeads: heads,
+          kvHeads,
+          headDim: d,
+          windowLeft: window,
+          windowRight: window,
+          segments: inp.segments,
+          maxSegment: inp.maxSegment,
+        },
+      );
+    }
     x = postNorm(this.post_attention_layernorm, this.o_proj.forward(a), x);
 
     // GeGLU MLP, GELU in the gate matmul's epilogue.

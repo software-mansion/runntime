@@ -53,6 +53,10 @@ function smallMEligible(m: number, n: number, subgroupsOk: boolean): boolean {
   return subgroupsOk && m >= 4 && m % 4 === 0 && m <= MATMUL_SMALL_M_MAX_ROWS && n % 4 === 0;
 }
 
+/** From this N, a few rows have enough tiles to fill the GPU, so they take
+ *  the tiled kernel over smallm. */
+const TILED_MIN_N_FEW_ROWS = 1024;
+
 export const matmulSpec = defineSpec({
   attrs: (p) => {
     const [hasBias, hasAdd, act, baseRow, hasBaseRow] = p.attrs as [
@@ -70,9 +74,12 @@ export const matmulSpec = defineSpec({
     const f16 = node.shape.dtype === 'f16';
     let route: MatmulRoute = 'plain';
     if (!attrs.isView) {
-      if (smallMEligible(m, n, ctx.subgroupsOk)) route = 'smallm';
-      else if (m === 1 && attrs.act === 0) route = matmulGemvVec4Eligible(n) ? 'gemvVec4' : 'gemv';
-      else if (m >= MATMUL_TILED_MIN_M && matmulTiledVec4Eligible(k, n)) route = 'tiledVec4';
+      const tiledOk = m >= MATMUL_TILED_MIN_M && matmulTiledVec4Eligible(k, n);
+      if (smallMEligible(m, n, ctx.subgroupsOk) && !(tiledOk && n >= TILED_MIN_N_FEW_ROWS)) {
+        route = 'smallm';
+      } else if (m === 1 && attrs.act === 0) {
+        route = matmulGemvVec4Eligible(n) ? 'gemvVec4' : 'gemv';
+      } else if (tiledOk) route = 'tiledVec4';
       else if (!f16 && m >= MATMUL_TILED_MIN_M) route = 'tiled';
     }
     return {

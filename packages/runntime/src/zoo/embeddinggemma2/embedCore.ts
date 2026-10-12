@@ -112,9 +112,10 @@ export function createEmbeddingGemma2EmbedCore(
     build: (T, inp) => model.forward(inputsOf(inp, T)),
   });
 
-  /** One eager forward over inputs packed into exactly their total length. */
+  /** One eager forward over inputs packed back to back. T rounds up to a
+   *  multiple of 4, so the attention score matmuls take the vec4 kernels. */
   const runEager = async (idsList: readonly (readonly number[])[]): Promise<Float32Array> => {
-    const T = idsList.reduce((s, ids) => s + ids.length, 0);
+    const T = Math.ceil(idsList.reduce((s, ids) => s + ids.length, 0) / 4) * 4;
     const B = idsList.length;
     const planes: Planes = {
       x0: new Float32Array(T * hidden),
