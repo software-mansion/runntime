@@ -22,18 +22,21 @@ const COLUMN = 2;
 const SCALAR = 3;
 
 describe('add / mul broadcasting', () => {
-  it.each([
-    { name: 'the same shape', b: [2, 3], mode: ELEMENTWISE },
-    { name: 'a row [N]', b: [3], mode: ROW },
-    { name: 'a row [1, N]', b: [1, 3], mode: ROW },
-    { name: 'a column [M, 1]', b: [2, 1], mode: COLUMN },
-    { name: 'a single value', b: [1], mode: SCALAR },
-  ])('[2, 3] with $name', ({ b, mode }) => {
-    for (const op of [add, mul]) {
+  describe.each([
+    ['add', add],
+    ['mul', mul],
+  ] as const)('%s', (name, op) => {
+    it.each([
+      { name: 'the same shape', b: [2, 3], mode: ELEMENTWISE },
+      { name: 'a row [N]', b: [3], mode: ROW },
+      { name: 'a row [1, N]', b: [1, 3], mode: ROW },
+      { name: 'a column [M, 1]', b: [2, 1], mode: COLUMN },
+      { name: 'a single value', b: [1], mode: SCALAR },
+    ])('[2, 3] with $name', ({ b, mode }) => {
       const c = op(input([2, 3]), input(b));
       expect(c.shape).toEqual(meta([2, 3]));
-      expect(c.pending?.attrs).toEqual([mode]);
-    }
+      expect(c.pending).toMatchObject({ op: name, attrs: [mode] });
+    });
   });
 
   it('tells a row from a column on a square matrix by dims', () => {
