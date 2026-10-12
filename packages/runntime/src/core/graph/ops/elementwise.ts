@@ -23,8 +23,13 @@ function broadcastPlan(
   // pairing them would silently mix pixels.
   if (x.shape.layout !== y.shape.layout) return null;
   if (x.shape.elems === y.shape.elems) {
+    const [xd, yd] = [x.shape.dims, y.shape.dims];
     // [5,H,W] and [8,H,W] share padded elems, so dims must match too.
-    if (x.shape.layout && !dimsMatch(x.shape.dims, y.shape.dims)) return null;
+    if (x.shape.layout && !dimsMatch(xd, yd)) return null;
+    // [2,3] and [3,2] share elems too. Leading size-1 axes are dropped, as in
+    // PyTorch, so [N] pairs with [1,N] but not with [N,1].
+    const squeeze = (d: readonly number[]) => d.slice(d.findIndex((v) => v !== 1));
+    if (xd && yd && !dimsMatch(squeeze(xd), squeeze(yd))) return null;
     return { full: x, other: y, shape: { ...x.shape }, mode: 0 };
   }
   // Broadcasting is row-major arithmetic, so it never applies to hwc4.
@@ -43,6 +48,7 @@ function broadcastPlan(
     if ((od.length === 1 && od[0] === n) || (od.length === 2 && od[0] === 1 && od[1] === n)) {
       return { full, other, shape: { ...full.shape }, mode: 1 }; // row [N]/[1,N]
     }
+    return null;
   }
   // Fallback for values without dims: infer from element counts.
   if (other.shape.elems === n) return { full, other, shape: { ...full.shape }, mode: 1 }; // row [N]
