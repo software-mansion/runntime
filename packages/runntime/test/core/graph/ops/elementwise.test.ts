@@ -88,6 +88,18 @@ describe('add / mul broadcasting', () => {
       b: hwc4Input(8, 2, 2),
       error: /incompatible shapes/,
     },
+    {
+      name: 'a column [3, 1] for 2 rows',
+      a: input([2, 3]),
+      b: input([3, 1]),
+      error: /incompatible shapes/,
+    },
+    {
+      name: 'a row [2] for 3 cols',
+      a: input([2, 3]),
+      b: input([2]),
+      error: /incompatible shapes/,
+    },
   ])('rejects $name', ({ a, b, error }) => {
     expect(() => add(a, b)).toThrow(error);
   });
