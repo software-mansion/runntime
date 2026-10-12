@@ -3,7 +3,7 @@
 
 import tgpu, { d, std } from 'typegpu';
 
-export const ACT_CODE = { none: 0, tanh: 1, gelu: 2, silu: 3, relu: 4 } as const;
+export const ACT_CODE = { none: 0, tanh: 1, gelu: 2, silu: 3, relu: 4, geluTanh: 5 } as const;
 export type ActName = keyof typeof ACT_CODE;
 export type SlotAct = Exclude<ActName, 'none'>;
 
@@ -52,9 +52,29 @@ export const reluAct = ((x: d.v4f) => {
   return std.max(x, d.vec4f(0));
 }) as Activation;
 
-export const ACTIVATIONS: readonly Activation[] = [identityAct, tanhAct, gelu, siluAct, reluAct];
+const SQRT_2_OVER_PI = Math.sqrt(2 / Math.PI);
+/** The cubic term's weight in torch's tanh GELU. */
+const GELU_TANH_COEF = 0.044715;
 
-const ACT_NAMES = ['none', 'tanh', 'gelu', 'silu', 'relu'] as const;
+/** torch's gelu(approximate='tanh'). tanh is written as 1 − 2/(e^{2u} + 1),
+ *  which saturates to ±1 for large |u| where WGSL tanh can return NaN. */
+export const geluTanhAct = ((x: d.v4f) => {
+  'use gpu';
+  const u = SQRT_2_OVER_PI * (x + GELU_TANH_COEF * x * x * x);
+  const th = 1 - 2 / (std.exp(2 * u) + 1);
+  return 0.5 * x * (1 + th);
+}) as Activation;
+
+export const ACTIVATIONS: readonly Activation[] = [
+  identityAct,
+  tanhAct,
+  gelu,
+  siluAct,
+  reluAct,
+  geluTanhAct,
+];
+
+const ACT_NAMES = ['none', 'tanh', 'gelu', 'silu', 'relu', 'geluTanh'] as const;
 for (const [i, name] of ACT_NAMES.entries()) {
   if (ACT_CODE[name] !== i || ACTIVATIONS[i] === undefined) {
     throw new Error(

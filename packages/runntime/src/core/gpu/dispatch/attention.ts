@@ -74,6 +74,11 @@ export const attnSpec = defineSpec({
     } else if (ctx.subgroupsOk && attnFlashLanes(attrs.headDim) > 0) {
       route = 'flash';
     } else if (Math.ceil(rowHeads / WORKGROUP_SIZE) > MAX_WORKGROUPS_PER_DIM) {
+      if (attrs.headDim > 128) {
+        throw new Error(
+          `sdpa: ${rowHeads} row-heads at headDim ${attrs.headDim} need the batch kernel, which stops at 128`,
+        );
+      }
       route = 'batch';
     } else if (!f16 && ctx.subgroupsOk && rowHeads <= MAX_WORKGROUPS_PER_DIM && splitFits) {
       route = 'rowsSubgroupSplit';

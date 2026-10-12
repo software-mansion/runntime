@@ -88,12 +88,14 @@ export function encodeTimed(
     return () => readSpans(query).then((spans) => ({ gpuNs: spans[0]! }));
   }
   const { timed, read } = encodePerDispatch(device, encoder, handles);
+  // The caller reuses its handle list once the submit is encoded.
+  const names = handles.map((h) => h.name);
   return () =>
     read().then((spans) => {
       let gpuNs = 0;
       const opNs = new Map<string, GpuOpTime>();
       for (let i = 0; i < timed; i++) {
-        const name = handles[i]!.name;
+        const name = names[i]!;
         const ns = spans[i]!;
         gpuNs += ns;
         const entry = opNs.get(name);

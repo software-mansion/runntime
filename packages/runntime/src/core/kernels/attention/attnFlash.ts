@@ -57,8 +57,13 @@ export function attnFlashLanes(headDim: number): number {
   return headDim % 32 === 0 ? 8 : headDim % 16 === 0 ? 4 : 0;
 }
 
-/** Keys per block. f32 heads wider than 32 take 16 to fit in 16 KiB of workgroup memory. */
+/** Bytes of one key or value tile for heads past 128. */
+const TILE_BYTES = 8192;
+
+/** Keys per block, so the key and value tiles fit in 16 KiB of workgroup
+ *  memory: 32, 16 for f32 heads wider than 32, fewer for heads past 128. */
 function tileKeys(headDim: number, f16: boolean): number {
+  if (headDim > 128) return Math.max(1, Math.floor(TILE_BYTES / (headDim * (f16 ? 2 : 4))));
   return !f16 && headDim > 32 ? 16 : 32;
 }
 

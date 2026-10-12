@@ -39,6 +39,10 @@ const precisions = <T extends object>(repo: string, size: string, common: T) => 
 const MINILM = precisions('all-MiniLM-L6-v2', 'base', {
   tokenizerPath: tokenizer('all-MiniLM-L6-v2'),
 } satisfies TextEmbedderModel);
+const EMBEDDINGGEMMA_2 = precisions('embeddinggemma-2', 'text', {
+  arch: 'embeddinggemma-2',
+  tokenizerPath: tokenizer('embeddinggemma-2'),
+} satisfies TextEmbedderModel);
 
 const MOONSHINE_TINY = precisions('moonshine', 'tiny', {
   arch: 'moonshine',
@@ -92,6 +96,9 @@ export const models = {
   textEmbedding: {
     /** 384-dim sentence embeddings, 22M parameters. */
     ALL_MINILM_L6_V2: MINILM,
+    /** Google's EmbeddingGemma 2 text model: 768-dim embeddings in 100+
+     *  languages and code, inputs up to 2048 tokens, 270M parameters. */
+    EMBEDDINGGEMMA_2: EMBEDDINGGEMMA_2,
   },
   privacyFilter: {
     /** OpenAI's privacy-filter: 1.5B parameters, 50M active per token,

@@ -35,16 +35,35 @@ export function layerNorm(x: Value, weight: Value, eps = 1e-5, bias?: Value): Va
 }
 
 /** RMSNorm over the last dim in one dispatch: x · rsqrt(mean(x²) + eps) ·
- *  weight. Sums in f32 even for f16 x, so x² never overflows. */
-export function rmsNorm(x: Value, weight: Value, eps = 1e-6): Value {
+ *  weight. Sums in f32 even for f16 x, so x² never overflows.
+ *
+ *  `group` normalizes each run of `group` columns on its own (per-head
+ *  norms); the weight is then `group` long, shared by every run, or N long
+ *  with a slice per run. `residual` and `scale` turn the output into
+ *  (residual + norm(x)) · scale. */
+export function rmsNorm(
+  x: Value,
+  weight: Value,
+  eps = 1e-6,
+  opts: { group?: number; residual?: Value; scale?: number } = {},
+): Value {
   const [m, n, dtype] = want2d('rmsNorm', x, FLOAT_DTYPES);
-  if (weight.shape.dtype !== dtype || weight.shape.elems !== n) {
+  const { group = n, residual, scale = 1 } = opts;
+  if (!Number.isInteger(group) || group < 1 || n % group !== 0) {
+    throw new Error(`rmsNorm: group ${group} must divide the row width ${n}`);
+  }
+  const wl = weight.shape.elems;
+  if (weight.shape.dtype !== dtype || (wl !== group && wl !== n)) {
     throw new Error(
-      `rmsNorm: weight must be ${dtype} [N] = ${n} elems, got (${weight.shape.elems},${weight.shape.dtype})`,
+      `rmsNorm: weight must be ${dtype} with ${group} or ${n} elems, got (${wl},${weight.shape.dtype})`,
     );
   }
   if (!(eps > 0)) throw new Error(`rmsNorm: eps must be positive, got ${eps}`);
-  return pending({ elems: m * n, dtype, dims: [m, n] }, 'rmsNorm', [x, weight], eps);
+  if (residual && (residual.shape.dtype !== dtype || residual.shape.elems !== m * n)) {
+    throw new Error(`rmsNorm: residual must be ${dtype} [${m}, ${n}]`);
+  }
+  const inputs = residual ? [x, weight, residual] : [x, weight];
+  return pending({ elems: m * n, dtype, dims: [m, n] }, 'rmsNorm', inputs, eps, [group, scale]);
 }
 
 /** Router top-k plus softmax over the selected logits, lowest index on ties.

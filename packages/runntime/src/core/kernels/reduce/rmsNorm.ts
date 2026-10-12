@@ -1,5 +1,9 @@
 /** RMSNorm in one dispatch: x · rsqrt(mean(x²) + eps) · weight. One
- *  workgroup per row.
+ *  workgroup per row. With a residual and an output scale it computes
+ *  (residual + norm(x)) · scale, a post-norm block in the same dispatch.
+ *  The weight is read at (row·cols + j) mod weightLen, so a weight longer
+ *  than a row tiles across rows: per-head norms over a [T, heads·d] slab run
+ *  as rows of d, each head with its own slice.
  *
  *  Each thread sums x² over its share of the row, in vec4 when cols % 4 == 0.
  *  With subgroups the workgroup is one 32-lane subgroup and subgroupAdd adds
@@ -21,7 +25,14 @@ import {
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
-const Dims = d.struct({ rows: d.u32, cols: d.u32, eps: d.f32 });
+const Dims = d.struct({
+  rows: d.u32,
+  cols: d.u32,
+  eps: d.f32,
+  weightLen: d.u32,
+  hasResidual: d.u32,
+  outScale: d.f32,
+});
 
 const TREE_STRIDES = Array.from(
   { length: Math.log2(WORKGROUP_SIZE) },
@@ -49,6 +60,7 @@ const makeScalarLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
     weight: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
+    residual: { storage: d.arrayOf(elem.scalar), access: 'readonly' }, // dead when hasResidual=0
     out: { storage: d.arrayOf(elem.scalar), access: 'mutable' },
     dims: { uniform: Dims },
   });
@@ -59,6 +71,7 @@ const makeVec4Layout = (elem: Elem) =>
   tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
     weight: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
+    residual: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // dead when hasResidual=0
     out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
     dims: { uniform: Dims },
   });
@@ -117,15 +130,22 @@ function makeVariant(elem: Elem, vec4: boolean, subgroups: boolean) {
 
     if (vec4) {
       const base = row * words;
+      const weightWords = D.weightLen >>> 2;
       for (let i = tid; i < words; i += wg) {
-        const v = d.vec4f(V.$.x[base + i]!) * inv;
-        V.$.out[base + i] = storeVec4(v * d.vec4f(V.$.weight[i]!));
+        let v = d.vec4f(V.$.x[base + i]!) * inv * d.vec4f(V.$.weight[(base + i) % weightWords]!);
+        if (D.hasResidual > 0) {
+          v += d.vec4f(V.$.residual[base + i]!);
+        }
+        V.$.out[base + i] = storeVec4(v * D.outScale);
       }
     } else {
       const base = row * D.cols;
       for (let j = tid; j < D.cols; j += wg) {
-        const v = d.f32(S.$.x[base + j]!) * inv;
-        S.$.out[base + j] = storeScalar(v * d.f32(S.$.weight[j]!));
+        let v = d.f32(S.$.x[base + j]!) * inv * d.f32(S.$.weight[(base + j) % D.weightLen]!);
+        if (D.hasResidual > 0) {
+          v += d.f32(S.$.residual[base + j]!);
+        }
+        S.$.out[base + j] = storeScalar(v * D.outScale);
       }
     }
   });
@@ -159,11 +179,21 @@ export function createRmsNormPipeline(
 export function rmsNormHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createRmsNormPipeline>,
-  args: { rows: number; cols: number; eps: number; vec4: boolean; subgroups: boolean },
-  buffers: { x: FloatBuffer; weight: FloatBuffer; out: FloatBuffer },
+  args: {
+    rows: number;
+    cols: number;
+    eps: number;
+    weightLen: number;
+    hasResidual: number;
+    outScale: number;
+    vec4: boolean;
+    subgroups: boolean;
+  },
+  buffers: { x: FloatBuffer; weight: FloatBuffer; residual: FloatBuffer; out: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = cachedUniform(root, Dims, { rows: args.rows, cols: args.cols, eps: args.eps });
+  const { rows, cols, eps, weightLen, hasResidual, outScale } = args;
+  const dims = cachedUniform(root, Dims, { rows, cols, eps, weightLen, hasResidual, outScale });
   const { layout } = rmsNormVariant(elem, args.vec4, args.subgroups);
   const bindGroup = cachedBindGroup(root, layout, { ...buffers, dims });
   // One workgroup per row.

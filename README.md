@@ -133,7 +133,7 @@ from `models`, or spread one and change a field.
 
 | Task                  | Factory                   | Models                                |
 | --------------------- | ------------------------- | ------------------------------------- |
-| Text embedding        | `createTextEmbedder`      | all-MiniLM-L6-v2                      |
+| Text embedding        | `createTextEmbedder`      | all-MiniLM-L6-v2, EmbeddingGemma 2    |
 | Privacy filter        | `createPrivacyFilter`     | OpenAI privacy-filter (int8)          |
 | Speech to text        | `createSpeechToText`      | Moonshine tiny / base, streaming tiny |
 | Object detection      | `createObjectDetector`    | YOLO26 n / m                          |
