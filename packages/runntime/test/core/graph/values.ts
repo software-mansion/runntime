@@ -2,7 +2,6 @@
  *  input is a pending Value with no op behind it, and nothing is ever
  *  evaluated. */
 import {
-  hwc4Meta,
   materialized,
   pending,
   type EagerDtype,
@@ -21,9 +20,12 @@ export function input(dims: number[], dtype: EagerDtype = 'f32'): Value {
   return pending(meta(dims, dtype), 'reshape', []);
 }
 
-/** An hwc4-stored f16 image input, [C, H, W]. */
+/** An hwc4-stored f16 image input, [C, H, W]: channels padded up to a
+ *  multiple of 4. Written out rather than taken from hwc4Meta, which the ops
+ *  use, so a bug there fails here. */
 export function hwc4Input(c: number, h: number, w: number): Value {
-  return pending(hwc4Meta(c, h, w), 'toHwc4', []);
+  const elems = h * w * Math.ceil(c / 4) * 4;
+  return pending({ elems, dtype: 'f16', dims: [c, h, w], layout: 'hwc4' }, 'toHwc4', []);
 }
 
 /** A quantized weight of logical [rows, cols]: `bits`-wide values packed into
