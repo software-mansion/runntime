@@ -49,6 +49,11 @@ describe('conv1d', () => {
       opts: { padding: 1, padLeft: 1 },
       error: /padding excludes padLeft\/padRight/,
     },
+    {
+      name: 'a zero kernel',
+      opts: { kernelSize: 0 },
+      error: /kernelSize 0 and stride 1 must be positive integers/,
+    },
     { name: 'a zero stride', opts: { stride: 0 }, error: /stride 0 must be positive integers/ },
     {
       name: "'same' with stride 2",
@@ -76,19 +81,12 @@ describe('conv1d', () => {
       opts: { bias: input([4]) },
       error: /bias must be f32 \[C_out\] = 6 elems/,
     },
-  ])('rejects $name', ({ opts = {}, w = weight(3), error }) => {
-    expect(() => conv1d(x, w, { kernelSize: 3, stride: 1, ...opts })).toThrow(error);
-  });
-
-  it('rejects an input shorter than the kernel', () => {
-    expect(() => conv1d(input([2, CIN]), weight(3), { kernelSize: 3, stride: 1 })).toThrow(
-      /padded frames 2\+0\+0 < kernelSize 3/,
-    );
-  });
-
-  it('rejects a zero kernel', () => {
-    expect(() => conv1d(x, input([0, COUT]), { kernelSize: 0, stride: 1 })).toThrow(
-      /kernelSize 0 and stride 1 must be positive integers/,
-    );
+    {
+      name: 'an input shorter than the kernel',
+      x: input([2, CIN]),
+      error: /padded frames 2\+0\+0 < kernelSize 3/,
+    },
+  ])('rejects $name', ({ x: xIn = x, opts = {}, w = weight(3), error }) => {
+    expect(() => conv1d(xIn, w, { kernelSize: 3, stride: 1, ...opts })).toThrow(error);
   });
 });
