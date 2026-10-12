@@ -22,7 +22,6 @@ describe('reshape', () => {
     expect(() => reshape(input([2, 3]), [4, 2])).toThrow(
       /mismatch inputs has - 6, newDims imply: 8/,
     );
-    expect(() => {});
   });
 
   it('rejects hwc4 storage', () => {
