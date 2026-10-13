@@ -58,6 +58,11 @@ describe('matmul', () => {
       expect(c.pending?.attrs).toEqual([1, 1, ACT_CODE.gelu, 0, 0]);
     });
 
+    it('takes the tanh-approximated gelu', () => {
+      const c = matmul(a, b, { activation: 'geluTanh' });
+      expect(c.pending?.attrs).toEqual([0, 0, ACT_CODE.geluTanh, 0, 0]);
+    });
+
     it.each([
       {
         name: 'a bias of the wrong length',

@@ -77,8 +77,9 @@ export function rmsNorm(
   }
   const wl = weight.shape.elems;
   if (weight.shape.dtype !== dtype || (wl !== group && wl !== n)) {
+    const lens = group === n ? `${n}` : `${group} or ${n}`;
     throw new Error(
-      `rmsNorm: weight must be ${dtype} with ${group} or ${n} elems, got (${wl},${weight.shape.dtype})`,
+      `rmsNorm: weight must be ${dtype} with ${lens} elems, got (${wl},${weight.shape.dtype})`,
     );
   }
   if (!(eps > 0)) throw new Error(`rmsNorm: eps must be positive, got ${eps}`);
