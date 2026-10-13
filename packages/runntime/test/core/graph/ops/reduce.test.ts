@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { layerNorm, mean, softmax, topk } from '../../../../src/core/graph/ops.ts';
+import { layerNorm, mean, rmsNorm, softmax, topk } from '../../../../src/core/graph/ops.ts';
 import { input, meta } from '../values.ts';
 
 describe('reductions over the last dim', () => {
@@ -51,6 +51,37 @@ describe('layerNorm', () => {
     { name: 'eps NaN', eps: NaN, error: /eps must be positive/ },
   ])('rejects $name', ({ weight = input([8]), bias, eps = 1e-5, error }) => {
     expect(() => layerNorm(x, weight, eps, bias)).toThrow(error);
+  });
+});
+
+describe('rmsNorm', () => {
+  const x = input([4, 8]);
+
+  it('keeps the shape and carries eps', () => {
+    const weight = input([8]);
+    const c = rmsNorm(x, weight, 1e-5);
+    expect(c.shape).toEqual(meta([4, 8]));
+    expect(c.pending).toMatchObject({ op: 'rmsNorm', scalar: 1e-5, inputs: [x, weight] });
+  });
+
+  it('keeps f16, with eps 1e-6 by default', () => {
+    const c = rmsNorm(input([4, 8], 'f16'), input([8], 'f16'));
+    expect(c.shape).toEqual(meta([4, 8], 'f16'));
+    expect(c.pending).toMatchObject({ scalar: 1e-6 });
+  });
+
+  it.each([
+    { name: 'a 1D input', x: input([8]), error: /expected a 2D/ },
+    {
+      name: 'a weight of the wrong length',
+      weight: input([4]),
+      error: /weight must be f32 \[N\] = 8 elems/,
+    },
+    { name: 'an f16 weight on f32', weight: input([8], 'f16'), error: /weight must be f32/ },
+    { name: 'eps of 0', eps: 0, error: /eps must be positive/ },
+    { name: 'eps NaN', eps: NaN, error: /eps must be positive/ },
+  ])('rejects $name', ({ x: xIn = x, weight = input([8]), eps = 1e-6, error }) => {
+    expect(() => rmsNorm(xIn, weight, eps)).toThrow(error);
   });
 });
 

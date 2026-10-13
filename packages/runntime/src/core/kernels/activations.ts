@@ -77,3 +77,18 @@ export function activationFor(code: number | undefined): Activation {
 }
 
 export const actSlot = tgpu.slot<Activation>(identityAct);
+
+/** Bound on both SwiGLU inputs. */
+const SWIGLU_LIMIT = 7.0;
+/** Slope of the gate's sigmoid. */
+const SWIGLU_ALPHA = 1.702;
+
+/** gpt-oss SwiGLU on 4 values: gate·sigmoid(SWIGLU_ALPHA·gate)·(lin + 1),
+ *  with the gate capped at SWIGLU_LIMIT and lin clamped to ±SWIGLU_LIMIT.
+ *  Scalar callers splat into a vec4 and read .x. */
+export const clampedSwiglu = (gate: d.v4f, lin: d.v4f): d.v4f => {
+  'use gpu';
+  const g = std.min(gate, d.vec4f(SWIGLU_LIMIT));
+  const l = std.clamp(lin, d.vec4f(-SWIGLU_LIMIT), d.vec4f(SWIGLU_LIMIT));
+  return (g / (1 + std.exp(-SWIGLU_ALPHA * g))) * (l + 1);
+};

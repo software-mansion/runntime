@@ -1,6 +1,12 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
-import { flatWorkgroupId, type FloatBuffer, type KernelHandle, makeHandle } from '../common.ts';
+import {
+  flatWorkgroupId,
+  type FloatBuffer,
+  type KernelHandle,
+  makeHandle,
+  SUBGROUP_WIDTH,
+} from '../common.ts';
 import { cachedBindGroup } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
@@ -254,8 +260,6 @@ export function matmulGemvVec4Handle(
 // ── Subgroup small-m variant (4 ≤ m ≤ MATMUL_SMALL_M_MAX_ROWS, m % 4 == 0) ─
 
 export const MATMUL_SMALL_M_MAX_ROWS = 32;
-
-const SUBGROUP_WIDTH = 32;
 
 const BLOCK_ROWS = 4;
 

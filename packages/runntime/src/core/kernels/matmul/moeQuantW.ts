@@ -21,18 +21,20 @@ import {
   type U32Buffer,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
+import { clampedSwiglu } from '../activations.ts';
 import { deqVec4 } from '../quantCommon.ts';
 
 /** Experts per token: the k of the topk that feeds these kernels. */
 export const MOE_SLOTS = 4;
 
-const K_LANES = 32;
+/** Units per workgroup. A unit computes 4 output columns of one row. */
 const UNITS = 8;
+/** Threads that split one unit's K between them. */
+const K_LANES = 32;
+/** Threads per workgroup. */
 const WG = K_LANES * UNITS;
 
-const SWIGLU_LIMIT = 7.0;
-const SWIGLU_ALPHA = 1.702;
-
+/** Steps of the tree that adds the K lanes: K_LANES/2 down to 1. */
 const LANE_STRIDES = Array.from(
   { length: Math.log2(K_LANES) },
   (_, level) => K_LANES >> (level + 1),
@@ -164,13 +166,10 @@ const moeUpKernel = tgpu.computeFn({
 
     if (lane === 0 && unit < C.n4) {
       const b = expert * C.n4 + unit;
-      const g = std.min(partialA.$[lid]! + moeUpLayout.$.bias[b]!, d.vec4f(SWIGLU_LIMIT));
-      const l = std.clamp(
+      moeUpLayout.$.out[row * C.n4 + unit] = clampedSwiglu(
+        partialA.$[lid]! + moeUpLayout.$.bias[b]!,
         partialB.$[lid]! + moeUpLayout.$.bias[C.experts * C.n4 + b]!,
-        d.vec4f(-SWIGLU_LIMIT),
-        d.vec4f(SWIGLU_LIMIT),
       );
-      moeUpLayout.$.out[row * C.n4 + unit] = (g / (1 + std.exp(-SWIGLU_ALPHA * g))) * (l + 1);
     }
   }
 });

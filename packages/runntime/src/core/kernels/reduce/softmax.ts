@@ -15,6 +15,7 @@ import {
   flatWorkgroupId,
   type KernelHandle,
   makeHandle,
+  SUBGROUP_WIDTH,
   WORKGROUP_SIZE,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
@@ -22,7 +23,6 @@ import { type Elem, F32_ELEM } from '../elem.ts';
 
 const Dims = d.struct({ rows: d.u32, cols: d.u32 });
 
-const SUBGROUP_WIDTH = 32;
 /** Start of the running max. A thread with no columns adds (NEG_FLT_MAX, 0),
  *  which changes nothing. */
 const NEG_FLT_MAX = -3.4028234663852886e38;

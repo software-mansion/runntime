@@ -4,7 +4,13 @@
 
 import { d } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
-import type { F16Buffer, F32Buffer, FloatBuffer, KernelHandle } from '../kernels/common.ts';
+import {
+  type F16Buffer,
+  type F32Buffer,
+  type FloatBuffer,
+  type KernelHandle,
+  SUBGROUP_WIDTH,
+} from '../kernels/common.ts';
 import { checkBindable, createStorageFor, readbackShape, readbackShapes } from './buffers.ts';
 import { BufferPool } from './bufferPool.ts';
 import { elemFor } from '../kernels/elem.ts';
@@ -105,7 +111,7 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
   const subgroupsOk =
     root.device.features.has('subgroups') &&
     ((root.device as GPUDevice & { adapterInfo?: { subgroupMinSize?: number } }).adapterInfo
-      ?.subgroupMinSize ?? 0) >= 32;
+      ?.subgroupMinSize ?? 0) >= SUBGROUP_WIDTH;
   const pool = new BufferPool((shape) => createStorageFor(root, shape));
   const handles: KernelHandle[] = [];
   // Stable small ints so buffers and pipelines can key the handle memo.

@@ -169,15 +169,15 @@ export const matmulQuantWSpec = defineSpec({
 
 export const moeUpSpec = defineSpec({
   attrs: (p) => {
-    const [bits, groupSize] = p.attrs as [number, number];
-    return { bits, groupSize };
+    const [bits, groupSize, experts] = p.attrs as [number, number, number];
+    return { bits, groupSize, experts };
   },
   cfg: (node, attrs) => ({
     k: node.pending!.inputs[0]!.shape.dims![1]!,
     n: node.shape.dims![1]!,
     bits: attrs.bits,
     groupSize: attrs.groupSize,
-    experts: node.pending!.inputs[6]!.shape.dims![0]! / 2,
+    experts: attrs.experts,
   }),
   pipeline: (root, _dtype, cfg) => createMoeUpPipeline(root, cfg),
   encode: ({ node, cfg, pipeline, inputs, out, ctx }) => [
@@ -201,15 +201,15 @@ export const moeUpSpec = defineSpec({
 
 export const moeDownSpec = defineSpec({
   attrs: (p) => {
-    const [bits, groupSize] = p.attrs as [number, number];
-    return { bits, groupSize };
+    const [bits, groupSize, experts] = p.attrs as [number, number, number];
+    return { bits, groupSize, experts };
   },
   cfg: (node, attrs) => ({
     k: node.pending!.inputs[0]!.shape.dims![1]!,
     n: node.shape.dims![1]!,
     bits: attrs.bits,
     groupSize: attrs.groupSize,
-    experts: node.pending!.inputs[4]!.shape.dims![0]!,
+    experts: attrs.experts,
   }),
   pipeline: (root, _dtype, cfg) => createMoeDownPipeline(root, cfg),
   encode: ({ node, cfg, pipeline, inputs, out, ctx }) => [

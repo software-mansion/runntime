@@ -195,7 +195,7 @@ export function moeUp(
   opts: { bits: 8 | 4; groupSize: number },
 ): Value {
   const [t] = want2d('moeUp', x, ['f32']);
-  const n = checkExpertWeight('moeUp', glu, x, route, t, opts);
+  const { n, experts } = checkExpertWeight('moeUp', glu, x, route, t, opts);
   checkExpertWeight('moeUp', lin, x, route, t, opts);
   if (lin.w.shape.dims![0] !== glu.w.shape.dims![0] || lin.w.shape.dims![1] !== n) {
     throw new Error('moeUp: glu and lin weights must have the same shape');
@@ -205,7 +205,7 @@ export function moeUp(
     'moeUp',
     [x, route, glu.w, glu.scales, lin.w, lin.scales, cat([glu.bias, lin.bias], 0)],
     undefined,
-    [opts.bits, opts.groupSize],
+    [opts.bits, opts.groupSize, experts],
   );
 }
 
@@ -224,7 +224,7 @@ export function moeDown(
     throw new Error(`moeDown: act rows ${rows} must be a multiple of ${MOE_SLOTS}`);
   }
   const t = rows / MOE_SLOTS;
-  const n = checkExpertWeight('moeDown', out, act, route, t, opts);
+  const { n, experts } = checkExpertWeight('moeDown', out, act, route, t, opts);
   if (residual.shape.dtype !== 'f32' || residual.shape.elems !== t * n) {
     throw new Error(`moeDown: residual must be f32 [${t}, ${n}]`);
   }
@@ -233,12 +233,12 @@ export function moeDown(
     'moeDown',
     [act, route, out.w, out.scales, out.bias, residual],
     undefined,
-    [opts.bits, opts.groupSize],
+    [opts.bits, opts.groupSize, experts],
   );
 }
 
 /** Checks one routed layer's weights against its input a [*, K] and the
- *  route of t tokens. Returns N. */
+ *  route of t tokens. Returns N and the expert count. */
 function checkExpertWeight(
   op: string,
   { w, scales, bias }: QuantExpertWeight,
@@ -246,7 +246,7 @@ function checkExpertWeight(
   route: Value,
   t: number,
   opts: { bits: 8 | 4; groupSize: number },
-): number {
+): { n: number; experts: number } {
   const { bits, groupSize } = opts;
   if (bits !== 8 && bits !== 4) throw new Error(`${op}: bits must be 8 or 4, got ${bits}`);
   const k = a.shape.dims![1]!;
@@ -277,7 +277,7 @@ function checkExpertWeight(
   ) {
     throw new Error(`${op}: route must be topk's f32 [${t}, ${2 * MOE_SLOTS}] output`);
   }
-  return n;
+  return { n, experts };
 }
 
 /** Fused gemv and argmax for greedy decoding: w [V,N] · x [1,N] to the argmax

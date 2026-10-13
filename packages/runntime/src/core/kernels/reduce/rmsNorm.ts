@@ -15,14 +15,13 @@ import {
   flatWorkgroupId,
   type KernelHandle,
   makeHandle,
+  SUBGROUP_WIDTH,
   WORKGROUP_SIZE,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
 const Dims = d.struct({ rows: d.u32, cols: d.u32, eps: d.f32 });
-
-const SUBGROUP_WIDTH = 32;
 
 const TREE_STRIDES = Array.from(
   { length: Math.log2(WORKGROUP_SIZE) },
