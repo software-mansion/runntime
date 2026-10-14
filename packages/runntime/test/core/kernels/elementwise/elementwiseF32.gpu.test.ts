@@ -81,6 +81,14 @@ describe('elementwiseF32 kernel', () => {
     expectClose(await toArray(op(a, b), ex), want, { atol: 0, rtol: 0 });
   });
 
+  // The kernel reads lin[i] with no broadcast index, so a smaller lin would be
+  // read past its end. The op has to refuse it before the kernel runs.
+  it('swiglu refuses a broadcast lin', () => {
+    const glu = upload(root, new Float32Array(6), [2, 3]);
+    const lin = upload(root, new Float32Array(3), [1, 3]);
+    expect(() => swiglu(glu, lin)).toThrow(/glu\/lin must match/);
+  });
+
   it('f16 swiglu', async (ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const glu = new Float32Array([-9, -1, 0, 0.5, 3, 7, 12]);
