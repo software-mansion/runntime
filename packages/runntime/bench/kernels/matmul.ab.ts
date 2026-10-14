@@ -110,6 +110,8 @@ abSuite('matmul', [
     addend: true,
   }),
 
+  mm('tiled, B past 2^24 elements [9,2560]×[2560,9728]', 9, 2560, 9728),
+
   // tiledF16: f16, m ≥ 8, k ≥ 64, k and n multiples of 4.
   mm('tiledF16, MiniLM qkv bucket 64 [64,384]×[384,1152]', 64, 384, 1152, {
     dtype: 'f16',
