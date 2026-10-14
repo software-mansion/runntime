@@ -56,6 +56,8 @@ Before writing or reviewing code, comments or docs, read
 - `pnpm install` installs deps and the Git hooks (Lefthook: Prettier and
   ESLint on staged files, `tsc` on the library, commitlint on the message).
 - `pnpm typecheck`, `pnpm lint`, `pnpm format`.
+- Once per machine, before the GPU tests: `pnpm --filter runntime exec
+playwright install chromium`. Without it Vitest cannot start the browser.
 - `pnpm --filter runntime build`: tsdown, output in `dist`. Kernel files carry
   `'use gpu'` and `unplugin-typegpu` embeds their WGSL, so consumers need no
   build plugin. `typegpu`, `@huggingface/transformers` and `js-tiktoken` stay
@@ -94,10 +96,11 @@ Before writing or reviewing code, comments or docs, read
   extension.
 - `*.test.ts` runs in Node with no GPU. `*.gpu.test.ts` runs in headless
   Chromium on the machine's real GPU (Vitest browser mode, Playwright).
-  `test/gpu.ts` gives it the device (`gpu()`), feature skips
-  (`requireFeature`) and the float check (`expectClose`). CI runners have no
-  GPU, so the GPU tests run locally: run them before pushing a change to a
-  kernel or its dispatch.
+  `test/gpu.ts` gives it the device (`gpu()`), uploads freed when the test
+  ends (`upload`), feature skips (`requireFeature`), the float check
+  (`expectClose`), seeded inputs (`randomF32`) and f16 rounding for
+  references (`roundF16`). CI runners have no GPU, so the GPU tests run
+  locally: run them before pushing a change to a kernel or its dispatch.
 - Write the test once and put the cases in a list that `it.each` runs.
   Adding a case should be one line.
 - Expected values come from the math, worked out by hand or from Hugging
