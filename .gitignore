@@ -14,3 +14,6 @@ apps/docs/src/content/docs/api/
 
 # vitest browser-mode failure screenshots
 .vitest/
+
+# kernel A/B base copy and results
+.bench/

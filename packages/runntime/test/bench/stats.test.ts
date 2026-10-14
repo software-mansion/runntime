@@ -23,9 +23,12 @@ describe('callsPerRound', () => {
 
 describe('median and spread', () => {
   it.each([
-    { xs: [3, 1, 2], median: 2, spread: 0.5 },
-    { xs: [4, 1, 3, 2], median: 2.5, spread: 0.6 },
+    // Quartiles are the medians of the lower and upper halves, middle excluded.
+    { xs: [3, 1, 2], median: 2, spread: 1 },
+    { xs: [4, 1, 3, 2], median: 2.5, spread: 0.8 },
     { xs: [5, 5, 5], median: 5, spread: 0 },
+    // One spike in eight leaves the middle half alone: q1 = 100, q3 = 101.
+    { xs: [100, 100, 101, 100, 300, 101, 100, 101], median: 100.5, spread: 1 / 100.5 },
   ])('$xs', ({ xs, median: m, spread: s }) => {
     expect(median(xs)).toBe(m);
     expect(spread(xs)).toBeCloseTo(s, 12);
@@ -56,7 +59,7 @@ describe('compare', () => {
       verdict: 'faster',
       delta: -0.25,
     },
-    // A's rounds spread ±10% (90..110), so a 8% change is inside the noise.
+    // A's middle half spans 90..110, 20% of its median, so 8% is noise.
     {
       name: '8% faster, noisy A',
       a: [90, 100, 110],
@@ -72,7 +75,7 @@ describe('compare', () => {
 
   it('reports the larger of the floor and either side’s spread as noise', () => {
     expect(compare([100, 100, 100], [100, 100, 100]).noise).toBe(0.03);
-    expect(compare([90, 100, 110], [100, 100, 100]).noise).toBeCloseTo(0.1, 12);
+    expect(compare([90, 100, 110], [100, 100, 100]).noise).toBeCloseTo(0.2, 12);
   });
 });
 
@@ -105,12 +108,16 @@ describe('formatTable', () => {
         maxAbsDiff: 0,
         calls: 113,
       },
-      { kernel: 'conv2d', case: 'yolo 80×80', skipped: 'threw on A: conv2d is not a function' },
+      {
+        kernel: 'conv2d',
+        case: 'yolo 80×80',
+        note: 'skipped, threw on A: conv2d is not a function',
+      },
     ]);
     expect(table.split('\n').slice(2)).toEqual([
       '| matmul | tiled 64×64×64 | 412 | 298 | -27.6% | ±3.0% | faster | 3.1e-4 |',
       '| softmax | rows 8×1024 | 88.2 | 87.9 | -0.3% | ±3.1% | same | 0 |',
-      '| conv2d | yolo 80×80 | | | | | skipped: threw on A: conv2d is not a function | |',
+      '| conv2d | yolo 80×80 | | | | | skipped, threw on A: conv2d is not a function | |',
     ]);
   });
 });
