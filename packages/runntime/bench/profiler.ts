@@ -13,7 +13,8 @@ export interface Profiler {
   collect(): Promise<number[]>;
 }
 
-/** Times every compute pass encoded on `device`. On Metal, Chrome samples
+/** Times every compute pass encoded on `device`. Call once per device; each
+ *  call wraps the previous one and passes other devices through. On Metal, Chrome samples
  *  timestamps only at command-buffer boundaries, so a buffer's time is the
  *  span from its first pass start to its last pass end. */
 export function installProfiler(device: GPUDevice): Profiler {

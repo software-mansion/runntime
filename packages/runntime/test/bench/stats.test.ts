@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   callsPerRound,
   compare,
+  confirm,
   formatTable,
   maxAbsDiff,
   median,
@@ -76,6 +77,34 @@ describe('compare', () => {
   it('reports the larger of the floor and either side’s spread as noise', () => {
     expect(compare([100, 100, 100], [100, 100, 100]).noise).toBe(0.03);
     expect(compare([90, 100, 110], [100, 100, 100]).noise).toBeCloseTo(0.2, 12);
+  });
+});
+
+describe('confirm', () => {
+  const slower = { aUs: 100, bUs: 110, delta: 0.1, noise: 0.03, verdict: 'slower' } as const;
+  it.each([
+    {
+      name: 'two slower runs stay slower',
+      second: { aUs: 100, bUs: 120, delta: 0.2, noise: 0.05, verdict: 'slower' },
+      want: { aUs: 100, bUs: 115, delta: 0.15, noise: 0.05, verdict: 'slower' },
+    },
+    {
+      name: 'a slower run then a same run is same',
+      second: { aUs: 100, bUs: 101, delta: 0.01, noise: 0.03, verdict: 'same' },
+      want: { aUs: 100, bUs: 105.5, delta: 0.055, noise: 0.03, verdict: 'same' },
+    },
+    {
+      name: 'opposite directions are same',
+      second: { aUs: 100, bUs: 90, delta: -0.1, noise: 0.03, verdict: 'faster' },
+      want: { aUs: 100, bUs: 100, delta: 0, noise: 0.03, verdict: 'same' },
+    },
+  ] as const)('$name', ({ second, want }) => {
+    const got = confirm(slower, second);
+    expect(got.verdict).toBe(want.verdict);
+    expect(got.aUs).toBeCloseTo(want.aUs, 12);
+    expect(got.bUs).toBeCloseTo(want.bUs, 12);
+    expect(got.delta).toBeCloseTo(want.delta, 12);
+    expect(got.noise).toBe(want.noise);
   });
 });
 

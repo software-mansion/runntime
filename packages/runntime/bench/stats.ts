@@ -58,6 +58,20 @@ export function compare(a: readonly number[], b: readonly number[]): Comparison 
   return { aUs, bUs, delta, noise, verdict };
 }
 
+/** Merges a flagged comparison with a second, independent measurement. The
+ *  flag stands only if both runs agree on its direction; a lone flag is the
+ *  noise that hits about one row in 60. */
+export function confirm(first: Comparison, second: Comparison): Comparison {
+  const verdict = first.verdict === second.verdict ? first.verdict : 'same';
+  return {
+    aUs: (first.aUs + second.aUs) / 2,
+    bUs: (first.bUs + second.bUs) / 2,
+    delta: (first.delta + second.delta) / 2,
+    noise: Math.max(first.noise, second.noise),
+    verdict,
+  };
+}
+
 /** Largest |a − b| over two outputs. NaN on either side, or a length
  *  mismatch, is Infinity so it can never read as equal. */
 export function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
