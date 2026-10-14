@@ -4,6 +4,7 @@ import {
   COCO_NAMES,
   COCO_SKELETON,
   decodeDetections,
+  decodePoses,
   decodeSegmentations,
   preprocessRgba,
   type RawLevel,
@@ -100,80 +101,150 @@ describe('decodeDetections', () => {
 });
 
 describe('decodeSegmentations', () => {
-  // A 32×32 input, 4×4 grid at stride 8, 2 mask coefficients, and a 4×4 proto
-  // grid: one proto pixel per cell.
+  // A 32×32 input with 2 mask coefficients and an 8×8 proto grid, so a proto
+  // pixel is 4 input pixels: half a cell at stride 8, a quarter at stride 16.
   const opts = { numClasses: 1, numMasks: 2, inputSize: 32 };
+  const fine = () => level(4, 4, 8, 1, 2);
+  const coarse = () => level(2, 2, 16, 1, 2);
 
-  /** A level with one confident cell at `cell`, its box and mask coefficients. */
-  function oneHit(cell: number, ltrb: readonly number[], coeffs = [0, 0]): RawLevel {
-    const lvl = level(4, 4, 8, 1, 2);
+  /** Marks `cell` of `lvl` confident and writes its box and mask coefficients. */
+  function hit(lvl: RawLevel, cell: number, ltrb: readonly number[], coeffs = [0, 0]): RawLevel {
     put(lvl, cell, 0, [...ltrb, logit(0.9), ...coeffs]);
     return lvl;
   }
 
-  /** Two proto planes over the 4×4 grid, filled from `planes[c][y·4 + x]`. */
+  /** Two proto planes over the 8×8 grid, filled from `planes[c][y·8 + x]`. */
   function proto(planes: Record<number, Record<number, number>>) {
-    const data = new Float32Array(2 * 16);
+    const data = new Float32Array(2 * 64);
     for (const [c, pixels] of Object.entries(planes)) {
-      for (const [i, v] of Object.entries(pixels)) data[Number(c) * 16 + Number(i)] = v;
+      for (const [i, v] of Object.entries(pixels)) data[Number(c) * 64 + Number(i)] = v;
     }
-    return { data, h: 4, w: 4 };
+    return { data, h: 8, w: 8 };
   }
 
   it('crops the mask to the box and scores each pixel as sigmoid(coeffs · proto)', () => {
-    // Cell (2, 2), ltrb 1: box (12, 12)–(28, 28), rounded out to proto pixels
-    // 1..3. With coeffs (2, −1), proto (2, 2) sums to 10 and (3, 3) to −10;
-    // every other pixel sums to 0, sigmoid 0.5, 128. Pixel (0, 0) is outside.
+    // Fine cell (2, 2), ltrb 1: box (12, 12)–(28, 28), proto pixels 3..6.
+    // With coeffs (2, −1): proto (3, 3) sums to 10, 255; (x 5, y 4) to 2,
+    // round(255·sigmoid(2)) = 225; (6, 6) to −10, 0. Every other pixel sums
+    // to 0, sigmoid 0.5, 128. Pixel (0, 0) is outside the box.
     const [det] = decodeSegmentations(
-      [oneHit(2 * 4 + 2, [1, 1, 1, 1], [2, -1])],
-      proto({ 0: { 0: 10, 10: 5 }, 1: { 15: 10 } }),
+      [hit(fine(), 2 * 4 + 2, [1, 1, 1, 1], [2, -1])],
+      proto({ 0: { 0: 10, 27: 5, 37: 1 }, 1: { 54: 10 } }),
       opts,
     );
     expect(det).toMatchObject({ x1: 12, y1: 12, x2: 28, y2: 28 });
-    expect(det).toMatchObject({ maskX: 1, maskY: 1, maskW: 3, maskH: 3 });
-    expect([...det!.mask]).toEqual([128, 128, 128, 128, 255, 128, 128, 128, 0]);
+    expect(det).toMatchObject({ maskX: 3, maskY: 3, maskW: 4, maskH: 4 });
+    // prettier-ignore
+    expect([...det!.mask]).toEqual([
+      255, 128, 128, 128,
+      128, 128, 225, 128,
+      128, 128, 128, 128,
+      128, 128, 128, 0,
+    ]);
+  });
+
+  it('reads the box and coefficients of a hit on a coarser level', () => {
+    // Coarse cell (1, 0) is centered on (24, 8). ltrb (0.5, 0.25, 0.25, 0.5)
+    // cells of 16: box (16, 4)–(28, 16), proto pixels x 4..6, y 1..3.
+    // With coeffs (−1, 3): proto (4, 1) sums to −1 + 3 = 2, 225; (5, 2) to 6,
+    // round(255·0.99753) = 254; (6, 3) to −4, round(255·0.01799) = 5.
+    const [det] = decodeSegmentations(
+      [fine(), hit(coarse(), 1, [0.5, 0.25, 0.25, 0.5], [-1, 3])],
+      proto({ 0: { 12: 1, 30: 4 }, 1: { 12: 1, 21: 2 } }),
+      opts,
+    );
+    expect(det).toMatchObject({ x1: 16, y1: 4, x2: 28, y2: 16 });
+    expect(det).toMatchObject({ maskX: 4, maskY: 1, maskW: 3, maskH: 3 });
+    // prettier-ignore
+    expect([...det!.mask]).toEqual([
+      225, 128, 128,
+      128, 254, 128,
+      128, 128, 5,
+    ]);
   });
 
   it.each([
     {
       name: 'clips a box hanging off the top-left corner',
-      // Cell 0: box (−12, −12)–(12, 12) covers proto pixels 0..1
+      // Cell 0: box (−12, −12)–(12, 12) covers proto pixels 0..2
       cell: 0,
       ltrb: [2, 2, 1, 1],
-      want: { maskX: 0, maskY: 0, maskW: 2, maskH: 2 },
+      want: { maskX: 0, maskY: 0, maskW: 3, maskH: 3 },
     },
     {
       name: 'clips a box hanging off the bottom-right corner',
-      // Cell (3, 3): box (20, 20)–(44, 44) covers proto pixels 2..3
+      // Cell (3, 3): box (20, 20)–(44, 44) covers proto pixels 5..7
       cell: 15,
       ltrb: [1, 1, 2, 2],
-      want: { maskX: 2, maskY: 2, maskW: 2, maskH: 2 },
+      want: { maskX: 5, maskY: 5, maskW: 3, maskH: 3 },
     },
     {
       name: 'gives an empty mask for a box with no area',
       // Cell (1, 1): box (8, 8)–(8, 8) sits on a proto pixel edge
       cell: 5,
       ltrb: [0.5, 0.5, -0.5, -0.5],
-      want: { maskX: 1, maskY: 1, maskW: 0, maskH: 0 },
+      want: { maskX: 2, maskY: 2, maskW: 0, maskH: 0 },
     },
   ])('$name', ({ cell, ltrb, want }) => {
-    const [det] = decodeSegmentations([oneHit(cell, ltrb)], proto({}), opts);
+    const [det] = decodeSegmentations([hit(fine(), cell, ltrb)], proto({}), opts);
     expect(det).toMatchObject(want);
     expect(det!.mask).toHaveLength(want.maskW * want.maskH);
   });
 });
 
+describe('decodePoses', () => {
+  it('places keypoints as (offset + cell center) · stride, visibility as sigmoid', () => {
+    // Same decode as Ultralytics Pose26.kpts_decode. Cell (1, 1) of the
+    // stride-16 level is centered on (1.5, 1.5) cells.
+    const fine = level(4, 4, 8, 1, 6);
+    const coarse = level(2, 2, 16, 1, 6);
+    put(coarse, 3, 0, [1, 0.5, 0.5, 1, logit(0.8), -0.25, 0.5, 2, 0.75, -1, logit(0.3)]);
+    expect(decodePoses([fine, coarse], { numKeypoints: 2 })).toEqual([
+      {
+        x1: (1.5 - 1) * 16,
+        y1: (1.5 - 0.5) * 16,
+        x2: (1.5 + 0.5) * 16,
+        y2: (1.5 + 1) * 16,
+        score: expect.closeTo(0.8, 6),
+        classId: 0,
+        label: 'person',
+        kpts: [
+          {
+            x: (-0.25 + 1.5) * 16,
+            y: (0.5 + 1.5) * 16,
+            v: expect.closeTo(1 / (1 + Math.exp(-2)), 6),
+          },
+          { x: (0.75 + 1.5) * 16, y: (-1 + 1.5) * 16, v: expect.closeTo(0.3, 6) },
+        ],
+      },
+    ]);
+  });
+});
+
 describe('COCO tables', () => {
-  it('has 80 class names and 17 landmarks', () => {
-    expect(COCO_NAMES).toHaveLength(80);
-    expect(COCO_LANDMARKS).toHaveLength(17);
-    expect(COCO_LANDMARKS[0]).toBe('nose');
+  // Spot checks against Ultralytics coco.yaml, coco-pose.yaml and the
+  // 1-based pose skeleton in utils/plotting.py.
+  it.each([
+    [0, 'person'],
+    [56, 'chair'],
+    [79, 'toothbrush'],
+  ])('names class %i %s', (id, name) => {
+    expect(COCO_NAMES[id]).toBe(name);
   });
 
-  it('joins only existing landmarks in the skeleton', () => {
-    for (const [a, b] of COCO_SKELETON) {
-      expect(a).toBeLessThan(COCO_LANDMARKS.length);
-      expect(b).toBeLessThan(COCO_LANDMARKS.length);
-    }
+  it.each([
+    [0, 'nose'],
+    [9, 'leftWrist'],
+    [16, 'rightAnkle'],
+  ])('names landmark %i %s', (id, name) => {
+    expect(COCO_LANDMARKS[id]).toBe(name);
+  });
+
+  it.each([
+    [15, 13],
+    [5, 6],
+    [2, 4],
+  ])('joins landmarks %i and %i', (a, b) => {
+    expect(COCO_SKELETON).toContainEqual([a, b]);
   });
 });
