@@ -137,6 +137,9 @@ playwright install chromium`. Without it Vitest cannot start the browser.
   dtype it runs, every option it handles, and shapes on both sides of each
   threshold that picks it, so the cases show which inputs take the route and
   which fall back.
+- A case written for one route says so in a comment: the route it takes and
+  the condition that picks it (`// smallm: m % 4 == 0, m <= 32, subgroups`).
+  When the condition changes, the comment shows which cases to move.
 - Run the suite after every meaningful change while tuning a kernel. A change
   to a kernel already on `main` also gets an A/B run against `main`'s output:
   any difference that was not intended means the suite is missing a case, so
