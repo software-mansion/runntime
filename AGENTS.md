@@ -86,14 +86,18 @@ Before writing or reviewing code, comments or docs, read
 ## How to write tests
 
 - Vitest, configured in `packages/runntime/vitest.config.ts`. `pnpm test`
-  runs everything, `pnpm --filter runntime test:unit` only the Node tests.
+  runs everything, `pnpm --filter runntime test:unit` only the Node tests,
+  `pnpm --filter runntime test:gpu` only the GPU tests.
 - Tests live in `packages/runntime/test`, never in `src`, and the test path
   mirrors the source path: `src/core/weights/convert.ts` is tested in
   `test/core/weights/convert.test.ts`. Import the source with its `.ts`
   extension.
-- `*.test.ts` runs in Node with no GPU. `*.gpu.test.ts` is reserved for
-  tests that need real WebGPU in a browser; that project is not set up yet.
-  CI runners have no GPU, so anything that needs one cannot run in CI.
+- `*.test.ts` runs in Node with no GPU. `*.gpu.test.ts` runs in headless
+  Chromium on the machine's real GPU (Vitest browser mode, Playwright).
+  `test/gpu.ts` gives it the device (`gpu()`), feature skips
+  (`requireFeature`) and the float check (`expectClose`). CI runners have no
+  GPU, so the GPU tests run locally: run them before pushing a change to a
+  kernel or its dispatch.
 - Write the test once and put the cases in a list that `it.each` runs.
   Adding a case should be one line.
 - Expected values come from the math, worked out by hand or from Hugging
@@ -108,3 +112,36 @@ Before writing or reviewing code, comments or docs, read
   nothing.
 - A test that needs a device feature the machine lacks (`shader-f16`,
   `subgroups`) skips with a reason. It never passes silently.
+- A known bug that is not fixed yet is an `it.fails` case with a comment
+  naming the bug. The fix turns it into a plain `it`.
+
+### Kernels
+
+- Every kernel has a `*.gpu.test.ts` suite that runs it on a real device and
+  checks the output against golden values from a trusted source (PyTorch, Hugging
+  Face) or, where none fits, a plain CPU loop written from the formula.
+- The cases cover, where the kernel allows them: very large inputs (buffers
+  past 2^24 elements, near `maxStorageBufferBindingSize`), empty inputs, a
+  dtype other than the declared one, sizes past a kernel's limit (it throws,
+  it does not return garbage), and unusual shapes (1×1, odd sizes, sizes that
+  are not a multiple of the tile or vec4 width).
+- Cover every route a kernel can take: matmul alone has plain, gemv, smallm,
+  tiled and tiledF16, each picked by shape and device features.
+- Run the suite after every meaningful change while tuning a kernel. A change
+  to a kernel already on `main` also gets an A/B run against `main`'s output:
+  any difference that was not intended means the suite is missing a case, so
+  add it.
+
+### Zoo
+
+- Each model is tested against its PyTorch reference on the same inputs,
+  corner cases included. Where our output differs on purpose, the test says
+  why.
+
+### Performance
+
+- A change to kernels, `core` or the zoo is benchmarked on the models it
+  touches, before and after. The pull request description carries the A/B
+  report. Performance stays the same or gets better.
+- Benchmarks always run on the same machine, and every run is saved to a file,
+  so a slow regression over many PRs shows up.
