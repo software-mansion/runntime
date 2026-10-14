@@ -117,9 +117,12 @@ Before writing or reviewing code, comments or docs, read
 
 ### Kernels
 
-- Every kernel has a `*.gpu.test.ts` suite that runs it on a real device and
-  checks the output against golden values from a trusted source (PyTorch, Hugging
-  Face) or, where none fits, a plain CPU loop written from the formula.
+- Every kernel has a `*.gpu.test.ts` suite whose path mirrors the kernel's
+  file under `src/core/kernels/`: `kernels/matmul/matmulGemv.ts` is tested in
+  `test/core/kernels/matmul/matmulGemv.gpu.test.ts`. It runs the kernel
+  through its op on a real device and checks the output against golden values
+  from a trusted source (PyTorch, Hugging Face) or, where none fits, a plain
+  CPU loop written from the formula.
 - The cases cover, where the kernel allows them: very large inputs (buffers
   past 2^24 elements, near `maxStorageBufferBindingSize`), empty inputs, a
   dtype other than the declared one, sizes past a kernel's limit (it throws,
