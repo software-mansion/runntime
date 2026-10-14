@@ -83,12 +83,16 @@ describe('Conv1d', () => {
 
   it('reorders a torch [out, in, k] weight at load', async () => {
     const sd = memoryStateDict({
-      'c.weight': { data: new Float32Array([1, 2, 3, 4]), shape: [2, 1, 2] },
+      'c.weight': {
+        data: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        shape: [2, 3, 2],
+      },
     });
-    new Conv1d(1, 2, 2).transformStateDict(sd, 'c');
+    new Conv1d(3, 2, 2).transformStateDict(sd, 'c');
     const w = sd.tensors.get('c.weight')!;
-    expect(w.shape).toEqual([2, 2]);
-    expect(await w.f32()).toEqual(new Float32Array([1, 3, 2, 4]));
+    // row tap·in + i, column out
+    expect(w.shape).toEqual([6, 2]);
+    expect(await w.f32()).toEqual(new Float32Array([1, 7, 3, 9, 5, 11, 2, 8, 4, 10, 6, 12]));
   });
 
   it('rejects a weight in another layout', () => {
@@ -127,12 +131,11 @@ describe('Conv2d', () => {
   });
 
   it('packs f16 weights into 4×4 tiles at load', () => {
-    // [cOut=2, cIn=2, 1×1]: one tile laid out [in][out], zero-padded
-    const packed = new Conv2d(2, 2, { kernelSize: 1 }).weight.preprocess!(
-      new Uint16Array([1, 2, 3, 4]),
+    // [cOut=3, cIn=2, 1×1]: one tile laid out [in][out], zero-padded
+    const packed = new Conv2d(2, 3, { kernelSize: 1 }).weight.preprocess!(
+      new Uint16Array([1, 2, 3, 4, 5, 6]),
     );
-    expect([...packed.slice(0, 8)]).toEqual([1, 3, 0, 0, 2, 4, 0, 0]);
-    expect(packed).toHaveLength(16);
+    expect(packed).toEqual(new Uint16Array([1, 3, 5, 0, 2, 4, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
   });
 
   it('packs depthwise weights by groups of 4 channels', () => {
@@ -161,9 +164,11 @@ describe('ConvTranspose2d', () => {
   });
 
   it('reorders f16 weights at load and leaves other data alone', () => {
-    const p = new ConvTranspose2d(2, 2, { kernelSize: 1, stride: 1 }).weight;
-    // [in=2, out=2] to [out, in]
-    expect(p.preprocess!(new Uint16Array([1, 2, 3, 4]))).toEqual(new Uint16Array([1, 3, 2, 4]));
+    const p = new ConvTranspose2d(2, 3, { kernelSize: 1, stride: 1 }).weight;
+    // [in=2, out=3] to [out, in]
+    expect(p.preprocess!(new Uint16Array([1, 2, 3, 4, 5, 6]))).toEqual(
+      new Uint16Array([1, 4, 2, 5, 3, 6]),
+    );
     const f32 = new Float32Array(4);
     expect(p.preprocess!(f32)).toBe(f32);
   });
@@ -237,6 +242,14 @@ describe('BatchNorm2d', () => {
       name: 'a conv with another channel count',
       Parent: class extends Module {
         conv = new Conv2d(2, 4, { kernelSize: 1 });
+        bn = new BatchNorm2d(2);
+      },
+    },
+    {
+      name: 'a non-conv after a matching conv',
+      Parent: class extends Module {
+        conv = new Conv2d(2, 2, { kernelSize: 1 });
+        fc = new Linear(2, 2);
         bn = new BatchNorm2d(2);
       },
     },
