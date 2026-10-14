@@ -133,6 +133,10 @@ playwright install chromium`. Without it Vitest cannot start the browser.
   are not a multiple of the tile or vec4 width).
 - Cover every route a kernel can take: matmul alone has plain, gemv, smallm,
   tiled and tiledF16, each picked by shape and device features.
+- A new route in a kernel lands with the cases that cover it fully: every
+  dtype it runs, every option it handles, and shapes on both sides of each
+  threshold that picks it, so the cases show which inputs take the route and
+  which fall back.
 - Run the suite after every meaningful change while tuning a kernel. A change
   to a kernel already on `main` also gets an A/B run against `main`'s output:
   any difference that was not intended means the suite is missing a case, so
