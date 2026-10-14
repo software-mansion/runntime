@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import { MATMUL_SMALL_M_MAX_ROWS } from '../../../../src/core/kernels/matmul/matmulGemv.ts';
 import { gpu, requireFeature } from '../../../gpu.ts';
-import { checkMatmul } from './checkMatmul.ts';
+import { checkMatmul, EPILOGUES } from './checkMatmul.ts';
 
 const { root } = await gpu();
 
@@ -23,6 +23,28 @@ describe('matmulGemv kernels', () => {
     await checkMatmul(1, k, n, 'f16');
   });
 
+  // gemv: m = 1. An activation sends m = 1 to plain, so only bias and addend
+  // run here; matmul.gpu.test.ts covers the activations.
+  it.for(
+    (['f32', 'f16'] as const).flatMap((dtype) =>
+      EPILOGUES.filter((e) => !e.epilogue.activation).map((e) => ({ dtype, ...e })),
+    ),
+  )('gemv $dtype with $name: [1, 33] × [33, 67]', async (c, ctx) => {
+    if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkMatmul(1, 33, 67, c.dtype, c.epilogue);
+  });
+
+  // smallm: m % 4 == 0, 4 <= m <= 32, n % 4 == 0, subgroups. k = 70 leaves a
+  // k % 32 tail.
+  it.for((['f32', 'f16'] as const).flatMap((dtype) => EPILOGUES.map((e) => ({ dtype, ...e }))))(
+    'smallm $dtype with $name: [8, 70] × [70, 36]',
+    async (c, ctx) => {
+      requireFeature(ctx, root, 'subgroups');
+      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+      await checkMatmul(8, 70, 36, c.dtype, c.epilogue);
+    },
+  );
+
   // smallm: m % 4 == 0, 4 <= m <= 32, n % 4 == 0, subgroups. k = 70 leaves a
   // k % 32 tail; 96 and 256 do not.
   // it.for, not it.each: only it.for passes the test context the skip needs.
@@ -31,6 +53,7 @@ describe('matmulGemv kernels', () => {
     { name: 'eight rows', m: 8, k: 96, n: 36, dtype: 'f32' },
     { name: 'the most rows it takes', m: MATMUL_SMALL_M_MAX_ROWS, k: 70, n: 4, dtype: 'f32' },
     { name: 'four rows', m: 4, k: 256, n: 128, dtype: 'f16' },
+    { name: 'a k % 32 tail', m: 8, k: 70, n: 36, dtype: 'f16' },
   ] as const)('smallm, $dtype $name: [$m, $k] × [$k, $n]', async ({ m, k, n, dtype }, ctx) => {
     requireFeature(ctx, root, 'subgroups');
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');

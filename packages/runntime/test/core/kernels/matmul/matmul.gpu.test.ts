@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { toArray } from '../../../../src/core/gpu/eval.ts';
 import { matmul } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
+import { ACC_F16, ACC_F32, setMatmulAccum } from '../../../../src/core/kernels/matmul/matmul.ts';
 import { gpu, requireFeature, upload } from '../../../gpu.ts';
-import { checkMatmul } from './checkMatmul.ts';
+import { checkMatmul, EPILOGUES } from './checkMatmul.ts';
 
 const { root, ex } = await gpu();
 
@@ -31,6 +32,81 @@ describe('matmul kernel: plain and tiled routes', () => {
   ])('f16 $name: [$m, $k] × [$k, $n]', async ({ m, k, n }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     await checkMatmul(m, k, n, 'f16');
+  });
+
+  const epilogueCases = [
+    ...[
+      // plain: m < 8. n = 5 runs the vec4 columns and the scalar tail, n = 8
+      // the vec4 columns alone.
+      { route: 'plain', m: 3, k: 7, n: 5, dtype: 'f32' },
+      { route: 'plain', m: 3, k: 7, n: 8, dtype: 'f32' },
+      { route: 'plain', m: 3, k: 16, n: 5, dtype: 'f16' },
+      { route: 'plain', m: 3, k: 16, n: 8, dtype: 'f16' },
+      // tiled: f32, m >= 8 and not a smallm shape
+      { route: 'tiled', m: 65, k: 33, n: 67, dtype: 'f32' },
+      // tiledF16: f16, m > 32, k >= 64, k and n % 4 == 0
+      { route: 'tiledF16', m: 70, k: 132, n: 68, dtype: 'f16' },
+    ].flatMap((shape) => EPILOGUES.map((e) => ({ ...shape, ...e }))),
+    // plain: m = 1 with an activation skips gemv, which has no activation slot
+    ...['f32', 'f16'].flatMap((dtype) =>
+      EPILOGUES.filter((e) => e.epilogue.activation).map((e) => ({
+        route: 'plain',
+        m: 1,
+        k: 33,
+        n: 67,
+        dtype,
+        ...e,
+      })),
+    ),
+  ];
+  // Known bug: reluAct compares against a vec4f, but the plain kernel's scalar
+  // tail (n % 4 != 0) calls it on an f32. The shader does not compile, the
+  // dispatch is dropped and the output keeps whatever the pooled buffer held.
+  // Fold these back into the list above with the fix.
+  const tailRelu = (c: (typeof epilogueCases)[number]) =>
+    c.route === 'plain' && c.n % 4 !== 0 && c.epilogue.activation === 'relu';
+
+  it.for(epilogueCases.filter((c) => !tailRelu(c)))(
+    '$route $dtype with $name: [$m, $k] × [$k, $n]',
+    async (c, ctx) => {
+      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+      await checkMatmul(c.m, c.k, c.n, c.dtype as 'f32' | 'f16', c.epilogue);
+    },
+  );
+
+  it.fails.for(epilogueCases.filter(tailRelu))(
+    '$route $dtype with $name: [$m, $k] × [$k, $n]',
+    async (c, ctx) => {
+      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+      await checkMatmul(c.m, c.k, c.n, c.dtype as 'f32' | 'f16', c.epilogue);
+    },
+  );
+
+  // plain: a baseRow view always takes plain, whatever the shape
+  it.for([
+    { m: 3, k: 7, n: 5, baseRow: 4, dtype: 'f32' },
+    { m: 40, k: 64, n: 64, baseRow: 64, dtype: 'f32' },
+    { m: 3, k: 16, n: 5, baseRow: 4, dtype: 'f16' },
+    { m: 40, k: 64, n: 64, baseRow: 64, dtype: 'f16' },
+  ] as const)(
+    'plain $dtype, B as a view from row $baseRow: [$m, $k] × [$k, $n]',
+    async ({ m, k, n, baseRow, dtype }, ctx) => {
+      if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+      await checkMatmul(m, k, n, dtype, { baseRow, bias: true, addend: true });
+    },
+  );
+
+  // plain: f16 with the f16 accumulator. The vec4 columns honour it; the
+  // scalar tail always sums in f32. Each of the 16 adds rounds a partial sum
+  // of size up to ~4 to f16 (2^-11 relative), so the error stays under 3e-2.
+  it.for([
+    { name: 'vec4 columns only', n: 8 },
+    { name: 'with the scalar tail', n: 5 },
+  ])('plain f16 with the f16 accumulator, $name: [3, 16] × [16, $n]', async ({ n }, ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    setMatmulAccum(ACC_F16);
+    onTestFinished(() => setMatmulAccum(ACC_F32));
+    await checkMatmul(3, 16, n, 'f16', {}, { atol: 3e-2, rtol: 1e-2 });
   });
 
   // Known bug: the tiled kernel's B index goes through f32, which counts
