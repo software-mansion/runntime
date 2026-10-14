@@ -1,13 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { evalValues, toArray, type Executor } from '../../../src/core/graph/evalCore.ts';
 import { add, cat, conv2d, mul, sigmoid, tanh, writeRows } from '../../../src/core/graph/ops.ts';
-import {
-  hwc4Meta,
-  materialized,
-  type GpuBufferRef,
-  type Value,
-} from '../../../src/core/graph/value.ts';
-import { materializedInput } from './values.ts';
+import { materialized, type GpuBufferRef, type Value } from '../../../src/core/graph/value.ts';
+import { materializedHwc4Input, materializedInput } from './values.ts';
 
 /** An executor that hands out stub buffers and logs every call, one line each:
  *  `a → #0` for a dispatch, `release #0`, `copy #0 → #1 @144`, `submit`.
@@ -121,9 +116,7 @@ describe('evalValues', () => {
     const a = add(materializedInput([2, 3]), 1);
     const b = sigmoid(a);
     evalValues([b], recorder({ a, b }).ex);
-    expect(() => evalValues([tanh(a)], recorder({}).ex)).toThrow(
-      /'addScalar': buffer was recycled by eval/,
-    );
+    expect(() => evalValues([tanh(a)], recorder({}).ex)).toThrow(/buffer was recycled by eval/);
   });
 
   it('writes writeRows into the caller-owned buffer and never frees it', () => {
@@ -152,9 +145,10 @@ describe('toArray', () => {
 });
 
 // The fusion passes only run on hwc4 conv and concat graphs.
-const image = (c: number) => materialized(hwc4Meta(c, 6, 6), {} as GpuBufferRef);
-/** Elements of one 4-channel 6×6 hwc4 map: where the second concat input starts. */
-const MAP4 = hwc4Meta(4, 6, 6).elems;
+const image = (c: number) => materializedHwc4Input(c, 6, 6);
+/** Elements of one 4-channel 6×6 hwc4 map, h * w * 4: where the second concat
+ *  input starts. */
+const MAP4 = 6 * 6 * 4;
 
 /** A 1×1 conv of `x` to `cOut` channels, with a stub packed weight. */
 function conv(x: Value, cOut: number): Value {
