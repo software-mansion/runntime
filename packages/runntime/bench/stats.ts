@@ -26,9 +26,13 @@ export function median(xs: readonly number[]): number {
   return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }
 
-/** Half the range of the rounds, relative to their median. */
+/** Interquartile range relative to the median: the middle half of the rounds,
+ *  so one or two rounds hit by a clock dip do not widen it. */
 export function spread(xs: readonly number[]): number {
-  return (Math.max(...xs) - Math.min(...xs)) / 2 / median(xs);
+  const s = [...xs].sort((a, b) => a - b);
+  const q1 = median(s.slice(0, s.length >> 1));
+  const q3 = median(s.slice((s.length + 1) >> 1));
+  return (q3 - q1) / median(s);
 }
 
 export type Verdict = 'faster' | 'slower' | 'same';
@@ -69,8 +73,8 @@ export function maxAbsDiff(a: ArrayLike<number>, b: ArrayLike<number>): number {
 export interface CaseResult {
   kernel: string;
   case: string;
-  /** Set when the case could not run on both sides. */
-  skipped?: string;
+  /** Why the case has no comparison: skipped, or failed on a side. */
+  note?: string;
   comparison?: Comparison;
   maxAbsDiff?: number;
   calls?: number;
@@ -82,7 +86,7 @@ const pct = (x: number) => `${x > 0 ? '+' : ''}${(x * 100).toFixed(1)}%`;
 /** The report as a markdown table, one row per case. */
 export function formatTable(results: readonly CaseResult[]): string {
   const rows = results.map((r) => {
-    if (!r.comparison) return `| ${r.kernel} | ${r.case} | | | | | skipped: ${r.skipped} | |`;
+    if (!r.comparison) return `| ${r.kernel} | ${r.case} | | | | | ${r.note} | |`;
     const { aUs, bUs, delta, noise, verdict } = r.comparison;
     const diff = r.maxAbsDiff === 0 ? '0' : r.maxAbsDiff!.toExponential(1);
     return `| ${r.kernel} | ${r.case} | ${us(aUs)} | ${us(bUs)} | ${pct(delta)} | ±${(noise * 100).toFixed(1)}% | ${verdict} | ${diff} |`;
