@@ -151,3 +151,17 @@ playwright install chromium`. Without it Vitest cannot start the browser.
   report. Performance stays the same or gets better.
 - Benchmarks always run on the same machine, and every run is saved to a file,
   so a slow regression over many PRs shows up.
+- A change to a kernel gets a kernel A/B against `main`:
+  `pnpm --filter runntime bench:ab kernels [-b <ref>] [-k matmul,softmax]`.
+  It copies the base ref's `src` to `.bench/base`, runs both copies in one
+  headless Chromium page on the same inputs with their rounds interleaved,
+  and prints a markdown table (also in `.bench/results/report.md`) for the
+  pull request. A row says `faster` or `slower` only past the noise: both
+  sides' interquartile spread, at least 3%.
+- The table's last column is the largest difference between A's and B's
+  outputs. Anything but 0 on a kernel the change did not mean to touch is a
+  bug, or a case the GPU tests are missing.
+- Cases live in `bench/kernels/<kernel>.ab.ts`, one per route the dispatch
+  can pick, with shapes from the zoo models. A new route gets a case.
+- Close the GPU-heavy apps before a run, and run on power. A row that flips
+  between runs is noise, not a result.
