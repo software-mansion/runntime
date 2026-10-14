@@ -1,0 +1,71 @@
+/** The row reductions (softmax, layerNorm, mean, topk) and the norms composed
+ *  from them (rmsNorm, groupNorm). None picks a route; the cases vary dtype,
+ *  row count and row width. */
+import { abSuite, type AbCase, type Side } from '../ab.ts';
+import type { Value } from '../../src/core/index.ts';
+import { randMat } from './inputs.ts';
+
+type Float = 'f32' | 'f16';
+
+function rows(
+  name: string,
+  m: number,
+  n: number,
+  dtype: Float,
+  op: (s: Side, x: Value) => () => Value,
+): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (s) => op(s, randMat(s, m, n, dtype)),
+  };
+}
+
+const softmax = (name: string, m: number, n: number, dtype: Float) =>
+  rows(name, m, n, dtype, (s, x) => () => s.lib.softmax(x));
+
+const layerNorm = (name: string, m: number, n: number, dtype: Float, bias: boolean) =>
+  rows(name, m, n, dtype, (s, x) => {
+    const w = randMat(s, 1, n, dtype);
+    const b = bias ? randMat(s, 1, n, dtype) : undefined;
+    return () => s.lib.layerNorm(x, w, 1e-5, b);
+  });
+
+const rmsNorm = (name: string, m: number, n: number, dtype: Float) =>
+  rows(name, m, n, dtype, (s, x) => {
+    const w = randMat(s, 1, n, dtype);
+    return () => s.lib.rmsNorm(x, w, 1e-5);
+  });
+
+abSuite('reduce', [
+  softmax('softmax f16, YOLO26n PSA [400,400]', 400, 400, 'f16'),
+  softmax('softmax, MiniLM scores [1536,128]', 1536, 128, 'f32'),
+  softmax('softmax, one wide row [1,32768]', 1, 32768, 'f32'),
+  softmax('softmax, odd sizes [37,1000]', 37, 1000, 'f32'),
+
+  layerNorm('layerNorm + bias, MiniLM [128,384]', 128, 384, 'f32', true),
+  layerNorm('layerNorm f16 + bias, MiniLM [512,384]', 512, 384, 'f16', true),
+  layerNorm('layerNorm, streaming CMVN [500,80]', 500, 80, 'f32', false),
+  layerNorm('layerNorm, wide rows [16,4096]', 16, 4096, 'f32', true),
+
+  rows('mean f16, MobileNetV4 global pool [960,49]', 960, 49, 'f16', (s, x) => () => s.lib.mean(x)),
+  rows('mean, one long row [1,65536]', 1, 65536, 'f32', (s, x) => () => s.lib.mean(x)),
+
+  rows(
+    'topk 4, privacy-filter router [512,128]',
+    512,
+    128,
+    'f32',
+    (s, x) => () => s.lib.topk(x, 4),
+  ),
+  rows('topk 4 f16, router [64,128]', 64, 128, 'f16', (s, x) => () => s.lib.topk(x, 4)),
+
+  rmsNorm('rmsNorm, privacy-filter [512,640]', 512, 640, 'f32'),
+  rmsNorm('rmsNorm f16, privacy-filter [512,640]', 512, 640, 'f16'),
+
+  rows('groupNorm 1 group, Moonshine stem [500,288]', 500, 288, 'f32', (s, x) => {
+    const w = randMat(s, 1, 288);
+    const b = randMat(s, 1, 288);
+    return () => s.lib.groupNorm(x, 1, w, b);
+  }),
+]);
