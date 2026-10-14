@@ -6,6 +6,7 @@ import { checkMatmul } from './checkMatmul.ts';
 const { root } = await gpu();
 
 describe('matmulGemv kernels', () => {
+  // gemv: m = 1 with no activation (smallm needs m >= 4)
   it.each([
     { name: '1×1', k: 1, n: 1 },
     { name: 'a single row', k: 288, n: 864 },
@@ -22,6 +23,8 @@ describe('matmulGemv kernels', () => {
     await checkMatmul(1, k, n, 'f16');
   });
 
+  // smallm: m % 4 == 0, 4 <= m <= 32, n % 4 == 0, subgroups. k = 70 leaves a
+  // k % 32 tail; 96 and 256 do not.
   // it.for, not it.each: only it.for passes the test context the skip needs.
   it.for([
     { name: 'four rows', m: 4, k: 256, n: 128, dtype: 'f32' },

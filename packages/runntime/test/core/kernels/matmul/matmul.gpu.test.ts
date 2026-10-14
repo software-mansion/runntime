@@ -8,18 +8,25 @@ import { checkMatmul } from './checkMatmul.ts';
 const { root, ex } = await gpu();
 
 describe('matmul kernel: plain and tiled routes', () => {
+  // Routes are picked in gpu/dispatch/matmul.ts. smallm takes m % 4 == 0,
+  // m <= 32, n % 4 == 0 on a subgroups device first, so the cases below avoid it.
   it.each([
+    // plain: m < 8 and not a multiple of 4
     { name: 'odd sizes (plain)', m: 3, k: 7, n: 5 },
     { name: 'one row under the tiled cutoff (plain)', m: 7, k: 16, n: 12 },
+    // tiled: f32, m >= 8 and not a smallm shape
     { name: 'exactly one tile (tiled)', m: 64, k: 64, n: 64 },
     { name: 'one past the tile edge in every dim (tiled)', m: 65, k: 33, n: 67 },
     { name: 'tall and thin (tiled)', m: 1000, k: 3, n: 2 },
   ])('$name: [$m, $k] × [$k, $n]', ({ m, k, n }) => checkMatmul(m, k, n));
 
   it.for([
+    // plain: m < 8
     { name: 'odd sizes (plain)', m: 3, k: 16, n: 5 },
+    // plain: m >= 8, but tiledF16 needs k >= 64
     { name: 'K too short for tiledF16 (plain)', m: 9, k: 60, n: 8 },
-    { name: 'tiledF16', m: 16, k: 64, n: 64 },
+    // tiledF16: f16, m >= 8 and past smallm's 32 rows, k >= 64, k and n % 4 == 0
+    { name: 'tiledF16 at the shortest K', m: 64, k: 64, n: 64 },
     { name: 'tiledF16 past the tile edge', m: 70, k: 132, n: 68 },
   ])('f16 $name: [$m, $k] × [$k, $n]', async ({ m, k, n }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
@@ -28,6 +35,7 @@ describe('matmul kernel: plain and tiled routes', () => {
 
   // Known bug: the tiled kernel's B index goes through f32, which counts
   // exactly only up to 2^24. Turn this into a plain `it` with the fix.
+  // tiled: f32, m = 9 is not a smallm shape
   it.fails('B larger than 2^24 elements (tiled): [9, 2560] × [2560, 9728]', () =>
     checkMatmul(9, 2560, 9728),
   );

@@ -21,6 +21,9 @@ function swigluRef(glu: Float32Array, lin: Float32Array): Float64Array {
 
 describe('elementwiseF32 kernel', () => {
   // Small integers and halves are exact in f32 and f16, so these need no tolerance.
+  // Broadcast modes come from broadcastPlan in graph/ops/elementwise.ts: same
+  // shape is mode 0, a [1, N] row mode 1, an [M, 1] column mode 2, a single
+  // value mode 3.
   it.each([
     {
       name: 'add, same shape',
