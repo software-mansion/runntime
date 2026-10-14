@@ -1,14 +1,23 @@
 /** The kernel A/B runner. A is the base ref's `src` (copied to `.bench/base`
- *  by `bench/cli.ts`), B is this checkout's `src`. Both run in one page on one
- *  device, on the same inputs, with their rounds interleaved so GPU clock
+ *  by `bench/cli.ts`), B is this checkout's `src`. Both run in one page on the
+ *  same device and inputs, with their rounds interleaved so GPU clock
  *  changes hit both sides alike. */
 import tgpu, { type TgpuRoot } from 'typegpu';
 import { afterAll, describe, inject, it } from 'vitest';
 import { commands } from 'vitest/browser';
 import * as libA from '@ab/a/core/index.ts';
 import * as libB from '@ab/b/core/index.ts';
-import { installProfiler } from './profiler.ts';
-import { callsPerRound, compare, maxAbsDiff, median, spread, type CaseResult } from './stats.ts';
+import { randomF32 } from '../test/gpu.ts';
+import { installProfiler, type Profiler } from './profiler.ts';
+import {
+  callsPerRound,
+  compare,
+  confirm,
+  maxAbsDiff,
+  median,
+  spread,
+  type CaseResult,
+} from './stats.ts';
 
 /** The core API. Both sides are typed as this checkout's; a case that uses
  *  something the base lacks throws on A and is reported as skipped. */
@@ -16,17 +25,30 @@ export type Lib = typeof libB;
 type Value = libB.Value;
 type ValueMeta = libB.ValueMeta;
 
-/** Uploads one input on the side being built. Freed after the case. */
-export type Upload = (data: Float32Array, meta: ValueMeta) => Value;
+/** What a case builds with, on one side. */
+export interface Side {
+  label: 'A' | 'B';
+  lib: Lib;
+  root: TgpuRoot;
+  /** `tensor()` on this side's device, freed after the case. */
+  up: (data: Float32Array, meta: ValueMeta) => Value;
+  /** Frees a Value built another way (`materialized` + `uploadF16`) after the case. */
+  keep: (value: Value) => Value;
+  /** Seeded values in [-1, 1). The seed restarts for each side, so A and B
+   *  draw the same numbers in the same order. */
+  rand: (n: number) => Float32Array;
+}
 
 export interface AbCase {
-  /** Route and where the shape comes from, e.g. 'tiled, whisper-base fc1'. */
+  /** Route and where the shape comes from, e.g. 'tiled, MiniLM qkv'. */
   name: string;
   /** Device features the route needs. Missing ones skip the case. */
   needs?: GPUFeatureName[];
-  /** Uploads the inputs and returns a function that builds one call. Seed
-   *  any random data, so both sides get the same numbers. */
-  build: (lib: Lib, upload: Upload, root: TgpuRoot) => () => Value;
+  /** Runs on a second device without `subgroups`, for the routes that only
+   *  exist there. */
+  noSubgroups?: boolean;
+  /** Uploads the inputs and returns a function that builds one call. */
+  build: (side: Side) => () => Value;
 }
 
 /** Rounds per side. Alternating ABBA over 8 rounds puts each side first
@@ -39,72 +61,113 @@ const MIN_WARMUP_MS = 300;
 const MAX_WARMUP_MS = 5000;
 const SETTLED_SPREAD = 0.02;
 
-const root = await tgpu.init({
-  device: { optionalFeatures: ['subgroups', 'shader-f16', 'timestamp-query'] },
-});
-const profiler = installProfiler(root.device);
-const sides = [
-  { label: 'A', lib: libA as Lib, ex: libA.initRunntime(root) },
-  { label: 'B', lib: libB, ex: libB.initRunntime(root) },
-] as const;
-type Side = (typeof sides)[number];
+interface World {
+  root: TgpuRoot;
+  profiler: Profiler;
+  ex: [libA.RunntimeExecutor, libB.RunntimeExecutor];
+}
+
+const worlds = new Map<boolean, Promise<World>>();
+
+/** The device a case runs on, made once: the production feature set, or the
+ *  same without `subgroups`. Each side gets its own executor on it. */
+function world(noSubgroups: boolean): Promise<World> {
+  let w = worlds.get(noSubgroups);
+  if (!w) {
+    const features: GPUFeatureName[] = ['shader-f16', 'timestamp-query'];
+    if (!noSubgroups) features.push('subgroups');
+    w = tgpu.init({ device: { optionalFeatures: features } }).then((root) => ({
+      root,
+      profiler: installProfiler(root.device),
+      ex: [libA.gpuExecutor(root), libB.gpuExecutor(root)],
+    }));
+    worlds.set(noSubgroups, w);
+  }
+  return w;
+}
 
 /** GPU µs per call over one round of `calls` calls in a single submit. */
-async function round(side: Side, call: () => Value, calls: number): Promise<number> {
+async function round(w: World, i: 0 | 1, call: () => Value, calls: number): Promise<number> {
+  const lib = i === 0 ? (libA as Lib) : libB;
   const ys = Array.from({ length: calls }, call);
-  side.lib.evalValues(ys, side.ex);
-  side.ex.releaseValues(ys);
-  await root.device.queue.onSubmittedWorkDone();
-  const ns = (await profiler.collect()).reduce((a, b) => a + b, 0);
-  if (ns === 0) throw new Error(`no GPU time recorded on ${side.label}`);
+  lib.evalValues(ys, w.ex[i]);
+  w.ex[i].releaseValues(ys);
+  await w.root.device.queue.onSubmittedWorkDone();
+  const ns = (await w.profiler.collect()).reduce((a, b) => a + b, 0);
+  if (ns === 0) throw new Error(`no GPU time recorded on ${i === 0 ? 'A' : 'B'}`);
   return ns / 1000 / calls;
 }
 
-async function runCase(kernel: string, c: AbCase): Promise<CaseResult> {
-  const uploads: Value[] = [];
-  const calls: (() => Value)[] = [];
+/** Measures a case, and a flagged one a second time on fresh buffers: a row
+ *  only says faster or slower when both runs agree. */
+async function runCase(kernel: string, c: AbCase, w: World): Promise<CaseResult> {
   try {
-    for (const side of sides) {
-      const upload: Upload = (data, meta) => {
-        const v = side.lib.tensor(root, data, meta);
-        uploads.push(v);
-        return v;
-      };
-      try {
-        calls.push(c.build(side.lib, upload, root));
-      } catch (err) {
-        return { kernel, case: c.name, note: `skipped, threw on ${side.label}: ${messageOf(err)}` };
+    const first = await measure(kernel, c, w, false);
+    if (first.comparison?.verdict !== 'same' && first.comparison) {
+      // B's buffers allocated first this time: a difference that only comes
+      // from where the buffers landed flips sign and does not confirm.
+      const second = await measure(kernel, c, w, true);
+      if (second.comparison) {
+        return { ...first, comparison: confirm(first.comparison, second.comparison) };
       }
     }
-    const [a, b] = [sides[0], sides[1]];
+    return first;
+  } finally {
+    // Pools keep every output size they have seen; across a file's cases
+    // that is enough to lose the page.
+    w.ex[0].dispose();
+    w.ex[1].dispose();
+  }
+}
+
+async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Promise<CaseResult> {
+  const owned: Value[] = [];
+  const keep = (v: Value) => (owned.push(v), v);
+  const calls: (() => Value)[] = [];
+  try {
+    for (const i of bFirst ? [1, 0] : [0, 1]) {
+      const label = i === 0 ? 'A' : 'B';
+      const lib = i === 0 ? (libA as Lib) : libB;
+      const up = (data: Float32Array, meta: ValueMeta) => keep(lib.tensor(w.root, data, meta));
+      let seed = 1;
+      const rand = (n: number) => randomF32(n, seed++);
+      try {
+        calls[i] = c.build({ label, lib, root: w.root, up, keep, rand });
+      } catch (err) {
+        return { kernel, case: c.name, note: `skipped, threw on ${label}: ${messageOf(err)}` };
+      }
+    }
     const [callA, callB] = [calls[0]!, calls[1]!];
 
     // Output check, which also compiles both sides' pipelines.
     const yA = callA();
     const yB = callB();
-    const outA = await a.lib.toArray(yA, a.ex);
-    const outB = await b.lib.toArray(yB, b.ex);
-    a.ex.releaseValues([yA]);
-    b.ex.releaseValues([yB]);
+    const outA = await readOut(libA as Lib, yA, w.ex[0]);
+    const outB = await readOut(libB, yB, w.ex[1]);
+    w.ex[0].releaseValues([yA]);
+    w.ex[1].releaseValues([yB]);
     const outBytes = yB.shape.elems * (yB.shape.dtype === 'f16' ? 2 : 4);
 
-    // Apple GPUs idle at a low clock and take a few hundred ms of work to
-    // ramp up, so warm up on both sides before sizing the rounds from B.
+    // Apple GPUs idle at a low clock and ramp up only under sustained load,
+    // so warm up with full-size rounds on both sides until B's time settles,
+    // and size the timed rounds from there.
     const start = performance.now();
     const recent: number[] = [];
+    let n = 4;
     for (;;) {
-      await round(a, callA, 4);
-      recent.push(await round(b, callB, 4));
+      await round(w, 0, callA, n);
+      recent.push(await round(w, 1, callB, n));
+      n = callsPerRound(recent.at(-1)!, outBytes);
       const elapsed = performance.now() - start;
       const settled = recent.length >= 3 && spread(recent.slice(-3)) <= SETTLED_SPREAD;
       if (elapsed >= MAX_WARMUP_MS || (elapsed >= MIN_WARMUP_MS && settled)) break;
     }
-    const n = callsPerRound(median(recent.slice(-3)), outBytes);
+    n = callsPerRound(median(recent.slice(-3)), outBytes);
 
     const times: [number[], number[]] = [[], []];
     for (let r = 0; r < ROUNDS; r++) {
-      const order = r % 4 === 0 || r % 4 === 3 ? [0, 1] : [1, 0];
-      for (const i of order) times[i]!.push(await round(sides[i]!, calls[i]!, n));
+      const order = r % 4 === 0 || r % 4 === 3 ? ([0, 1] as const) : ([1, 0] as const);
+      for (const i of order) times[i].push(await round(w, i, calls[i]!, n));
     }
     return {
       kernel,
@@ -114,8 +177,14 @@ async function runCase(kernel: string, c: AbCase): Promise<CaseResult> {
       calls: n,
     };
   } finally {
-    for (const v of uploads) v.buffer.destroy();
+    for (const v of owned) if (v.state === 'materialized') v.buffer.destroy();
   }
+}
+
+/** Reads an output for the A/B check. hwc4 cannot be read back as is, so it
+ *  goes through toChw first; that dispatch is never timed. */
+function readOut(lib: Lib, y: Value, ex: libB.RunntimeExecutor): Promise<Float32Array> {
+  return lib.toArray(y.shape.layout === 'hwc4' ? lib.toChw(y, 'f32') : y, ex);
 }
 
 function messageOf(err: unknown): string {
@@ -129,20 +198,20 @@ export function abSuite(kernel: string, cases: readonly AbCase[]): void {
   describe(kernel, () => {
     for (const c of cases) {
       it(c.name, async (ctx) => {
-        const missing = c.needs?.find((f) => !root.enabledFeatures.has(f));
-        if (missing) {
-          results.push({ kernel, case: c.name, note: `skipped, device has no ${missing}` });
-          ctx.skip(`device has no ${missing}`);
-        }
+        const w = await world(c.noSubgroups === true);
+        const missing = c.needs?.find((f) => !w.root.enabledFeatures.has(f));
+        let result: CaseResult;
         try {
-          const result = await runCase(kernel, c);
-          results.push(result);
-          if (result.note) ctx.skip(result.note);
+          result = missing
+            ? { kernel, case: c.name, note: `skipped, device has no ${missing}` }
+            : await runCase(kernel, c, w);
         } catch (err) {
           // Still a row in the report, and still a failed test.
           results.push({ kernel, case: c.name, note: `failed: ${messageOf(err)}` });
           throw err;
         }
+        results.push(result);
+        if (result.note) ctx.skip(result.note);
       });
     }
   });
