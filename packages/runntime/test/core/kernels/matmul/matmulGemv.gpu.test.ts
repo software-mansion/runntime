@@ -59,4 +59,22 @@ describe('matmulGemv kernels', () => {
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
     await checkMatmul(m, k, n, dtype);
   });
+
+  // Just past each smallm limit, so the other route runs. No subgroups
+  // needed: these never take smallm.
+  it.for([
+    // tiled: m = 36 is past smallm's 32 rows
+    { name: 'one quad past the most rows (tiled)', m: 36, k: 70, n: 36, dtype: 'f32' },
+    // plain: m = 2 is under smallm's 4 rows and over gemv's 1
+    { name: 'two rows (plain)', m: 2, k: 70, n: 36, dtype: 'f32' },
+    // plain: m = 6 is not a multiple of 4
+    { name: 'six rows (plain)', m: 6, k: 70, n: 36, dtype: 'f32' },
+    // tiled: n = 34 is not a multiple of 4
+    { name: 'n % 4 != 0 (tiled)', m: 8, k: 70, n: 34, dtype: 'f32' },
+    // plain: same, and tiledF16 needs n % 4 == 0 too
+    { name: 'n % 4 != 0 (plain)', m: 8, k: 70, n: 34, dtype: 'f16' },
+  ] as const)('past smallm, $dtype $name: [$m, $k] × [$k, $n]', async ({ m, k, n, dtype }, ctx) => {
+    if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkMatmul(m, k, n, dtype);
+  });
 });

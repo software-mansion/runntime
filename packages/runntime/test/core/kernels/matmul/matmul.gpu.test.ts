@@ -16,6 +16,8 @@ describe('matmul kernel: plain and tiled routes', () => {
     { name: 'odd sizes (plain)', m: 3, k: 7, n: 5 },
     { name: 'one row under the tiled cutoff (plain)', m: 7, k: 16, n: 12 },
     // tiled: f32, m >= 8 and not a smallm shape
+    // tiled: m = 9 is the first m >= 8 that smallm does not take on a subgroups device
+    { name: 'one row past the tiled cutoff (tiled)', m: 9, k: 16, n: 12 },
     { name: 'exactly one tile (tiled)', m: 64, k: 64, n: 64 },
     { name: 'one past the tile edge in every dim (tiled)', m: 65, k: 33, n: 67 },
     { name: 'tall and thin (tiled)', m: 1000, k: 3, n: 2 },
@@ -24,10 +26,16 @@ describe('matmul kernel: plain and tiled routes', () => {
   it.for([
     // plain: m < 8
     { name: 'odd sizes (plain)', m: 3, k: 16, n: 5 },
+    { name: 'one row under the tiledF16 cutoff (plain)', m: 7, k: 64, n: 64 },
     // plain: m >= 8, but tiledF16 needs k >= 64
     { name: 'K too short for tiledF16 (plain)', m: 9, k: 60, n: 8 },
+    // plain: m > 32 and k >= 64, but tiledF16 also needs k and n % 4 == 0
+    { name: 'K not a multiple of 4 (plain)', m: 40, k: 66, n: 64 },
+    { name: 'N not a multiple of 4 (plain)', m: 40, k: 64, n: 66 },
     // tiledF16: f16, m >= 8 and past smallm's 32 rows, k >= 64, k and n % 4 == 0
     { name: 'tiledF16 at the shortest K', m: 64, k: 64, n: 64 },
+    // tiledF16: m = 9 is the first m >= 8 that smallm does not take on a subgroups device
+    { name: 'one row past the tiledF16 cutoff', m: 9, k: 64, n: 64 },
     { name: 'tiledF16 past the tile edge', m: 70, k: 132, n: 68 },
   ])('f16 $name: [$m, $k] × [$k, $n]', async ({ m, k, n }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
