@@ -10,4 +10,4 @@ export {
 } from './config.ts';
 export { ConvBnAct, UniversalInvertedResidual } from './blocks.ts';
 export { loadMobileNetV4Weights } from './loader.ts';
-export { decodeTopK, preprocessRgba, type Classification } from './pipeline.ts';
+export { decodeTopK, type Classification } from './pipeline.ts';

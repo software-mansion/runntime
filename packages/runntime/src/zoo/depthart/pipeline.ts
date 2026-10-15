@@ -1,23 +1,4 @@
-/** CPU pre/post for the depth demo. */
-
-export function preprocessRgbaDepthart(
-  rgba: Uint8ClampedArray,
-  size: number,
-  mean: readonly [number, number, number],
-  std: readonly [number, number, number],
-  out?: Float32Array,
-): Float32Array {
-  const hw = size * size;
-  out ??= new Float32Array(3 * hw);
-  for (let c = 0; c < 3; c++) {
-    const m = mean[c]!;
-    const inv = 1 / std[c]!;
-    for (let i = 0; i < hw; i++) {
-      out[c * hw + i] = (rgba[i * 4 + c]! / 255 - m) * inv;
-    }
-  }
-  return out;
-}
+/** CPU post-processing for the depth demo. */
 
 const TURBO = (() => {
   const lut = new Uint8ClampedArray(256 * 3);
