@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { pending } from '../../../src/core/graph/value.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
 import {
   BatchNorm2d,
   Conv1d,
@@ -180,54 +180,80 @@ describe('ConvTranspose2d', () => {
 });
 
 describe('BatchNorm2d', () => {
-  const bn = (n: number) => ({
-    [`bn.weight`]: new Float32Array(n).fill(1),
-    [`bn.bias`]: new Float32Array(n),
-    [`bn.running_mean`]: new Float32Array(n),
-    [`bn.running_var`]: new Float32Array(n).fill(1),
+  /** Records every upload and hands back a stand-in of the slot's shape. */
+  const recorder = () =>
+    vi.fn((_data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) =>
+      pending(shape, 'reshape', []),
+    );
+  /** bf16 bits, which memoryStateDict decodes like a file tensor. */
+  const bf16 = (values: number[]) =>
+    Uint16Array.from(values, (v) => new Uint32Array(new Float32Array([v]).buffer)[0]! >>> 16);
+
+  // Two 1×1 out channels over two in channels, eps = 1, worked by hand:
+  //   scale   = gamma / sqrt(var + eps) = [4 / 2, 4 / 2] = [2, 2]
+  //   weight' = weight · scale          = [[1, 2], [3, 4]] · 2 = [[2, 4], [6, 8]]
+  //   bias'   = beta + (bias − mean) · scale = [0 + 0 · 2, 1 + 2 · 2] = [0, 5]
+  const EPS = 1;
+  const conv = (prefix = '') => ({
+    [`${prefix}conv.weight`]: { data: bf16([1, 2, 3, 4]), shape: [2, 2, 1, 1] },
+    [`${prefix}conv.bias`]: bf16([1, 2]),
   });
+  const bn = (prefix = '') => ({
+    [`${prefix}bn.weight`]: bf16([4, 4]),
+    [`${prefix}bn.bias`]: bf16([0, 1]),
+    [`${prefix}bn.running_mean`]: bf16([1, 0]),
+    [`${prefix}bn.running_var`]: bf16([3, 3]),
+  });
+  // The folded weight, packed by Conv2d into one [in][out] hwc4 tile, as f16
+  // bits: 2 → 0x4000, 4 → 0x4400, 6 → 0x4600, 8 → 0x4800, 5 → 0x4500.
+  const FOLDED_WEIGHT = new Uint16Array(16);
+  FOLDED_WEIGHT.set([0x4000, 0x4600, 0, 0, 0x4400, 0x4800]);
+  const FOLDED_BIAS = new Uint16Array([0, 0x4500]);
 
   class ConvBn extends Module {
     conv = new Conv2d(2, 2, { kernelSize: 1, bias: true });
-    bn = new BatchNorm2d(2);
+    bn = new BatchNorm2d(2, { eps: EPS });
   }
 
-  it('folds into the conv declared right before it, leaving only conv keys', () => {
+  it('folds into the conv declared right before it and loads only conv weights', async () => {
     const m = new ConvBn();
-    const sd = memoryStateDict({
-      'conv.weight': { data: new Uint16Array(4), shape: [2, 2, 1, 1] },
-      ...bn(2),
-    });
-    m.bn.transformStateDict(sd, 'bn', m);
-    expect([...sd.tensors.keys()].sort()).toEqual(['conv.bias', 'conv.weight']);
+    const upload = recorder();
+    await m.loadStateDict({ ...conv(), ...bn() }, { upload });
+    expect(upload.mock.calls.map(([data]) => data)).toEqual([FOLDED_WEIGHT, FOLDED_BIAS]);
+    expect(m.conv.weight.loaded).toBe(true);
+    expect(m.conv.bias!.loaded).toBe(true);
   });
 
-  it('finds its conv inside a nested block', () => {
+  it('finds its conv inside a nested block', async () => {
     class Net extends Module {
       block = new ConvBn();
     }
     const net = new Net();
-    const sd = memoryStateDict({
-      'block.conv.weight': { data: new Uint16Array(4), shape: [2, 2, 1, 1] },
-      ...Object.fromEntries(Object.entries(bn(2)).map(([k, v]) => [`block.${k}`, v])),
-    });
-    net.block.bn.transformStateDict(sd, 'block.bn', net.block);
-    expect([...sd.tensors.keys()].sort()).toEqual(['block.conv.bias', 'block.conv.weight']);
+    const upload = recorder();
+    await net.loadStateDict({ ...conv('block.'), ...bn('block.') }, { upload });
+    expect(upload.mock.calls[0]![0]).toEqual(FOLDED_WEIGHT);
+    expect(net.block.conv.weight.loaded).toBe(true);
   });
 
-  it('folds into a named conv with foldInto', () => {
+  it('folds into a named conv with foldInto', async () => {
     class Apart extends Module {
       stem = new Conv2d(2, 2, { kernelSize: 1 });
       other = new Linear(2, 2);
-      bn = new BatchNorm2d(2, { foldInto: 'stem' });
+      bn = new BatchNorm2d(2, { eps: EPS, foldInto: 'stem' });
     }
     const m = new Apart();
-    const sd = memoryStateDict({
-      'stem.weight': { data: new Uint16Array(4), shape: [2, 2, 1, 1] },
-      ...bn(2),
-    });
-    m.bn.transformStateDict(sd, 'bn', m);
-    expect(sd.tensors.has('stem.bias')).toBe(true);
+    const upload = recorder();
+    await m.loadStateDict(
+      {
+        'stem.weight': { data: bf16([1, 2, 3, 4]), shape: [2, 2, 1, 1] },
+        'other.weight': { data: new Float32Array(4), shape: [2, 2] },
+        'other.bias': new Float32Array(2),
+        ...bn(),
+      },
+      { upload },
+    );
+    expect(upload).toHaveBeenCalledWith(FOLDED_WEIGHT, m.stem.weight.shape);
+    expect(m.stem.bias!.loaded).toBe(true);
   });
 
   it.each([
@@ -259,9 +285,8 @@ describe('BatchNorm2d', () => {
         bn = new BatchNorm2d(2);
       },
     },
-  ])('refuses to guess when right before it is $name', ({ Parent }) => {
-    const m = new Parent();
-    expect(() => m.bn.transformStateDict(memoryStateDict(bn(2)), 'bn', m)).toThrow(
+  ])('refuses to guess when right before it is $name', async ({ Parent }) => {
+    await expect(new Parent().loadStateDict(bn(), { upload: recorder() })).rejects.toThrow(
       /cannot infer its conv — needs a Conv2d with 2 out-channels/,
     );
   });
