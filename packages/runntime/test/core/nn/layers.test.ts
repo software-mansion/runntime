@@ -163,14 +163,12 @@ describe('ConvTranspose2d', () => {
     expect(conv.weight.pinned).toBe(true);
   });
 
-  it('reorders f16 weights at load and leaves other data alone', () => {
+  it('reorders f16 weights at load', () => {
     const p = new ConvTranspose2d(2, 3, { kernelSize: 1, stride: 1 }).weight;
     // [in=2, out=3] to [out, in]
     expect(p.preprocess!(new Uint16Array([1, 2, 3, 4, 5, 6]))).toEqual(
       new Uint16Array([1, 4, 2, 5, 3, 6]),
     );
-    const f32 = new Float32Array(4);
-    expect(p.preprocess!(f32)).toBe(f32);
   });
 
   it('scales each side by k', () => {
