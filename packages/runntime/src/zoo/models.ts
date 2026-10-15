@@ -14,6 +14,7 @@ import type { DepthEstimatorModel } from './tasks/cv/depthEstimation.ts';
 import type { InstanceSegmenterModel } from './tasks/cv/instanceSegmentation.ts';
 import type { ObjectDetectorModel } from './tasks/cv/objectDetection.ts';
 import type { KeypointDetectorModel } from './tasks/cv/keypointDetection.ts';
+import type { MultimodalEmbedderModel } from './tasks/multimodal/multimodalEmbedding.ts';
 import type { PrivacyFilterModel } from './tasks/nlp/privacyFilter.ts';
 import type { TextEmbedderModel } from './tasks/nlp/textEmbedding.ts';
 
@@ -40,9 +41,8 @@ const MINILM = precisions('all-MiniLM-L6-v2', 'base', {
   tokenizerPath: tokenizer('all-MiniLM-L6-v2'),
 } satisfies TextEmbedderModel);
 const EMBEDDINGGEMMA_2 = precisions('embeddinggemma-2', 'text', {
-  arch: 'embeddinggemma-2',
   tokenizerPath: tokenizer('embeddinggemma-2'),
-} satisfies TextEmbedderModel);
+} satisfies MultimodalEmbedderModel);
 
 const MOONSHINE_TINY = precisions('moonshine', 'tiny', {
   arch: 'moonshine',
@@ -96,8 +96,11 @@ export const models = {
   textEmbedding: {
     /** 384-dim sentence embeddings, 22M parameters. */
     ALL_MINILM_L6_V2: MINILM,
-    /** Google's EmbeddingGemma 2 text model: 768-dim embeddings in 100+
-     *  languages and code, inputs up to 2048 tokens, 270M parameters. */
+  },
+  multimodalEmbedding: {
+    /** Google's EmbeddingGemma 2: 768-dim embeddings of text in 100+
+     *  languages and code, inputs up to 2048 tokens, 270M parameters in
+     *  the text model. */
     EMBEDDINGGEMMA_2: EMBEDDINGGEMMA_2,
   },
   privacyFilter: {

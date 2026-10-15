@@ -1,0 +1,162 @@
+---
+title: Multimodal embedding
+description: Turn text into vectors with EmbeddingGemma 2.
+---
+
+Embedding turns an input into a vector of numbers that captures its
+meaning. Inputs about the same thing get similar vectors, which makes the
+vectors useful for semantic search, classification, clustering and finding
+duplicates.
+
+`createMultimodalEmbedder` runs Google's
+[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2), a model
+built to put text, images, video and audio in one space. The runner takes
+text in 100+ languages or code, up to 2048 tokens, and returns vectors of
+768 numbers.
+
+## Quick start
+
+```ts twoslash
+import { createMultimodalEmbedder, models, similarity } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const embedder = await createMultimodalEmbedder(
+  models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
+);
+
+// 2. Embed the query and the documents, each with its task.
+const query = await embedder.embed('Which planet is known as the Red Planet?', { task: 'query' });
+const docs = await embedder.embedBatch(
+  [
+    'Mars, known for its reddish appearance, is often referred to as the Red Planet.',
+    "Venus is often called Earth's twin because of its similar size.",
+    'Marte es conocido como el planeta rojo.',
+  ],
+  { task: 'document' },
+);
+
+// 3. Compare them. Other languages land in the same space.
+similarity(query, docs[0]!); // 0.85
+similarity(query, docs[1]!); // 0.68
+similarity(query, docs[2]!); // 0.83, Spanish for the first one
+
+// 4. Free the GPU memory when done.
+embedder.dispose();
+```
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+
+## Methods
+
+```ts
+function createMultimodalEmbedder(
+  model?: MultimodalEmbedderModel,
+  options?: LoadOptions,
+): Promise<MultimodalEmbedder>;
+
+interface MultimodalEmbedder {
+  readonly dim: number;
+  embed(input: string, options?: EmbedOptions): Promise<Float32Array>;
+  embedBatch(inputs: readonly string[], options?: EmbedOptions): Promise<Float32Array[]>;
+  dispose(): void;
+}
+
+interface EmbedOptions {
+  task?: EmbeddingTask;
+}
+```
+
+- `embed(input)` turns one text into one vector of `dim` numbers.
+- `embedBatch(inputs)` does many texts in one go. Much faster than calling
+  `embed()` in a loop. One vector per text, in the same order.
+- `dim` is the length of every vector, 768 unless the config asks for
+  fewer.
+- `dispose()` frees the GPU memory.
+
+`similarity(a, b)` compares two vectors, see
+[Text embedding](/zoo/text-embedding/#helpers).
+
+## Tasks
+
+The model was trained with a short instruction before each text, and
+`task` adds it. A search embeds its queries with `query` and what it
+searches with `document`.
+
+| Task                | For                                                  |
+| ------------------- | ---------------------------------------------------- |
+| `query`             | search queries, compared with `document`             |
+| `questionAnswering` | questions, compared with `document` passages         |
+| `factChecking`      | claims, compared with `document` evidence            |
+| `codeRetrieval`     | a description of code, compared with `document` code |
+| `document`          | what a search searches                               |
+| `classification`    | every text being classified                          |
+| `clustering`        | every text being clustered                           |
+| `similarity`        | every text being compared                            |
+
+The first four go on one side of a search, `document` on the other. The
+last three go on every text being compared. Without `task` a text gets no
+instruction, which still works but matches less well.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models` holds ready-made ones: `DEFAULT`, the f16 weights (542 MB)
+run in f16 where the device has `shader-f16` and in f32 elsewhere; `F16`,
+the same file with f16 forced; `F32`, the f32 weights (816 MB) run in f32.
+Pass one as is, copy it with a field changed, or point at your own files.
+
+```ts
+interface MultimodalEmbedderModel {
+  readonly modelPath?: ModelPath;
+  readonly tokenizerPath?: string;
+  readonly dtype?: 'f32' | 'f16';
+  readonly maxTokens?: number; // default 2048
+  readonly dims?: number; // default 768
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Examples:
+
+```ts twoslash
+import { createMultimodalEmbedder, models } from 'runntime/zoo';
+
+// Shorter vectors, a quarter of the storage.
+await createMultimodalEmbedder({
+  ...models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
+  dims: 256,
+});
+
+// Shorter texts.
+await createMultimodalEmbedder({
+  ...models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
+  maxTokens: 512,
+});
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. Google's original
+  bf16 file from the Hub works as is.
+- **tokenizerPath** - the `tokenizer.json` file.
+- **dtype** - `'f16'` or `'f32'`. `f16` runs the model in half precision,
+  half the GPU memory, and needs a device with `shader-f16`. Default: `f16`
+  where the device has it, `f32` elsewhere. Either loads any weight file.
+- **maxTokens** - longest text in tokens, at most 2048. Longer text is cut.
+- **dims** - length of the returned vectors: 768, 512, 256 or 128. A
+  shorter vector keeps the first numbers and is made unit length again,
+  for less storage at a small cost in quality.
+
+Every field is optional. A missing one comes from
+`models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT`.
+
+## Loading options
+
+The second argument controls the download, the same as for every task:
+`cache`, `onProgress`, `signal`. See
+[Text embedding](/zoo/text-embedding/#loading-options).
+
+## Supported models
+
+| Model                                                                                 | Config                                        | Language   | Max tokens | Embedding dimensions | Weights                |
+| ------------------------------------------------------------------------------------- | --------------------------------------------- | ---------- | ---------- | -------------------- | ---------------------- |
+| [EmbeddingGemma 2](https://huggingface.co/software-mansion/runntime-embeddinggemma-2) | `models.multimodalEmbedding.EMBEDDINGGEMMA_2` | 100+, code | 2048       | 768, 512, 256, 128   | f16 542 MB, f32 816 MB |
