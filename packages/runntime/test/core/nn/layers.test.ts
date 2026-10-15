@@ -325,7 +325,9 @@ describe('normalization layers', () => {
 
 describe('Embedding', () => {
   it('stores a [vocab, dim] table on the GPU by default', () => {
-    expect(shapes(new Embedding(100, 16))).toEqual({ weight: meta([100, 16]) });
+    const e = new Embedding(100, 16);
+    expect(shapes(e)).toEqual({ weight: meta([100, 16]) });
+    expect(e.weight).not.toBeInstanceOf(CpuParameter);
   });
 
   it('looks up rows by token id', () => {
