@@ -24,10 +24,7 @@ import {
 } from '../../embeddinggemma2/config.ts';
 import { createEmbeddingGemma2EmbedCore } from '../../embeddinggemma2/embedCore.ts';
 import { EmbeddingGemma2Model } from '../../embeddinggemma2/model.ts';
-import {
-  createEmbeddingGemma2Tokenizer,
-  embeddingGemma2TokenizerAsset,
-} from '../../embeddinggemma2/tokenizer.ts';
+import { createEmbeddingGemma2Tokenizer } from '../../embeddinggemma2/tokenizer.ts';
 import { EMBEDDING_DIM as MINILM_DIM, MINILM_L6 } from '../../minilm/config.ts';
 import { createMinilmEmbedCore } from '../../minilm/embedCore.ts';
 import { MinilmModel } from '../../minilm/model.ts';
@@ -169,9 +166,7 @@ export async function createTextEmbedder(
       await model.loadStateDict(sd, load);
       core = scope.track(createMinilmEmbedCore(model));
     } else {
-      const tokenizer = createEmbeddingGemma2Tokenizer(
-        embeddingGemma2TokenizerAsset(tokenizerJson, maxTokens),
-      );
+      const tokenizer = createEmbeddingGemma2Tokenizer(tokenizerJson, maxTokens);
       encode = (text) => tokenizer.encode(text);
       const model = scope.track(new EmbeddingGemma2Model());
       if (dtype === 'f16') model.half();

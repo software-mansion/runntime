@@ -56,35 +56,26 @@ const treeSum = (v: number, tid: number): number => {
   return partial.$[0]!;
 };
 
-const makeScalarLayout = (elem: Elem) =>
+// Built once with scalars and once with vec4s over the same buffers. Rows
+// start on a vec4 boundary because cols % 4 == 0.
+const makeLayout = <T extends Elem['scalar'] | Elem['vec4']>(t: T) =>
   tgpu.bindGroupLayout({
-    x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
-    weight: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
-    residual: { storage: d.arrayOf(elem.scalar), access: 'readonly' }, // dead when hasResidual=0
-    out: { storage: d.arrayOf(elem.scalar), access: 'mutable' },
-    dims: { uniform: Dims },
-  });
-
-// The same buffers read as vec4. Rows start on a vec4 boundary because
-// cols % 4 == 0.
-const makeVec4Layout = (elem: Elem) =>
-  tgpu.bindGroupLayout({
-    x: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
-    weight: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
-    residual: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // dead when hasResidual=0
-    out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
+    x: { storage: d.arrayOf(t), access: 'readonly' },
+    weight: { storage: d.arrayOf(t), access: 'readonly' },
+    residual: { storage: d.arrayOf(t), access: 'readonly' }, // dead when hasResidual=0
+    out: { storage: d.arrayOf(t), access: 'mutable' },
     dims: { uniform: Dims },
   });
 
 interface Layouts {
-  scalar: ReturnType<typeof makeScalarLayout>;
-  vec4: ReturnType<typeof makeVec4Layout>;
+  scalar: ReturnType<typeof makeLayout<Elem['scalar']>>;
+  vec4: ReturnType<typeof makeLayout<Elem['vec4']>>;
 }
 const layoutsPerElem = new Map<string, Layouts>();
 function layoutsFor(elem: Elem): Layouts {
   let l = layoutsPerElem.get(elem.key);
   if (!l) {
-    l = { scalar: makeScalarLayout(elem), vec4: makeVec4Layout(elem) };
+    l = { scalar: makeLayout(elem.scalar), vec4: makeLayout(elem.vec4) };
     layoutsPerElem.set(elem.key, l);
   }
   return l;

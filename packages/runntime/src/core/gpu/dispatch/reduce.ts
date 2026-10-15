@@ -11,7 +11,10 @@ import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 export const softmaxSpec = defineSpec({
   attrs: (p) => {
     const [masked, windowLeft, windowRight] = p.attrs as readonly number[];
-    return { masked: masked === 1, windowLeft: windowLeft!, windowRight: windowRight! };
+    if (windowLeft === undefined || windowRight === undefined) {
+      throw new Error('dispatch: softmax attrs need [masked, windowLeft, windowRight]');
+    }
+    return { masked: masked === 1, windowLeft, windowRight };
   },
   // vec4 depends only on cols % 4, so a new width never builds a pipeline.
   cfg: (node, _attrs, ctx) => ({

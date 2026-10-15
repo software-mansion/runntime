@@ -81,33 +81,25 @@ const keep4 = (v: d.v4f, i: number, lo: number, hi: number): d.v4f => {
   return std.select(d.vec4f(NEG_FLT_MAX), v, inside);
 };
 
-const makeScalarLayout = (elem: Elem) =>
+// Built once with scalars and once with vec4s over the same buffers. Rows
+// start on a vec4 boundary because cols % 4 == 0.
+const makeLayout = <T extends Elem['scalar'] | Elem['vec4']>(t: T) =>
   tgpu.bindGroupLayout({
-    x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
+    x: { storage: d.arrayOf(t), access: 'readonly' },
     segs: { storage: d.arrayOf(d.f32), access: 'readonly' }, // [rows, 2]; dead when masked=0
-    out: { storage: d.arrayOf(elem.scalar), access: 'mutable' },
-    dims: { uniform: Dims },
-  });
-
-// The same buffers read as vec4. Rows start on a vec4 boundary because
-// cols % 4 == 0.
-const makeVec4Layout = (elem: Elem) =>
-  tgpu.bindGroupLayout({
-    x: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
-    segs: { storage: d.arrayOf(d.f32), access: 'readonly' }, // [rows, 2]; dead when masked=0
-    out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
+    out: { storage: d.arrayOf(t), access: 'mutable' },
     dims: { uniform: Dims },
   });
 
 interface Layouts {
-  scalar: ReturnType<typeof makeScalarLayout>;
-  vec4: ReturnType<typeof makeVec4Layout>;
+  scalar: ReturnType<typeof makeLayout<Elem['scalar']>>;
+  vec4: ReturnType<typeof makeLayout<Elem['vec4']>>;
 }
 const layoutsPerElem = new Map<string, Layouts>();
 function layoutsFor(elem: Elem): Layouts {
   let l = layoutsPerElem.get(elem.key);
   if (!l) {
-    l = { scalar: makeScalarLayout(elem), vec4: makeVec4Layout(elem) };
+    l = { scalar: makeLayout(elem.scalar), vec4: makeLayout(elem.vec4) };
     layoutsPerElem.set(elem.key, l);
   }
   return l;

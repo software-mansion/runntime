@@ -58,8 +58,8 @@ Before writing or reviewing code, comments or docs, read
 - `pnpm typecheck`, `pnpm lint`, `pnpm format`.
 - `pnpm --filter runntime build`: tsdown, output in `dist`. Kernel files carry
   `'use gpu'` and `unplugin-typegpu` embeds their WGSL, so consumers need no
-  build plugin. `typegpu`, `@huggingface/transformers` and `js-tiktoken` stay
-  external.
+  build plugin. `typegpu`, `@huggingface/transformers`,
+  `@huggingface/tokenizers` and `js-tiktoken` stay external.
 - `pnpm dev:docs` / `pnpm build:docs`. The docs and their live demos import
   `runntime/zoo` from the library's `dist`, so build the library first or run
   `pnpm --filter docs... run build`. The docs dev server does not watch the
