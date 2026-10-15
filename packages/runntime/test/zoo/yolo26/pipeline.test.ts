@@ -6,7 +6,6 @@ import {
   decodeDetections,
   decodePoses,
   decodeSegmentations,
-  preprocessRgba,
   type RawLevel,
 } from '../../../src/zoo/yolo26/pipeline.ts';
 
@@ -30,22 +29,6 @@ function put(lvl: RawLevel, cell: number, first: number, values: readonly number
 }
 
 const logit = (p: number) => Math.log(p / (1 - p));
-
-describe('preprocessRgba', () => {
-  // Red, green, blue and (51, 102, 204), each with alpha 7
-  const rgba = new Uint8ClampedArray([255, 0, 0, 7, 0, 255, 0, 7, 0, 0, 255, 7, 51, 102, 204, 7]);
-  const want = [1, 0, 0, 0.2, 0, 1, 0, 0.4, 0, 0, 1, 0.8];
-
-  it('splits RGBA into R, G and B planes in [0, 1] and drops alpha', () => {
-    expect([...preprocessRgba(rgba, 2)]).toEqual(want.map((v) => expect.closeTo(v, 6)));
-  });
-
-  it('writes into the given array', () => {
-    const out = new Float32Array(12);
-    expect(preprocessRgba(rgba, 2, out)).toBe(out);
-    expect([...out]).toEqual(want.map((v) => expect.closeTo(v, 6)));
-  });
-});
 
 describe('decodeDetections', () => {
   it('turns a cell’s ltrb distances into a box around the cell center', () => {
@@ -105,7 +88,6 @@ describe('decodeSegmentations', () => {
   // pixel is 4 input pixels: half a cell at stride 8, a quarter at stride 16.
   const opts = { numClasses: 1, numMasks: 2, inputSize: 32 };
   const fine = () => level(4, 4, 8, 1, 2);
-  const coarse = () => level(2, 2, 16, 1, 2);
 
   /** Marks `cell` of `lvl` confident and writes its box and mask coefficients. */
   function hit(lvl: RawLevel, cell: number, ltrb: readonly number[], coeffs = [0, 0]): RawLevel {
@@ -143,17 +125,22 @@ describe('decodeSegmentations', () => {
     ]);
   });
 
-  it('reads the box and coefficients of a hit on a coarser level', () => {
+  it('reads the coefficients of a coarser-level hit from after the class planes', () => {
     // Coarse cell (1, 0) is centered on (24, 8). ltrb (0.5, 0.25, 0.25, 0.5)
     // cells of 16: box (16, 4)–(28, 16), proto pixels x 4..6, y 1..3.
     // With coeffs (−1, 3): proto (4, 1) sums to −1 + 3 = 2, 225; (5, 2) to 6,
     // round(255·0.99753) = 254; (6, 3) to −4, round(255·0.01799) = 5.
+    // Three classes, class 2 (car) confident, so the coeffs are planes 7 and 8.
+    const lvl = level(2, 2, 16, 3, 2);
+    put(lvl, 1, 0, [0.5, 0.25, 0.25, 0.5]);
+    put(lvl, 1, 4 + 2, [logit(0.9)]);
+    put(lvl, 1, 4 + 3, [-1, 3]);
     const [det] = decodeSegmentations(
-      [fine(), hit(coarse(), 1, [0.5, 0.25, 0.25, 0.5], [-1, 3])],
+      [level(4, 4, 8, 3, 2), lvl],
       proto({ 0: { 12: 1, 30: 4 }, 1: { 12: 1, 21: 2 } }),
-      opts,
+      { ...opts, numClasses: 3 },
     );
-    expect(det).toMatchObject({ x1: 16, y1: 4, x2: 28, y2: 16 });
+    expect(det).toMatchObject({ x1: 16, y1: 4, x2: 28, y2: 16, classId: 2, label: 'car' });
     expect(det).toMatchObject({ maskX: 4, maskY: 1, maskW: 3, maskH: 3 });
     // prettier-ignore
     expect([...det!.mask]).toEqual([
@@ -195,19 +182,22 @@ describe('decodeSegmentations', () => {
 describe('decodePoses', () => {
   it('places keypoints as (offset + cell center) · stride, visibility as sigmoid', () => {
     // Same decode as Ultralytics Pose26.kpts_decode. Cell (1, 1) of the
-    // stride-16 level is centered on (1.5, 1.5) cells.
-    const fine = level(4, 4, 8, 1, 6);
-    const coarse = level(2, 2, 16, 1, 6);
-    put(coarse, 3, 0, [1, 0.5, 0.5, 1, logit(0.8), -0.25, 0.5, 2, 0.75, -1, logit(0.3)]);
-    expect(decodePoses([fine, coarse], { numKeypoints: 2 })).toEqual([
+    // stride-16 level is centered on (1.5, 1.5) cells. Two classes, class 1
+    // confident, so the keypoint planes start at 6.
+    const fine = level(4, 4, 8, 2, 6);
+    const coarse = level(2, 2, 16, 2, 6);
+    put(coarse, 3, 0, [1, 0.5, 0.5, 1]);
+    put(coarse, 3, 4 + 1, [logit(0.8)]);
+    put(coarse, 3, 4 + 2, [-0.25, 0.5, 2, 0.75, -1, logit(0.3)]);
+    expect(decodePoses([fine, coarse], { numClasses: 2, numKeypoints: 2 })).toEqual([
       {
         x1: (1.5 - 1) * 16,
         y1: (1.5 - 0.5) * 16,
         x2: (1.5 + 0.5) * 16,
         y2: (1.5 + 1) * 16,
         score: expect.closeTo(0.8, 6),
-        classId: 0,
-        label: 'person',
+        classId: 1,
+        label: 'bicycle',
         kpts: [
           {
             x: (-0.25 + 1.5) * 16,
