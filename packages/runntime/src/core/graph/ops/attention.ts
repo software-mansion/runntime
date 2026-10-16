@@ -2,10 +2,12 @@
  *  fused rotary embedding. */
 
 import { pending, Value } from '../value.ts';
-import { FLOAT_DTYPES, want2d } from './shared.ts';
+import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
 
-/** Finite stand-in for an unbounded window side; attrs never carry ±Inf. */
-const WINDOW_INF = 0x3fffffff;
+/** Widest head sdpa takes with more than one query row. */
+const MAX_HEAD_DIM = 512;
+/** Widest head the decode kernels (one query row) take. */
+const MAX_DECODE_HEAD_DIM = 128;
 
 /** Scaled-dot-product attention over the band-mask family, with GQA and
  *  optional sinks. kvLen is independent of qLen.
@@ -42,7 +44,12 @@ export function sdpa(
   if (kvHeads <= 0 || qHeads % kvHeads !== 0) {
     throw new Error(`sdpa: qHeads ${qHeads} not divisible by kvHeads ${kvHeads}`);
   }
-  if (headDim > 128) throw new Error(`sdpa: headDim ${headDim} exceeds the kernel's max (128)`);
+  // Prefill kernels size their registers per head size; decode keeps a
+  // fixed 128-wide accumulator.
+  const maxHeadDim = qLen === 1 ? MAX_DECODE_HEAD_DIM : MAX_HEAD_DIM;
+  if (headDim > maxHeadDim) {
+    throw new Error(`sdpa: headDim ${headDim} exceeds the kernel's max (${maxHeadDim})`);
+  }
   const lowerWindow = (name: string, w: number): number => {
     if (w === Infinity) return WINDOW_INF;
     if (!Number.isInteger(w) || w < 0) {

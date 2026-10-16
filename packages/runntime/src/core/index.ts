@@ -48,6 +48,8 @@ export {
   matmul,
   matmulGather,
   maxPool2d,
+  moeDown,
+  moeUp,
   mean,
   mul,
   reshape,
@@ -70,6 +72,7 @@ export {
   channelAffine,
   pad2d,
   resizeBilinear2d,
+  rmsNorm,
   ssmScanMerge,
   SSM_DIRS,
   SSM_STATE,
@@ -81,7 +84,7 @@ export {
   upsample2d,
   writeRows,
 } from './graph/ops.ts';
-export { groupNorm, linear, rmsNorm } from './graph/compose.ts';
+export { groupNorm, linear } from './graph/compose.ts';
 export * as nn from './nn/index.ts';
 export {
   defaultExecutor,

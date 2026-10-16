@@ -6,6 +6,10 @@ export const WORKGROUP_SIZE = 64;
 
 export const MAX_WORKGROUPS_PER_DIM = 65535;
 
+/** Lanes the subgroup kernels assume. gpuExecutor turns them on only when the
+ *  device's smallest subgroup is at least this wide. */
+export const SUBGROUP_WIDTH = 32;
+
 export const gridYStride = (workgroupSize: number) => MAX_WORKGROUPS_PER_DIM * workgroupSize;
 
 export const GRID_Y_STRIDE = gridYStride(WORKGROUP_SIZE); // 4_194_240

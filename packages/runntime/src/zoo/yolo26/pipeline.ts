@@ -32,21 +32,6 @@ export interface SegDetection extends Detection {
   maskH: number;
 }
 
-export function preprocessRgba(
-  rgba: Uint8ClampedArray,
-  size: number,
-  out?: Float32Array,
-): Float32Array {
-  const hw = size * size;
-  out ??= new Float32Array(3 * hw);
-  for (let i = 0; i < hw; i++) {
-    out[i] = rgba[i * 4]! / 255;
-    out[hw + i] = rgba[i * 4 + 1]! / 255;
-    out[2 * hw + i] = rgba[i * 4 + 2]! / 255;
-  }
-  return out;
-}
-
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
 interface CellHit {

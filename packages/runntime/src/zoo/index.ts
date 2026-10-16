@@ -21,8 +21,11 @@ export { models } from './models.ts';
 export {
   createTextEmbedder,
   similarity,
+  type EmbeddingTask,
+  type EmbedOptions,
   type TextEmbedder,
   type TextEmbedderModel,
+  type TextEmbeddingArch,
 } from './tasks/nlp/textEmbedding.ts';
 
 export {

@@ -10,9 +10,13 @@ meaning. Texts about the same thing get similar vectors, which makes the
 vectors useful for semantic search, text classification, clustering and
 finding duplicates.
 
-`createTextEmbedder` runs
-[all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
-and returns vectors of 384 numbers.
+`createTextEmbedder` runs one of two models:
+
+- [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2),
+  the default: English, vectors of 384 numbers, a 45 MB download.
+- [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2): 100+
+  languages and code, texts up to 2048 tokens, vectors of 768 numbers that
+  can be cut to 512, 256 or 128, a 574 MB download.
 
 ## Quick start
 
@@ -39,6 +43,42 @@ embedder.dispose();
 
 The engine must be set up first, see [Getting started](/zoo/getting-started/).
 
+## EmbeddingGemma 2
+
+EmbeddingGemma 2 was trained with an instruction in front of each text, so
+tell it what the text is for. A search embeds its queries with
+`task: 'query'` and the texts it searches with `task: 'document'`.
+
+```ts twoslash
+import { createTextEmbedder, models, similarity } from 'runntime/zoo';
+
+// 1. Load the model once.
+const embedder = await createTextEmbedder(models.textEmbedding.EMBEDDINGGEMMA_2.DEFAULT);
+
+// 2. Embed the query and the documents, each with its task.
+const query = await embedder.embed('Which planet is known as the Red Planet?', { task: 'query' });
+const docs = await embedder.embedBatch(
+  [
+    'Mars, known for its reddish appearance, is often referred to as the Red Planet.',
+    "Venus is often called Earth's twin because of its similar size.",
+    'Marte es conocido como el planeta rojo.',
+  ],
+  { task: 'document' },
+);
+
+// 3. Compare them. Other languages land in the same space.
+similarity(query, docs[0]!); // 0.85
+similarity(query, docs[1]!); // 0.68
+similarity(query, docs[2]!); // 0.83, Spanish for the first one
+
+embedder.dispose();
+```
+
+The tasks are `query`, `document`, `questionAnswering`, `factChecking`,
+`classification`, `clustering`, `similarity` and `codeRetrieval`. Use the
+same task for every text you compare, except the query and document pair
+of a search.
+
 ## Try it yourself
 
 Ten support answers, embedded once with `embedBatch()`. Each search embeds
@@ -56,16 +96,23 @@ function createTextEmbedder(
 
 interface TextEmbedder {
   readonly dim: number;
-  embed(text: string): Promise<Float32Array>;
-  embedBatch(texts: readonly string[]): Promise<Float32Array[]>;
+  embed(text: string, options?: EmbedOptions): Promise<Float32Array>;
+  embedBatch(texts: readonly string[], options?: EmbedOptions): Promise<Float32Array[]>;
   dispose(): void;
+}
+
+interface EmbedOptions {
+  readonly task?: EmbeddingTask; // EmbeddingGemma 2 only
 }
 ```
 
 - `embed(text)` turns one text into one vector of `dim` numbers.
 - `embedBatch(texts)` does many texts in one go. Much faster than calling
   `embed()` in a loop. One vector per text, in the same order.
-- `dim` is the length of every vector, 384 for the default model.
+- `task` puts the task's instruction in front of every text, see
+  [EmbeddingGemma 2](#embeddinggemma-2). MiniLM takes no task.
+- `dim` is the length of every vector: 384 for MiniLM, 768 for
+  EmbeddingGemma 2 unless `dims` asks for fewer.
 - `dispose()` frees the GPU memory.
 
 ### Helpers
@@ -81,17 +128,19 @@ function similarity(a: Float32Array, b: Float32Array): number;
 ## Options
 
 The first argument is the model config, a plain object with the fields
-below. `models` holds ready-made ones: `DEFAULT`, the f16 weights (45 MB)
-run in f16 where the device has `shader-f16` and in f32 elsewhere; `F16`,
-the same file with f16 forced; `F32`, the f32 weights (91 MB) run in f32.
+below. `models` holds ready-made ones for each model: `DEFAULT`, the f16
+weights run in f16 where the device has `shader-f16` and in f32 elsewhere;
+`F16`, the same file with f16 forced; `F32`, the f32 weights run in f32.
 Pass one as is, copy it with a field changed, or point at your own files.
 
 ```ts
 interface TextEmbedderModel {
+  readonly arch?: 'minilm' | 'embeddinggemma-2';
   readonly modelPath?: ModelPath;
   readonly tokenizerPath?: string;
   readonly dtype?: 'f32' | 'f16';
-  readonly maxTokens?: number; // default 256
+  readonly maxTokens?: number; // default 256 for MiniLM, 2048 for EmbeddingGemma 2
+  readonly dims?: number; // EmbeddingGemma 2: 768, 512, 256 or 128
 }
 
 type ModelPath = string | RangeSource; // a URL, or bytes you already have
@@ -108,6 +157,9 @@ await createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.F32);
 // The same model, shorter texts.
 await createTextEmbedder({ ...models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT, maxTokens: 128 });
 
+// EmbeddingGemma 2 with vectors of 256 numbers, a third of the storage.
+await createTextEmbedder({ ...models.textEmbedding.EMBEDDINGGEMMA_2.DEFAULT, dims: 256 });
+
 // Your own copy of the files.
 await createTextEmbedder({
   modelPath: '/models/minilm/model.safetensors',
@@ -115,17 +167,23 @@ await createTextEmbedder({
 });
 ```
 
+- **arch** - `'minilm'` (default) or `'embeddinggemma-2'`. Picks the model
+  the weights belong to. The ready-made configs set it.
 - **modelPath** - the weights, a `model.safetensors` file. The original file
-  from the Hub works as is, in f16 or f32.
+  from the Hub works as is, in f16 or f32, and for EmbeddingGemma 2 Google's
+  bf16 file too.
 - **tokenizerPath** - the `tokenizer.json` file next to it.
 - **dtype** - `'f16'` or `'f32'`. `f16` runs the model in half precision,
   half the GPU memory, and needs a device with `shader-f16`. Default: `f16`
   where the device has it, `f32` elsewhere. Either loads any weight file.
-- **maxTokens** - longest text in tokens, 256 by default. Longer text is
-  cut.
+- **maxTokens** - longest text in tokens: 256 by default for MiniLM, 2048
+  for EmbeddingGemma 2, the most it runs here. Longer text is cut.
+- **dims** - length of the returned vectors. EmbeddingGemma 2 takes 768
+  (default), 512, 256 or 128: a shorter vector stores in less space and
+  compares faster, at a small cost in quality. MiniLM's are always 384.
 
-Every field is optional. A missing one comes from
-`models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT`.
+Every field is optional. A missing one comes from the model's `DEFAULT`,
+`models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT` when `arch` is not set.
 
 ## Loading options
 
@@ -163,6 +221,7 @@ const embedder = await createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.
 
 ## Supported models
 
-| Model                                                                                 | Config                                  | Language | Max tokens | Embedding dimensions | Weights              |
-| ------------------------------------------------------------------------------------- | --------------------------------------- | -------- | ---------- | -------------------- | -------------------- |
-| [all-MiniLM-L6-v2](https://huggingface.co/software-mansion/runntime-all-MiniLM-L6-v2) | `models.textEmbedding.ALL_MINILM_L6_V2` | English  | 256        | 384                  | f16 45 MB, f32 91 MB |
+| Model                                                                                 | Config                                  | Language   | Max tokens | Embedding dimensions | Weights                |
+| ------------------------------------------------------------------------------------- | --------------------------------------- | ---------- | ---------- | -------------------- | ---------------------- |
+| [all-MiniLM-L6-v2](https://huggingface.co/software-mansion/runntime-all-MiniLM-L6-v2) | `models.textEmbedding.ALL_MINILM_L6_V2` | English    | 256        | 384                  | f16 45 MB, f32 91 MB   |
+| [EmbeddingGemma 2](https://huggingface.co/software-mansion/runntime-embeddinggemma-2) | `models.textEmbedding.EMBEDDINGGEMMA_2` | 100+, code | 2048       | 768, 512, 256, 128   | f16 542 MB, f32 816 MB |

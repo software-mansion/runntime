@@ -3,6 +3,11 @@
 import { elemFor } from '../../kernels/elem.ts';
 import { conv1dHandle, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
 import {
+  createMatmulTiledVec4Pipeline,
+  matmulTiledVec4Eligible,
+  matmulTiledVec4Handle,
+} from '../../kernels/matmul/matmulTiledVec4.ts';
+import {
   convTranspose2dHandle,
   createConvTranspose2dPipeline,
 } from '../../kernels/conv/convTranspose2d.ts';
@@ -33,7 +38,7 @@ import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 
 export const conv1dSpec = defineSpec({
   attrs: (p) => {
-    const [kernel, stride, padLeft, , hasBias, act] = p.attrs as [
+    const [kernel, stride, padLeft, padRight, hasBias, act] = p.attrs as [
       number,
       number,
       number,
@@ -41,22 +46,66 @@ export const conv1dSpec = defineSpec({
       number,
       number,
     ];
-    return { kernel, stride, padLeft, hasBias, act };
+    return { kernel, stride, padLeft, padRight, hasBias, act };
   },
-  cfg: (node, attrs) => ({
-    kernel: attrs.kernel,
-    stride: attrs.stride,
-    cIn: node.pending!.inputs[0]!.shape.dims![1]!,
-    cOut: node.shape.dims![1]!,
-    padLeft: attrs.padLeft,
-    hasBias: attrs.hasBias,
-    act: attrs.act,
-  }),
-  pipeline: (root, dtype, cfg) => createConv1dPipeline(root, cfg, elemFor(dtype)),
-  encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
+  cfg: (node, attrs) => {
+    const cIn = node.pending!.inputs[0]!.shape.dims![1]!;
+    const cOut = node.shape.dims![1]!;
+    // Without padding, each output frame reads kernel·cIn contiguous inputs,
+    // stride·cIn after the previous one, so the conv runs as the tiled matmul.
+    const gemm =
+      attrs.padLeft === 0 &&
+      attrs.padRight === 0 &&
+      cIn % 4 === 0 &&
+      matmulTiledVec4Eligible(attrs.kernel * cIn, cOut);
+    return {
+      kernel: attrs.kernel,
+      stride: attrs.stride,
+      cIn,
+      cOut,
+      padLeft: attrs.padLeft,
+      hasBias: attrs.hasBias,
+      act: attrs.act,
+      gemm: gemm ? 1 : 0,
+    };
+  },
+  pipeline: (root, dtype, cfg) =>
+    cfg.gemm
+      ? createMatmulTiledVec4Pipeline(
+          root,
+          {
+            k: cfg.kernel * cfg.cIn,
+            n: cfg.cOut,
+            hasBias: cfg.hasBias,
+            hasAdd: 0,
+            act: cfg.act,
+            aStride: cfg.stride * cfg.cIn,
+          },
+          elemFor(dtype),
+        )
+      : createConv1dPipeline(root, cfg, elemFor(dtype)),
+  encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
     const dtype = node.shape.dtype;
     const tIn = node.pending!.inputs[0]!.shape.dims![0]!;
     const [tOut, cOut] = node.shape.dims as [number, number];
+    const bias = attrs.hasBias === 1 ? narrowFloat(inputs[2]!, dtype) : undefined;
+    if (cfg.gemm) {
+      return [
+        matmulTiledVec4Handle(
+          ctx.root,
+          pipeline,
+          tOut,
+          cOut,
+          {
+            a: narrowFloat(inputs[0]!, dtype),
+            b: narrowFloat(inputs[1]!, dtype),
+            bias,
+            out: narrowFloat(out, dtype),
+          },
+          elemFor(dtype),
+        ),
+      ];
+    }
     return [
       conv1dHandle(
         ctx.root,
@@ -65,7 +114,7 @@ export const conv1dSpec = defineSpec({
         {
           x: narrowFloat(inputs[0]!, dtype),
           w: narrowFloat(inputs[1]!, dtype),
-          bias: attrs.hasBias === 1 ? narrowFloat(inputs[2]!, dtype) : undefined,
+          bias,
           out: narrowFloat(out, dtype),
         },
         elemFor(dtype),
@@ -145,7 +194,10 @@ export const conv2dHwc4Spec = defineSpec({
     const kind1x1 = is1x1 ? conv1x1Kind(pixels, cOut) : 0;
     const oneByOne = kind1x1 === 1;
     const [, hOut, wOut] = node.shape.dims as [number, number, number];
-    const bmb = kind1x1 === 0 && attrs.groups === 1 ? convTiledBlocks(cOut, hOut * wOut) : 0;
+    const bmb =
+      kind1x1 === 0 && attrs.groups === 1
+        ? convTiledBlocks(cOut, hOut * wOut, cIn * attrs.kH * attrs.kW)
+        : 0;
     const depthwise = attrs.groups !== 1;
     return {
       cIn,

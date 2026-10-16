@@ -17,7 +17,15 @@ export {
   swigluChunk,
   tanh,
 } from './ops/elementwise.ts';
-export { argmaxDot, matmul, matmulGather, type MatmulOpts } from './ops/matmul.ts';
+export {
+  argmaxDot,
+  matmul,
+  matmulGather,
+  type MatmulOpts,
+  moeDown,
+  moeUp,
+  type QuantExpertWeight,
+} from './ops/matmul.ts';
 export { rope, sdpa, sdpaPacked } from './ops/attention.ts';
 export {
   cat,
@@ -31,7 +39,7 @@ export {
   transpose,
   writeRows,
 } from './ops/shape.ts';
-export { layerNorm, mean, meanSquare, softmax, topk } from './ops/reduce.ts';
+export { layerNorm, mean, rmsNorm, softmax, topk } from './ops/reduce.ts';
 export { channelAffine, toChw, toHwc4 } from './ops/hwc4.ts';
 export { conv1d } from './ops/conv/conv1d.ts';
 export { SSM_DIRS, SSM_STATE, ssmScanMerge, ssmScanProject, ssmSelectiveScan } from './ops/ssm.ts';

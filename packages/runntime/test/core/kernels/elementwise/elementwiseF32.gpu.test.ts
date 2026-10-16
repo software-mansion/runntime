@@ -20,42 +20,76 @@ function swigluRef(glu: Float32Array, lin: Float32Array): Float64Array {
 }
 
 describe('elementwiseF32 kernel', () => {
+  // Every op in every way b can be read, worked out by hand from
+  // A = [[1, 2, 3], [4, 5, 6]]. broadcastPlan in graph/ops/elementwise.ts picks
+  // the mode from b's shape.
+  const ROW_WANT = {
+    add: [1.5, 1, 5, 4.5, 4, 8],
+    sub: [0.5, 3, 1, 3.5, 6, 4],
+    mul: [0.5, -2, 6, 2, -5, 12],
+  };
+  const COL_WANT = {
+    add: [3, 4, 5, 3.5, 4.5, 5.5],
+    sub: [-1, 0, 1, 4.5, 5.5, 6.5],
+    mul: [2, 4, 6, -2, -2.5, -3],
+  };
+  const SAME_WANT = {
+    add: [1.5, 3, 5, 3, 9, 6.5],
+    sub: [0.5, 1, 1, 5, 1, 5.5],
+    mul: [0.5, 2, 6, -4, 20, 3],
+  };
+  const BROADCASTS = [
+    // mode 0: b has a's shape
+    { name: 'same shape', b: [0.5, 1, 2, -1, 4, 0.5], dims: [2, 3], want: SAME_WANT },
+    // mode 1: b is one row, as [1, N] or [N]
+    { name: 'row [1, N]', b: [0.5, -1, 2], dims: [1, 3], want: ROW_WANT },
+    { name: 'row [N]', b: [0.5, -1, 2], dims: [3], want: ROW_WANT },
+    // mode 2: b is one column [M, 1]
+    { name: 'column [M, 1]', b: [2, -0.5], dims: [2, 1], want: COL_WANT },
+    // mode 3: b is a single value
+    {
+      name: 'single value',
+      b: [-2],
+      dims: [1, 1],
+      want: { add: [-1, 0, 1, 2, 3, 4], sub: [3, 4, 5, 6, 7, 8], mul: [-2, -4, -6, -8, -10, -12] },
+    },
+    // b without dims: the mode comes from its element count alone, M * N
+    // elements mode 0, N mode 1, M mode 2
+    { name: 'same count, no dims', b: [0.5, 1, 2, -1, 4, 0.5], want: SAME_WANT },
+    { name: 'row, no dims', b: [0.5, -1, 2], want: ROW_WANT },
+    { name: 'column, no dims', b: [2, -0.5], want: COL_WANT },
+  ];
+  const OPS = { add, sub, mul };
+
   // Small integers and halves are exact in f32 and f16, so these need no tolerance.
+  it.for(
+    (['f32', 'f16'] as const).flatMap((dtype) =>
+      BROADCASTS.flatMap((c) =>
+        (['add', 'sub', 'mul'] as const).map((op) => ({ dtype, op, ...c, want: c.want[op] })),
+      ),
+    ),
+  )('$dtype $op, b $name', async ({ dtype, op, b, dims, want }, ctx) => {
+    if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    const a = upload(root, new Float32Array(A), { ...matrix(2, 3), dtype });
+    const bv = upload(root, new Float32Array(b), { elems: b.length, dtype, dims });
+    expectClose(await toArray(OPS[op](a, bv), ex), want, { atol: 0, rtol: 0 });
+  });
+
+  // The op puts the full operand first, so a broadcast b passed as the first
+  // argument gives the same result. sub is not commutative and refuses it.
   it.each([
-    {
-      name: 'add, same shape',
-      op: add,
-      b: [10, 20, 30, 40, 50, 60],
-      bDims: [2, 3],
-      want: [11, 22, 33, 44, 55, 66],
-    },
-    {
-      name: 'add, row [1, N]',
-      op: add,
-      b: [10, 20, 30],
-      bDims: [1, 3],
-      want: [11, 22, 33, 14, 25, 36],
-    },
-    {
-      name: 'add, column [M, 1]',
-      op: add,
-      b: [10, 20],
-      bDims: [2, 1],
-      want: [11, 12, 13, 24, 25, 26],
-    },
-    { name: 'sub, row [1, N]', op: sub, b: [1, 1, 1], bDims: [1, 3], want: [0, 1, 2, 3, 4, 5] },
-    {
-      name: 'mul, same shape',
-      op: mul,
-      b: [2, 2, 2, 0.5, 0.5, 0.5],
-      bDims: [2, 3],
-      want: [2, 4, 6, 2, 2.5, 3],
-    },
-    { name: 'mul, single value', op: mul, b: [-1], bDims: [1, 1], want: [-1, -2, -3, -4, -5, -6] },
+    { name: 'add, row first', op: add, b: [0.5, -1, 2], bDims: [1, 3], want: ROW_WANT.add },
+    { name: 'mul, column first', op: mul, b: [2, -0.5], bDims: [2, 1], want: COL_WANT.mul },
   ])('$name', async ({ op, b, bDims, want }) => {
     const a = upload(root, new Float32Array(A), [2, 3]);
     const bv = upload(root, new Float32Array(b), [bDims[0]!, bDims[1]!]);
-    expectClose(await toArray(op(a, bv), ex), want, { atol: 0, rtol: 0 });
+    expectClose(await toArray(op(bv, a), ex), want, { atol: 0, rtol: 0 });
+  });
+
+  it('sub refuses a broadcast operand first', () => {
+    const a = upload(root, new Float32Array(A), [2, 3]);
+    const row = upload(root, new Float32Array(3), [1, 3]);
+    expect(() => sub(row, a)).toThrow(/a must be the full operand/);
   });
 
   it('adds 1×1', async () => {
@@ -71,14 +105,12 @@ describe('elementwiseF32 kernel', () => {
     expectClose(got, swigluRef(glu, lin), { atol: 1e-6, rtol: 1e-5 });
   });
 
-  it.for([
-    { name: 'add, row [1, N]', op: add, want: [1.5, 2.25, 2, 4.5, 5.25, 5] },
-    { name: 'mul, row [1, N]', op: mul, want: [0.5, 0.5, -3, 2, 1.25, -6] },
-  ])('f16 $name', async ({ op, want }, ctx) => {
-    requireFeature(ctx, root, 'shader-f16');
-    const a = upload(root, new Float32Array(A), { ...matrix(2, 3), dtype: 'f16' });
-    const b = upload(root, new Float32Array([0.5, 0.25, -1]), { ...matrix(1, 3), dtype: 'f16' });
-    expectClose(await toArray(op(a, b), ex), want, { atol: 0, rtol: 0 });
+  // The kernel reads lin[i] with no broadcast index, so a smaller lin would be
+  // read past its end. The op has to refuse it before the kernel runs.
+  it('swiglu refuses a broadcast lin', () => {
+    const glu = upload(root, new Float32Array(6), [2, 3]);
+    const lin = upload(root, new Float32Array(3), [1, 3]);
+    expect(() => swiglu(glu, lin)).toThrow(/glu\/lin must match/);
   });
 
   it('f16 swiglu', async (ctx) => {

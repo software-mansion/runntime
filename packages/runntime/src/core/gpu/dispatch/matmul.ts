@@ -18,9 +18,12 @@ import {
 } from '../../kernels/matmul/matmul.ts';
 import {
   createMatmulGemvPipeline,
+  createMatmulGemvVec4Pipeline,
   createMatmulSmallMPipeline,
   MATMUL_SMALL_M_MAX_ROWS,
   matmulGemvHandle,
+  matmulGemvVec4Eligible,
+  matmulGemvVec4Handle,
   matmulSmallMHandle,
 } from '../../kernels/matmul/matmulGemv.ts';
 import {
@@ -28,25 +31,31 @@ import {
   matmulGatherHandle,
 } from '../../kernels/matmul/matmulGather.ts';
 import {
-  createMatmulGatherQuantWPipeline,
-  matmulGatherQuantWHandle,
-} from '../../kernels/matmul/matmulGatherQuantW.ts';
+  createMoeDownPipeline,
+  createMoeUpPipeline,
+  moeDownHandle,
+  moeUpHandle,
+} from '../../kernels/matmul/moeQuantW.ts';
 import {
   createMatmulQuantWPipeline,
   matmulQuantWHandle,
 } from '../../kernels/matmul/matmulQuantW.ts';
 import {
-  createMatmulTiledF16Pipeline,
-  matmulTiledF16Eligible,
-  matmulTiledF16Handle,
-} from '../../kernels/matmul/matmulTiledF16.ts';
+  createMatmulTiledVec4Pipeline,
+  matmulTiledVec4Eligible,
+  matmulTiledVec4Handle,
+} from '../../kernels/matmul/matmulTiledVec4.ts';
 import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
-type MatmulRoute = 'plain' | 'gemv' | 'smallm' | 'tiled' | 'tiledF16';
+type MatmulRoute = 'plain' | 'gemv' | 'gemvVec4' | 'smallm' | 'tiled' | 'tiledVec4';
 
 function smallMEligible(m: number, n: number, subgroupsOk: boolean): boolean {
   return subgroupsOk && m >= 4 && m % 4 === 0 && m <= MATMUL_SMALL_M_MAX_ROWS && n % 4 === 0;
 }
+
+/** From this N, a few rows have enough tiles to fill the GPU, so they take
+ *  the tiled kernel over smallm. */
+const TILED_MIN_N_FEW_ROWS = 1024;
 
 export const matmulSpec = defineSpec({
   attrs: (p) => {
@@ -65,10 +74,13 @@ export const matmulSpec = defineSpec({
     const f16 = node.shape.dtype === 'f16';
     let route: MatmulRoute = 'plain';
     if (!attrs.isView) {
-      if (smallMEligible(m, n, ctx.subgroupsOk)) route = 'smallm';
-      else if (m === 1 && attrs.act === 0) route = 'gemv';
+      const tiledOk = m >= MATMUL_TILED_MIN_M && matmulTiledVec4Eligible(k, n);
+      if (smallMEligible(m, n, ctx.subgroupsOk) && !(tiledOk && n >= TILED_MIN_N_FEW_ROWS)) {
+        route = 'smallm';
+      } else if (m === 1 && attrs.act === 0) {
+        route = matmulGemvVec4Eligible(n) ? 'gemvVec4' : 'gemv';
+      } else if (tiledOk) route = 'tiledVec4';
       else if (!f16 && m >= MATMUL_TILED_MIN_M) route = 'tiled';
-      else if (f16 && m >= MATMUL_TILED_MIN_M && matmulTiledF16Eligible(k, n)) route = 'tiledF16';
     }
     return {
       k,
@@ -89,10 +101,12 @@ export const matmulSpec = defineSpec({
         return createMatmulSmallMPipeline(root, cfg, elem);
       case 'gemv':
         return createMatmulGemvPipeline(root, cfg, elem);
+      case 'gemvVec4':
+        return createMatmulGemvVec4Pipeline(root, cfg, elem);
       case 'tiled':
         return createMatmulTiledPipeline(root, cfg);
-      case 'tiledF16':
-        return createMatmulTiledF16Pipeline(root, cfg);
+      case 'tiledVec4':
+        return createMatmulTiledVec4Pipeline(root, cfg, elem);
       case 'plain':
         return createMatmulPipeline(root, cfg, elem);
     }
@@ -116,10 +130,12 @@ export const matmulSpec = defineSpec({
         return [matmulSmallMHandle(ctx.root, pipeline, m, n, buffers, elem)];
       case 'gemv':
         return [matmulGemvHandle(ctx.root, pipeline, n, buffers, elem)];
+      case 'gemvVec4':
+        return [matmulGemvVec4Handle(ctx.root, pipeline, n, buffers, elem)];
       case 'tiled':
         return [matmulTiledHandle(ctx.root, pipeline, m, n, buffers)];
-      case 'tiledF16':
-        return [matmulTiledF16Handle(ctx.root, pipeline, m, n, buffers)];
+      case 'tiledVec4':
+        return [matmulTiledVec4Handle(ctx.root, pipeline, m, n, buffers, elem)];
       case 'plain':
         return [matmulHandle(ctx.root, pipeline, m, n, buffers, elem, attrs.baseRow)];
     }
@@ -158,29 +174,63 @@ export const matmulQuantWSpec = defineSpec({
   ],
 });
 
-export const matmulGatherQuantWSpec = defineSpec({
+export const moeUpSpec = defineSpec({
   attrs: (p) => {
-    const [bits, groupSize] = p.attrs as [number, number];
-    return { bits, groupSize };
+    const [bits, groupSize, experts] = p.attrs as [number, number, number];
+    return { bits, groupSize, experts };
   },
   cfg: (node, attrs) => ({
     k: node.pending!.inputs[0]!.shape.dims![1]!,
     n: node.shape.dims![1]!,
     bits: attrs.bits,
     groupSize: attrs.groupSize,
+    experts: attrs.experts,
   }),
-  pipeline: (root, _dtype, cfg) => createMatmulGatherQuantWPipeline(root, cfg),
+  pipeline: (root, _dtype, cfg) => createMoeUpPipeline(root, cfg),
   encode: ({ node, cfg, pipeline, inputs, out, ctx }) => [
-    matmulGatherQuantWHandle(
+    moeUpHandle(
       ctx.root,
       pipeline,
-      { m: node.pending!.inputs[0]!.shape.dims![0]!, n: cfg.n },
+      { tokens: node.pending!.inputs[0]!.shape.dims![0]!, n: cfg.n },
       {
-        a: narrow(inputs[0]!, 'f32'),
-        w: narrow(inputs[1]!, 'u32'),
-        scales: narrow(inputs[2]!, 'f32'),
-        bias: narrow(inputs[3]!, 'f32'),
-        expertIdx: narrow(inputs[4]!, 'f32'),
+        x: narrow(inputs[0]!, 'f32'),
+        route: narrow(inputs[1]!, 'f32'),
+        gluW: narrow(inputs[2]!, 'u32'),
+        gluScales: narrow(inputs[3]!, 'f32'),
+        linW: narrow(inputs[4]!, 'u32'),
+        linScales: narrow(inputs[5]!, 'f32'),
+        bias: narrow(inputs[6]!, 'f32'),
+        out: narrow(out, 'f32'),
+      },
+    ),
+  ],
+});
+
+export const moeDownSpec = defineSpec({
+  attrs: (p) => {
+    const [bits, groupSize, experts] = p.attrs as [number, number, number];
+    return { bits, groupSize, experts };
+  },
+  cfg: (node, attrs) => ({
+    k: node.pending!.inputs[0]!.shape.dims![1]!,
+    n: node.shape.dims![1]!,
+    bits: attrs.bits,
+    groupSize: attrs.groupSize,
+    experts: attrs.experts,
+  }),
+  pipeline: (root, _dtype, cfg) => createMoeDownPipeline(root, cfg),
+  encode: ({ node, cfg, pipeline, inputs, out, ctx }) => [
+    moeDownHandle(
+      ctx.root,
+      pipeline,
+      { tokens: node.shape.dims![0]!, n: cfg.n },
+      {
+        act: narrow(inputs[0]!, 'f32'),
+        route: narrow(inputs[1]!, 'f32'),
+        w: narrow(inputs[2]!, 'u32'),
+        scales: narrow(inputs[3]!, 'f32'),
+        bias: narrow(inputs[4]!, 'f32'),
+        residual: narrow(inputs[5]!, 'f32'),
         out: narrow(out, 'f32'),
       },
     ),

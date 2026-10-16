@@ -7,6 +7,7 @@ import {
   type FloatBuffer,
   type KernelHandle,
   makeHandle,
+  SUBGROUP_WIDTH,
   WORKGROUP_SIZE,
 } from '../common.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
@@ -479,7 +480,7 @@ function makeAttnRowsSubgroupSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM)
   const kvStride = (cfg.qkvPacked ?? 0) > 0 ? qStride : kvHeads * hd;
   const kOff = (cfg.qkvPacked ?? 0) > 0 ? qHeads * hd : 0;
   const vOff = (cfg.qkvPacked ?? 0) > 0 ? (qHeads + kvHeads) * hd : 0;
-  const LANES = 32;
+  const LANES = SUBGROUP_WIDTH;
   const cpl = Math.ceil(hd / LANES); // lane-owned columns
   const qv = tgpu.privateVar(d.arrayOf(d.f32, cpl));
   const acc = tgpu.privateVar(d.arrayOf(d.f32, cpl));

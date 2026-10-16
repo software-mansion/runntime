@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { ACT_CODE, argmaxDot, matmul, matmulGather } from '../../../../src/core/graph/ops.ts';
+import {
+  ACT_CODE,
+  argmaxDot,
+  matmul,
+  matmulGather,
+  moeDown,
+  moeUp,
+} from '../../../../src/core/graph/ops.ts';
 import { input, meta, quantWeight } from '../values.ts';
 
 describe('matmul', () => {
@@ -49,6 +56,11 @@ describe('matmul', () => {
       expect(c.pending?.inputs).toEqual([a, b, bias, addend]);
       // attrs: hasBias, hasAddend, activation, baseRow, hasBaseRow
       expect(c.pending?.attrs).toEqual([1, 1, ACT_CODE.gelu, 0, 0]);
+    });
+
+    it('takes the tanh-approximated gelu', () => {
+      const c = matmul(a, b, { activation: 'geluTanh' });
+      expect(c.pending?.attrs).toEqual([0, 0, ACT_CODE.geluTanh, 0, 0]);
     });
 
     it.each([
@@ -183,17 +195,6 @@ describe('matmulGather', () => {
     expect(c.pending?.inputs).toEqual([a, w, bias, idx]);
   });
 
-  it('takes a quantized weight', () => {
-    const c = matmulGather(a, quantWeight(8, 8, 8), idx, {
-      bias,
-      scales: input([16]),
-      bits: 8,
-      groupSize: 4,
-    });
-    expect(c.shape).toEqual(meta([3, 8]));
-    expect(c.pending?.op).toBe('matmulGatherQuantW');
-  });
-
   it.each([
     { name: 'N not a multiple of 4', w: input([8, 6]), idx, error: /n 6 must be divisible by 4/ },
     {
@@ -214,9 +215,153 @@ describe('matmulGather', () => {
       idx,
       error: /w is f16 but a is f32/,
     },
+    {
+      name: 'a quantized weight',
+      w: quantWeight(8, 8, 8),
+      idx,
+      error: /matmulGather.w: expected a 2D f32 or f16 tensor/,
+    },
   ])('rejects $name', ({ w, idx, error }) => {
     expect(() => matmulGather(a, w, idx, { bias })).toThrow(error);
   });
+});
+
+// 3 tokens routed over 2 experts, int8 weights in groups of 4. route is
+// topk's [T, 8]: 4 expert ids, then 4 gate weights.
+const moe = { bits: 8 as const, groupSize: 4 };
+const route = input([3, 8]);
+
+/** One routed layer for 2 experts of [K, N]. */
+const experts = (k: number, n: number, bits: 8 | 4 = 8) => ({
+  w: quantWeight(2 * k, n, bits),
+  scales: input([(2 * k) / moe.groupSize, n]),
+  bias: input([2, n]),
+});
+
+describe('moeUp', () => {
+  // K=8 in, N=16 out per slot
+  const x = input([3, 8]);
+  const glu = experts(8, 16);
+  const lin = experts(8, 16);
+
+  it('gives one row per (token, slot) and passes the expert count', () => {
+    const c = moeUp(x, route, glu, lin, moe);
+    expect(c.shape).toEqual(meta([12, 16]));
+    expect(c.pending?.op).toBe('moeUp');
+    // attrs: bits, groupSize, experts
+    expect(c.pending?.attrs).toEqual([8, 4, 2]);
+  });
+
+  it('joins the glu and lin biases into one [2E, N] input', () => {
+    const c = moeUp(x, route, glu, lin, moe);
+    expect(c.pending?.inputs.slice(0, 6)).toEqual([x, route, glu.w, glu.scales, lin.w, lin.scales]);
+    const bias = c.pending?.inputs[6];
+    expect(bias?.shape).toEqual(meta([4, 16]));
+    expect(bias?.pending?.inputs).toEqual([glu.bias, lin.bias]);
+  });
+
+  it('takes int4 weights', () => {
+    const c = moeUp(x, route, experts(8, 16, 4), experts(8, 16, 4), { ...moe, bits: 4 });
+    expect(c.pending?.attrs).toEqual([4, 4, 2]);
+  });
+
+  it.each([
+    { name: 'f16 activations', x: input([3, 8], 'f16'), error: /expected a 2D f32 tensor/ },
+    {
+      name: 'a float weight',
+      glu: { ...glu, w: input([16, 16]) },
+      error: /w must be a quantW \[E·8, N\] weight/,
+    },
+    {
+      name: 'weight rows not a multiple of K',
+      glu: { ...glu, w: quantWeight(12, 16, 8) },
+      error: /w must be a quantW \[E·8, N\] weight/,
+    },
+    {
+      name: 'a weight whose word count does not match bits',
+      glu: { ...glu, w: quantWeight(16, 16, 4) },
+      error: /elems 32 != rows·cols·8\/32/,
+    },
+    {
+      name: 'N not a multiple of 4',
+      glu: experts(8, 6),
+      lin: experts(8, 6),
+      error: /K 8 and N 6 must be multiples of 4/,
+    },
+    {
+      name: 'a group size that does not divide K',
+      opts: { groupSize: 3 },
+      error: /groupSize 3 must be a multiple of 4 that divides K 8/,
+    },
+    {
+      name: 'scales of the wrong shape',
+      glu: { ...glu, scales: input([2, 16]) },
+      error: /scales must be f32 \[4, 16\]/,
+    },
+    {
+      name: 'a bias of the wrong shape',
+      glu: { ...glu, bias: input([16]) },
+      error: /bias must be f32 \[2, 16\]/,
+    },
+    {
+      name: 'a route that is not topk-shaped',
+      route: input([3, 4]),
+      error: /route must be topk's f32 \[3, 8\] output/,
+    },
+    {
+      name: 'glu and lin of different widths',
+      lin: experts(8, 8),
+      error: /glu and lin weights must have the same shape/,
+    },
+  ])(
+    'rejects $name',
+    ({ x: xIn = x, route: r = route, glu: g = glu, lin: l = lin, opts, error }) => {
+      expect(() => moeUp(xIn, r, g, l, { ...moe, ...opts })).toThrow(error);
+    },
+  );
+});
+
+describe('moeDown', () => {
+  // moeUp's [T·4, K=16] in, N=8 out per token
+  const act = input([12, 16]);
+  const out = experts(16, 8);
+  const residual = input([3, 8]);
+
+  it('gives one row per token and passes the expert count', () => {
+    const c = moeDown(act, route, out, residual, moe);
+    expect(c.shape).toEqual(meta([3, 8]));
+    expect(c.pending?.inputs).toEqual([act, route, out.w, out.scales, out.bias, residual]);
+    // attrs: bits, groupSize, experts
+    expect(c.pending?.attrs).toEqual([8, 4, 2]);
+  });
+
+  it.each([
+    {
+      name: 'act rows not a multiple of 4 slots',
+      act: input([10, 16]),
+      error: /act rows 10 must be a multiple of 4/,
+    },
+    {
+      name: 'a residual of the wrong shape',
+      residual: input([3, 4]),
+      error: /residual must be f32 \[3, 8\]/,
+    },
+    {
+      name: 'a route for another token count',
+      route: input([2, 8]),
+      error: /route must be topk's f32 \[3, 8\] output/,
+    },
+    {
+      name: 'a bias of the wrong shape',
+      out: { ...out, bias: input([3, 8]) },
+      error: /bias must be f32 \[2, 8\]/,
+    },
+  ])(
+    'rejects $name',
+    ({ act: a = act, route: r = route, out: o = out, residual: res = residual, error }) => {
+      expect(() => moeDown(a, r, o, res, moe)).toThrow(error);
+    },
+  );
 });
 
 describe('argmaxDot', () => {

@@ -18,8 +18,7 @@ import { deqVec4 } from '../quantCommon.ts';
  *  which the op enforces. scales are indexed [scaleBase + kGroup*N + col].
  *
  *  One thread per 4-column unit streams its K-contiguous tile run and dots each
- *  x vec4 against 4 words. Same inner loop as matmulGatherQuantW, without the
- *  per-row expert lookup and the bias. */
+ *  x vec4 against 4 words. */
 const Dims = d.struct({
   m: d.u32,
   baseRow: d.u32, // per-expert view offset — varies per CALL, so stays a uniform

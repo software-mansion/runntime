@@ -3,7 +3,7 @@
 import tgpu, { type TgpuRoot } from 'typegpu';
 import { expect, onTestFinished, type TestContext } from 'vitest';
 import { tensor } from '../src/core/gpu/buffers.ts';
-import { initRunntime, type RunntimeExecutor } from '../src/core/gpu/eval.ts';
+import { initRunntime, subgroupKernelsOk, type RunntimeExecutor } from '../src/core/gpu/eval.ts';
 import type { Value, ValueMeta } from '../src/core/graph/value.ts';
 
 let device: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
@@ -30,8 +30,12 @@ export function upload(
 }
 
 /** Skips the test, with the reason in the report, when the device lacks
- *  `feature`. */
+ *  `feature`. `subgroups` uses the executor's own check, so a case written for
+ *  a subgroup route never passes on another one. */
 export function requireFeature(ctx: TestContext, root: TgpuRoot, feature: GPUFeatureName): void {
+  if (feature === 'subgroups' && !subgroupKernelsOk(root.device)) {
+    ctx.skip('device has no 32-wide subgroups');
+  }
   if (!root.enabledFeatures.has(feature)) ctx.skip(`device has no ${feature}`);
 }
 

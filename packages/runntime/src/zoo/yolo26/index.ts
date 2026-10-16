@@ -15,7 +15,6 @@ export {
   decodeDetections,
   decodePoses,
   decodeSegmentations,
-  preprocessRgba,
   type Detection,
   type CocoLandmark,
   type Keypoint,
