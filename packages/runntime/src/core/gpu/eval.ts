@@ -102,16 +102,23 @@ export interface CaptureExecutor {
   };
 }
 
+/** Whether the subgroup kernel routes (smallm matmul, the subgroup attention
+ *  routes) can run on `device`. The feature alone is not enough: a 16-wide
+ *  subgroup folds half the sums. */
+export function subgroupKernelsOk(device: GPUDevice): boolean {
+  return (
+    device.features.has('subgroups') &&
+    ((device as GPUDevice & { adapterInfo?: { subgroupMinSize?: number } }).adapterInfo
+      ?.subgroupMinSize ?? 0) >= SUBGROUP_WIDTH
+  );
+}
+
 /** Builds the executor for one device. Create it once and reuse it; pooled
  *  buffers and memoized bind groups only pay off across calls. */
 export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): RunntimeExecutor {
   const perf = opts.perf;
   const canTime = root.device.features.has('timestamp-query');
-  // The feature alone is not enough: a 16-wide subgroup folds half the sums.
-  const subgroupsOk =
-    root.device.features.has('subgroups') &&
-    ((root.device as GPUDevice & { adapterInfo?: { subgroupMinSize?: number } }).adapterInfo
-      ?.subgroupMinSize ?? 0) >= SUBGROUP_WIDTH;
+  const subgroupsOk = subgroupKernelsOk(root.device);
   const pool = new BufferPool((shape) => createStorageFor(root, shape));
   const handles: KernelHandle[] = [];
   // Stable small ints so buffers and pipelines can key the handle memo.

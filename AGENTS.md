@@ -56,6 +56,8 @@ Before writing or reviewing code, comments or docs, read
 - `pnpm install` installs deps and the Git hooks (Lefthook: Prettier and
   ESLint on staged files, `tsc` on the library, commitlint on the message).
 - `pnpm typecheck`, `pnpm lint`, `pnpm format`.
+- Once per machine, before the GPU tests: `pnpm --filter runntime exec
+playwright install chromium`. Without it Vitest cannot start the browser.
 - `pnpm --filter runntime build`: tsdown, output in `dist`. Kernel files carry
   `'use gpu'` and `unplugin-typegpu` embeds their WGSL, so consumers need no
   build plugin. `typegpu`, `@huggingface/transformers`,
@@ -85,26 +87,9 @@ Before writing or reviewing code, comments or docs, read
 
 ## How to write tests
 
-- Vitest, configured in `packages/runntime/vitest.config.ts`. `pnpm test`
-  runs everything, `pnpm --filter runntime test:unit` only the Node tests.
-- Tests live in `packages/runntime/test`, never in `src`, and the test path
-  mirrors the source path: `src/core/weights/convert.ts` is tested in
-  `test/core/weights/convert.test.ts`. Import the source with its `.ts`
-  extension.
-- `*.test.ts` runs in Node with no GPU. `*.gpu.test.ts` is reserved for
-  tests that need real WebGPU in a browser; that project is not set up yet.
-  CI runners have no GPU, so anything that needs one cannot run in CI.
-- Write the test once and put the cases in a list that `it.each` runs.
-  Adding a case should be one line.
-- Expected values come from the math, worked out by hand or from Hugging
-  Face / PyTorch, never from running our code and copying its output. A CPU
-  reference for a kernel is a plain loop written from the formula, not one
-  that reuses the kernel's helpers, or a bug in them passes in both.
-- A bug fix adds a case that fails without the fix.
-- Compare floats with a tolerance (`|got - want| <= atol + rtol * |want|`)
-  and let NaN fail. For f16, round the inputs to f16 before computing the
-  reference.
-- No snapshots of generated WGSL. They break on every refactor and catch
-  nothing.
-- A test that needs a device feature the machine lacks (`shader-f16`,
-  `subgroups`) skips with a reason. It never passes silently.
+- `pnpm --filter runntime test:unit` runs the Node tests,
+  `pnpm --filter runntime test:gpu` the GPU tests (local only, CI has no GPU),
+  `pnpm test` both. Tests live in `packages/runntime/test`, mirroring `src`.
+- Before writing or reviewing a test, adding a kernel route, fixing a bug or
+  benchmarking, read
+  [.claude/skills/testing/SKILL.md](.claude/skills/testing/SKILL.md).
