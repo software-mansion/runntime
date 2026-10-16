@@ -5,8 +5,7 @@
  *  Apple GPUs, so a 10 ms round keeps that error under 1%. */
 export const TARGET_ROUND_US = 10_000;
 
-/** Below this relative difference a change counts as noise, however quiet
- *  the rounds were: GPU clocks drift by about this much between rounds. */
+/** Below this relative difference a change counts as noise */
 export const MIN_NOISE = 0.03;
 
 /** Most K outputs alive at once, in bytes, so a round never exhausts memory. */
