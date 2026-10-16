@@ -1,9 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src", "test"],
+  "include": ["src", "test", "bench"],
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["@webgpu/types", "node"]
+    "types": ["@webgpu/types", "node"],
+    // bench/ab.ts imports both A/B sides; both type as this checkout.
+    "paths": { "@ab/a/*": ["./src/*"], "@ab/b/*": ["./src/*"] }
   }
 }

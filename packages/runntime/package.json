@@ -48,7 +48,8 @@
     "prepack": "node ../../scripts/sync-readme.mjs && pnpm run build",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "test:gpu": "vitest run --project gpu"
+    "test:gpu": "vitest run --project gpu",
+    "bench:ab": "node bench/cli.ts"
   },
   "dependencies": {
     "@huggingface/tokenizers": "^0.1.3",
