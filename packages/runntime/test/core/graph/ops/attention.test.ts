@@ -146,10 +146,19 @@ describe('sdpa', () => {
     );
   });
 
-  it('rejects a head size over the kernel limit of 128', () => {
-    const x = input([2, 160]);
-    expect(() => sdpa(x, x, x, { ...full, qHeads: 1, kvHeads: 1, headDim: 160 })).toThrow(
-      /headDim 160 exceeds the kernel's max \(128\)/,
+  it('takes a head of 512 on prefill', () => {
+    const x = input([2, 512]);
+    const c = sdpa(x, x, x, { ...full, qHeads: 1, kvHeads: 1, headDim: 512 });
+    expect(c.shape).toEqual(meta([2, 512]));
+  });
+
+  it.each([
+    { name: 'decode', qLen: 1, headDim: 160, max: 128 },
+    { name: 'prefill', qLen: 2, headDim: 640, max: 512 },
+  ])('rejects a head size over the $name kernel limit of $max', ({ qLen, headDim, max }) => {
+    const x = input([qLen, headDim]);
+    expect(() => sdpa(x, x, x, { ...full, qHeads: 1, kvHeads: 1, headDim })).toThrow(
+      new RegExp(`headDim ${headDim} exceeds the kernel's max \\(${max}\\)`),
     );
   });
 });

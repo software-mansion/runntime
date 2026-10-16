@@ -119,9 +119,9 @@ describe('matmul kernel: plain and tiled routes', () => {
 
   // Known bug: the tiled kernel's B index goes through f32, which counts
   // exactly only up to 2^24. Turn this into a plain `it` with the fix.
-  // tiled: f32, m = 9 is not a smallm shape
-  it.fails('B larger than 2^24 elements (tiled): [9, 2560] × [2560, 9728]', () =>
-    checkMatmul(9, 2560, 9728),
+  // tiled: f32, m = 9 is not a smallm shape, k % 4 != 0 rules out tiledVec4
+  it.fails('B larger than 2^24 elements (tiled): [9, 2561] × [2561, 9728]', () =>
+    checkMatmul(9, 2561, 9728),
   );
 
   // Known bug: an empty tensor reaches createBuffer and fails with the

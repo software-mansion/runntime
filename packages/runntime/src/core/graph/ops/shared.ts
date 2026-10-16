@@ -33,6 +33,9 @@ export function wantHwc4(name: string, x: Value): [number, number, number] {
  *  one dtype passes that one alone instead. */
 export const FLOAT_DTYPES = ['f32', 'f16'] as const;
 
+/** Finite stand-in for an unbounded window side; attrs never carry ±Inf. */
+export const WINDOW_INF = 0x3fffffff;
+
 /** Require an n-D row-major tensor whose dtype is one of `allow`; returns its
  *  dims and that dtype.
  *

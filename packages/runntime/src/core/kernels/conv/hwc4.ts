@@ -174,6 +174,11 @@ const TILED_MIN_WORKGROUPS = 24;
 const TILED_NARROW_MIN_PIXELS = 6400;
 const TILED_WIDE_COUT = 64;
 const TILED_MIN_COUT = 32;
+/** Down to TILED_DEEP_MIN_COUT channels, a conv uses the tiled kernel on maps of
+ *  TILED_DEEP_MIN_PIXELS or more when each output reads TILED_DEEP_MIN_K inputs. */
+const TILED_DEEP_MIN_COUT = 24;
+const TILED_DEEP_MIN_PIXELS = 3136;
+const TILED_DEEP_MIN_K = 64;
 
 /** Channel blocks per workgroup: 16, or 8 or 4 for narrow outputs. */
 function tiledBlocks(cOut: number): number {
@@ -181,15 +186,16 @@ function tiledBlocks(cOut: number): number {
   return co4 >= TILED_MAX_BLOCKS ? TILED_MAX_BLOCKS : co4 > 4 ? 8 : 4;
 }
 
-/** Channel blocks per workgroup when this conv uses the tiled kernel, else 0. */
-export function convTiledBlocks(cOut: number, outPixels: number): number {
+/** Channel blocks per workgroup when this conv uses the tiled kernel, else 0.
+ *  `k` is how many inputs each output reads: cIn·kH·kW. */
+export function convTiledBlocks(cOut: number, outPixels: number, k: number): number {
   const bmb = tiledBlocks(cOut);
   const workgroups = Math.ceil(outPixels / TILED_BN) * Math.ceil(cOut / 4 / bmb);
-  const wins =
-    cOut >= TILED_MIN_COUT &&
-    workgroups >= TILED_MIN_WORKGROUPS &&
-    (cOut >= TILED_WIDE_COUT || outPixels >= TILED_NARROW_MIN_PIXELS);
-  return wins ? bmb : 0;
+  const wide = cOut >= TILED_WIDE_COUT;
+  const narrow = cOut >= TILED_MIN_COUT && outPixels >= TILED_NARROW_MIN_PIXELS;
+  const deep =
+    cOut >= TILED_DEEP_MIN_COUT && outPixels >= TILED_DEEP_MIN_PIXELS && k >= TILED_DEEP_MIN_K;
+  return workgroups >= TILED_MIN_WORKGROUPS && (wide || narrow || deep) ? bmb : 0;
 }
 
 const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {

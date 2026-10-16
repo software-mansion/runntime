@@ -99,6 +99,9 @@ importers:
 
   packages/runntime:
     dependencies:
+      '@huggingface/tokenizers':
+        specifier: ^0.1.3
+        version: 0.1.3
       js-tiktoken:
         specifier: ^1.0.20
         version: 1.0.21

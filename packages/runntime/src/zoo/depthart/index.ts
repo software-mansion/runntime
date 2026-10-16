@@ -11,4 +11,4 @@ export {
   loadDepthartModel,
   type DepthartConfig,
 } from './model.ts';
-export { depthToRgba, preprocessRgbaDepthart } from './pipeline.ts';
+export { depthToRgba } from './pipeline.ts';

@@ -12,5 +12,5 @@ export default defineConfig({
   // Kernels carry a 'use gpu' directive; the plugin embeds their WGSL metadata
   // into the published JS so consumers don't need a build plugin of their own.
   plugins: [typegpu()],
-  external: ['typegpu', '@huggingface/transformers', 'js-tiktoken'],
+  external: ['typegpu', '@huggingface/transformers', '@huggingface/tokenizers', 'js-tiktoken'],
 });

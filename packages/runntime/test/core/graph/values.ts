@@ -1,6 +1,5 @@
-/** Stand-in inputs for op tests. Ops only read their inputs' shapes, so an
- *  input is a pending Value with no op behind it, and nothing is ever
- *  evaluated. */
+/** Stand-in inputs for graph tests, with no GPU. Op tests use pending Values
+ *  with no op behind them; eval tests use materialized ones on stub buffers. */
 import {
   materialized,
   pending,
@@ -20,12 +19,22 @@ export function input(dims: number[], dtype: EagerDtype = 'f32'): Value {
   return pending(meta(dims, dtype), 'reshape', []);
 }
 
-/** An hwc4-stored f16 image input, [C, H, W]: channels padded up to a
+/** The meta of an hwc4-stored f16 image, [C, H, W]: channels padded up to a
  *  multiple of 4. Written out rather than taken from hwc4Meta, which the ops
  *  use, so a bug there fails here. */
-export function hwc4Input(c: number, h: number, w: number): Value {
+function hwc4ImageMeta(c: number, h: number, w: number): ValueMeta {
   const elems = h * w * Math.ceil(c / 4) * 4;
-  return pending({ elems, dtype: 'f16', dims: [c, h, w], layout: 'hwc4' }, 'toHwc4', []);
+  return { elems, dtype: 'f16', dims: [c, h, w], layout: 'hwc4' };
+}
+
+/** An hwc4-stored f16 image input, [C, H, W]. */
+export function hwc4Input(c: number, h: number, w: number): Value {
+  return pending(hwc4ImageMeta(c, h, w), 'toHwc4', []);
+}
+
+/** An hwc4-stored f16 image, [C, H, W], already on the GPU in a stub buffer. */
+export function materializedHwc4Input(c: number, h: number, w: number): Value {
+  return materialized(hwc4ImageMeta(c, h, w), {} as GpuBufferRef);
 }
 
 /** A quantized weight of logical [rows, cols]: `bits`-wide values packed into
@@ -35,8 +44,8 @@ export function quantWeight(rows: number, cols: number, bits: 8 | 4): Value {
   return pending({ elems, dtype: 'quantW', dims: [rows, cols] }, 'reshape', []);
 }
 
-/** A caller-owned input that is already on the GPU. Only writeRows checks for
- *  one, and it never touches the buffer, so a stub stands in for it. */
+/** A caller-owned input that is already on the GPU. Nothing reads the buffer,
+ *  only its identity matters, so a stub stands in for it. */
 export function materializedInput(dims: number[], dtype: EagerDtype = 'f32'): Value {
   return materialized(meta(dims, dtype), {} as GpuBufferRef);
 }
