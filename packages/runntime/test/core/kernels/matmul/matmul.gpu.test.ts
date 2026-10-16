@@ -104,12 +104,10 @@ describe('matmul kernel: plain and tiled routes', () => {
     await checkMatmul(3, 16, n, 'f16', {}, { atol: 3e-2, rtol: 1e-2 });
   });
 
-  // Known bug: the tiled kernel's B index goes through f32, which counts
-  // exactly only up to 2^24. Turn this into a plain `it` with the fix.
+  // The B index must stay u32: f32 counts exactly only up to 2^24.
   // tiled: f32, m = 9 is not a smallm shape, k % 4 != 0 rules out tiledVec4
-  it.fails('B larger than 2^24 elements (tiled): [9, 2561] × [2561, 9728]', () =>
-    checkMatmul(9, 2561, 9728),
-  );
+  it('B larger than 2^24 elements (tiled): [9, 2561] × [2561, 9728]', () =>
+    checkMatmul(9, 2561, 9728));
 
   it('rejects M = 0 with an INVALID_ARGUMENT', () => {
     expect(() => upload(root, new Float32Array(0), [0, 4])).toThrow(
