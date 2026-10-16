@@ -12,6 +12,9 @@ export interface EmbeddingGemma2Tokenizer {
   /** Start and end of an image or of a video frame. */
   readonly boiId: number;
   readonly eoiId: number;
+  /** Start and end of an audio clip. */
+  readonly boaId: number;
+  readonly eoaId: number;
 }
 
 const isBpeTokenizerJson = (json: unknown): json is object =>
@@ -40,6 +43,8 @@ export function createEmbeddingGemma2Tokenizer(json: unknown): EmbeddingGemma2To
     padId: idOf('<pad>'),
     boiId: idOf('<|image>'),
     eoiId: idOf('<image|>'),
+    boaId: idOf('<|audio>'),
+    eoaId: idOf('<audio|>'),
     encode: (text) => tokenizer.encode(text, { add_special_tokens: false }).ids,
   };
 }

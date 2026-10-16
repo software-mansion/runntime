@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rope, sdpa, sdpaPacked } from '../../../../src/core/graph/ops.ts';
+import { localAttention, rope, sdpa, sdpaPacked } from '../../../../src/core/graph/ops.ts';
 import { input, meta } from '../values.ts';
 
 // 4 query heads sharing 2 kv heads (GQA), 8 values per head
@@ -252,4 +252,47 @@ describe('rope', () => {
   ])('rejects $name', ({ cos, error }) => {
     expect(() => rope(input([5, 32]), cos, input([5, HD]), { headDim: HD })).toThrow(error);
   });
+});
+
+describe('localAttention', () => {
+  // 2 heads of 8, a window of 3 keys
+  const local = { heads: 2, headDim: HD, window: 3, kScale: 1, softcap: 50 };
+
+  it('gives one output row of heads·headDim per row', () => {
+    const c = localAttention(input([5, 48]), input([3, 16]), input([HD]), local);
+    expect(c.shape).toEqual(meta([5, 16]));
+    expect(c.pending?.op).toBe('localAttention');
+    expect(c.pending?.attrs).toEqual([2, HD, 3, 1, 50]);
+  });
+
+  it.each([
+    {
+      name: 'a qkv that is not 3·heads·headDim wide',
+      qkv: input([5, 40]),
+      error: /48 cols, got 40/,
+    },
+    {
+      name: 'rel rows for another window',
+      rel: input([4, 16]),
+      error: /rel must be f32 \[3, 16\]/,
+    },
+    { name: 'f16 rel rows', rel: input([3, 16], 'f16'), error: /rel must be f32/ },
+    { name: 'a qScale of the wrong length', qScale: input([4]), error: /qScale must be f32 \[8\]/ },
+    {
+      name: 'a window past 32',
+      opts: { window: 33 },
+      error: /window 33 must be an integer from 1 to 32/,
+    },
+    {
+      name: 'a head not a multiple of 4',
+      opts: { headDim: 6 },
+      error: /headDim 6 a multiple of 4/,
+    },
+    { name: 'a zero softcap', opts: { softcap: 0 }, error: /softcap must be positive/ },
+  ])(
+    'rejects $name',
+    ({ qkv = input([5, 48]), rel = input([3, 16]), qScale = input([HD]), opts = {}, error }) => {
+      expect(() => localAttention(qkv, rel, qScale, { ...local, ...opts })).toThrow(error);
+    },
+  );
 });

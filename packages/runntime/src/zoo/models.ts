@@ -46,6 +46,7 @@ const MINILM = precisions('all-MiniLM-L6-v2', 'base', {
 const embeddingGemma2 = (precision: string) => ({
   modelPath: weights('embeddinggemma-2', 'text', precision),
   visionPath: weights('embeddinggemma-2', 'vision', precision),
+  audioPath: weights('embeddinggemma-2', 'audio', precision),
   tokenizerPath: tokenizer('embeddinggemma-2'),
 });
 const EMBEDDINGGEMMA_2 = {

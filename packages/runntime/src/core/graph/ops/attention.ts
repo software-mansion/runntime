@@ -1,6 +1,7 @@
-/** Attention ops: banded, causal and cross sdpa with GQA and sinks, plus the
- *  fused rotary embedding. */
+/** Attention ops: banded, causal and cross sdpa with GQA and sinks, local
+ *  attention with a distance bias, and the fused rotary embedding. */
 
+import { ATTN_LOCAL_MAX_WINDOW } from '../../kernels/attention/attnLocal.ts';
 import { pending, Value } from '../value.ts';
 import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
 
@@ -217,4 +218,51 @@ export function rope(
     srcStart,
     w,
   ]);
+}
+
+/** Local attention over a fused qkv slab [T, 3·heads·headDim]: row t sees
+ *  keys t − window + 1 … t. The score of the key j rows back is
+ *  cap · tanh((q · qScale) · (k · kScale + rel[j]) / cap), with rel
+ *  [window, heads·headDim] one f32 bias row per distance and qScale
+ *  [headDim] f32 per column of q. Returns [T, heads·headDim]. */
+export function localAttention(
+  qkv: Value,
+  rel: Value,
+  qScale: Value,
+  opts: { heads: number; headDim: number; window: number; kScale: number; softcap: number },
+): Value {
+  const { heads, headDim, window, kScale, softcap } = opts;
+  const [t, w, dtype] = want2d('localAttention', qkv, FLOAT_DTYPES);
+  if (!Number.isInteger(heads) || heads < 1 || !Number.isInteger(headDim) || headDim % 4 !== 0) {
+    throw new Error(
+      `localAttention: heads ${heads} must be a positive integer and headDim ${headDim} a multiple of 4`,
+    );
+  }
+  const width = heads * headDim;
+  if (w !== 3 * width) {
+    throw new Error(`localAttention: qkv must have 3·heads·headDim = ${3 * width} cols, got ${w}`);
+  }
+  if (!Number.isInteger(window) || window < 1 || window > ATTN_LOCAL_MAX_WINDOW) {
+    throw new Error(
+      `localAttention: window ${window} must be an integer from 1 to ${ATTN_LOCAL_MAX_WINDOW}`,
+    );
+  }
+  if (rel.shape.dtype !== 'f32' || rel.shape.elems !== window * width) {
+    throw new Error(`localAttention: rel must be f32 [${window}, ${width}]`);
+  }
+  if (qScale.shape.dtype !== 'f32' || qScale.shape.elems !== headDim) {
+    throw new Error(`localAttention: qScale must be f32 [${headDim}]`);
+  }
+  if (!(softcap > 0) || !Number.isFinite(kScale)) {
+    throw new Error(
+      `localAttention: softcap must be positive and kScale finite, got ${softcap}, ${kScale}`,
+    );
+  }
+  return pending(
+    { elems: t * width, dtype, dims: [t, width] },
+    'localAttention',
+    [qkv, rel, qScale],
+    undefined,
+    [heads, headDim, window, kScale, softcap],
+  );
 }

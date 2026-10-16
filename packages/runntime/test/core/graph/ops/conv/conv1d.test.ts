@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT_CODE, conv1d } from '../../../../../src/core/graph/ops.ts';
+import { ACT_CODE, conv1d, gluConv1d } from '../../../../../src/core/graph/ops.ts';
 import { input, meta } from '../../values.ts';
 
 // x is time-major [T, C_in]; w is tap-major [kernelSize·C_in, C_out]
@@ -89,4 +89,33 @@ describe('conv1d', () => {
   ])('rejects $name', ({ x: xIn = x, opts = {}, w = weight(3), error }) => {
     expect(() => conv1d(xIn, w, { kernelSize: 3, stride: 1, ...opts })).toThrow(error);
   });
+});
+
+describe('gluConv1d', () => {
+  it('halves the columns and keeps the frames', () => {
+    const c = gluConv1d(input([T, 16]), input([5, 8]), { lo: -2, hi: 2 });
+    expect(c.shape).toEqual(meta([T, 8]));
+    expect(c.pending?.attrs).toEqual([5, -2, 2]);
+  });
+
+  it.each([
+    { name: 'x not twice the weight width', x: input([T, 12]), error: /x cols 12 must be 2·C/ },
+    {
+      name: 'channels not a multiple of 4',
+      x: input([T, 12]),
+      w: input([5, 6]),
+      error: /C a multiple of 4/,
+    },
+    {
+      name: 'a weight of another dtype',
+      w: input([5, 8], 'f16'),
+      error: /weight dtype f16 must match/,
+    },
+    { name: 'lo above hi', opts: { lo: 3, hi: 2 }, error: /lo \(3\) must be <= hi \(2\)/ },
+  ])(
+    'rejects $name',
+    ({ x: xIn = input([T, 16]), w = input([5, 8]), opts = { lo: -2, hi: 2 }, error }) => {
+      expect(() => gluConv1d(xIn, w, opts)).toThrow(error);
+    },
+  );
 });

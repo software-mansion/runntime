@@ -2,6 +2,7 @@
 
 import { elemFor } from '../../kernels/elem.ts';
 import { conv1dHandle, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
+import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
 import {
   createMatmulTiledVec4Pipeline,
   matmulTiledVec4Eligible,
@@ -115,6 +116,32 @@ export const conv1dSpec = defineSpec({
           x: narrowFloat(inputs[0]!, dtype),
           w: narrowFloat(inputs[1]!, dtype),
           bias,
+          out: narrowFloat(out, dtype),
+        },
+        elemFor(dtype),
+      ),
+    ];
+  },
+});
+
+export const gluConv1dSpec = defineSpec({
+  attrs: (p) => {
+    const [kernel, lo, hi] = p.attrs as [number, number, number];
+    return { kernel, lo, hi };
+  },
+  cfg: () => undefined,
+  pipeline: (root, dtype) => createGluConv1dPipeline(root, elemFor(dtype)),
+  encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
+    const dtype = node.shape.dtype;
+    const [rows, cols] = node.shape.dims as [number, number];
+    return [
+      gluConv1dHandle(
+        ctx.root,
+        pipeline,
+        { rows, cols, ...attrs },
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          w: narrowFloat(inputs[1]!, dtype),
           out: narrowFloat(out, dtype),
         },
         elemFor(dtype),
