@@ -80,50 +80,69 @@ function argmaxDot(name: string, v: number, n: number, dtype: Float = 'f32'): Ab
 }
 
 abSuite('matmul', [
-  // gemv: m = 1, no activation.
-  mm('gemv, Moonshine-tiny decode [1,288]×[288,864]', 1, 288, 864),
-  mm('gemv f16 + bias, MobileNetV4 classifier [1,1280]×[1280,1000]', 1, 1280, 1000, {
+  // gemvVec4: m = 1, no activation, n a multiple of 4.
+  mm('gemvVec4, Moonshine-tiny decode [1,288]×[288,864]', 1, 288, 864),
+  mm('gemvVec4 f16 + bias, MobileNetV4 classifier [1,1280]×[1280,1000]', 1, 1280, 1000, {
     dtype: 'f16',
     bias: true,
   }),
+  // gemv: the same with n not a multiple of 4.
   mm('gemv + addend, odd N [1,288]×[288,33]', 1, 288, 33, { addend: true }),
 
-  // smallm: subgroups, 4 ≤ m ≤ 32, m and n multiples of 4.
-  mm('smallm, MiniLM qkv bucket 16 [16,384]×[384,1152]', 16, 384, 1152, { bias: true }),
-  mm('smallm + gelu, MiniLM fc1 bucket 16 [16,384]×[384,1536]', 16, 384, 1536, {
-    bias: true,
-    act: 'gelu',
-  }),
+  // smallm: subgroups, 4 ≤ m ≤ 32, m and n multiples of 4. When tiledVec4 also
+  // fits, only for n < 1024 (TILED_MIN_N_FEW_ROWS).
   mm('smallm + addend, MiniLM fc2 bucket 32 [32,1536]×[1536,384]', 32, 1536, 384, {
     bias: true,
     addend: true,
   }),
   mm('smallm, K not a multiple of 32 [4,100]×[100,64]', 4, 100, 64),
-  mm('smallm f16, MiniLM qkv bucket 32 [32,384]×[384,1152]', 32, 384, 1152, { dtype: 'f16' }),
 
-  // tiled: f32, m ≥ 8 and not smallm.
-  mm('tiled, MiniLM qkv bucket 128 [128,384]×[384,1152]', 128, 384, 1152, { bias: true }),
-  mm('tiled + silu, odd sizes [130,200]×[200,300]', 130, 200, 300, { act: 'silu' }),
-  mm('tiled, privacy-filter unembed, N=33 [64,640]×[640,33]', 64, 640, 33),
-  mm('tiled + addend, MiniLM fc2 bucket 512 [512,1536]×[1536,384]', 512, 1536, 384, {
+  // tiledVec4: m ≥ 8, k ≥ 64, k and n multiples of 4, f32 or f16.
+  mm('tiledVec4, MiniLM qkv bucket 16, n ≥ 1024 so not smallm [16,384]×[384,1152]', 16, 384, 1152, {
+    bias: true,
+  }),
+  mm(
+    'tiledVec4 + gelu, MiniLM fc1 bucket 16, n ≥ 1024 so not smallm [16,384]×[384,1536]',
+    16,
+    384,
+    1536,
+    {
+      bias: true,
+      act: 'gelu',
+    },
+  ),
+  mm(
+    'tiledVec4 f16, MiniLM qkv bucket 32, n ≥ 1024 so not smallm [32,384]×[384,1152]',
+    32,
+    384,
+    1152,
+    {
+      dtype: 'f16',
+    },
+  ),
+  mm('tiledVec4, MiniLM qkv bucket 128 [128,384]×[384,1152]', 128, 384, 1152, { bias: true }),
+  mm('tiledVec4 + silu, m not a multiple of the tile [130,200]×[200,300]', 130, 200, 300, {
+    act: 'silu',
+  }),
+  mm('tiledVec4 + addend, MiniLM fc2 bucket 512 [512,1536]×[1536,384]', 512, 1536, 384, {
     bias: true,
     addend: true,
   }),
-
-  mm('tiled, B past 2^24 elements [9,2560]×[2560,9728]', 9, 2560, 9728),
-
-  // tiledF16: f16, m ≥ 8, k ≥ 64, k and n multiples of 4.
-  mm('tiledF16, MiniLM qkv bucket 64 [64,384]×[384,1152]', 64, 384, 1152, {
+  mm('tiledVec4, B past 2^24 elements [9,2560]×[2560,9728]', 9, 2560, 9728),
+  mm('tiledVec4 f16, MiniLM qkv bucket 64 [64,384]×[384,1152]', 64, 384, 1152, {
     dtype: 'f16',
     bias: true,
   }),
-  mm('tiledF16, YOLO26n PSA [64,400]×[400,400]', 64, 400, 400, { dtype: 'f16' }),
-  mm('tiledF16 + gelu + addend [256,384]×[384,1536]', 256, 384, 1536, {
+  mm('tiledVec4 f16, YOLO26n PSA [64,400]×[400,400]', 64, 400, 400, { dtype: 'f16' }),
+  mm('tiledVec4 f16 + gelu + addend [256,384]×[384,1536]', 256, 384, 1536, {
     dtype: 'f16',
     bias: true,
     act: 'gelu',
     addend: true,
   }),
+
+  // tiled: f32, m ≥ 8, when tiledVec4 does not fit.
+  mm('tiled, privacy-filter unembed, N=33 [64,640]×[640,33]', 64, 640, 33),
 
   // plain: everything else.
   mm('plain, m = 2 [2,384]×[384,384]', 2, 384, 384),
@@ -135,8 +154,8 @@ abSuite('matmul', [
     baseRow: 3 * 640,
   }),
 
-  // Without subgroups, smallm shapes fall to tiled or plain.
-  noSg(mm('tiled, MiniLM qkv bucket 16 [16,384]×[384,1152]', 16, 384, 1152, { bias: true })),
+  // Without subgroups, smallm shapes fall to tiledVec4 or plain.
+  noSg(mm('tiledVec4, MiniLM qkv bucket 16 [16,384]×[384,1152]', 16, 384, 1152, { bias: true })),
   noSg(mm('plain, m = 4 [4,384]×[384,1152]', 4, 384, 1152)),
 
   // Quantized weights, privacy-filter MoE expert.

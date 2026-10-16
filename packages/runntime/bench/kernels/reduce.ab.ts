@@ -41,7 +41,7 @@ abSuite('reduce', [
   softmax('softmax f16, YOLO26n PSA [400,400]', 400, 400, 'f16'),
   softmax('softmax, MiniLM scores [1536,128]', 1536, 128, 'f32'),
   softmax('softmax, one wide row [1,32768]', 1, 32768, 'f32'),
-  softmax('softmax, odd sizes [37,1000]', 37, 1000, 'f32'),
+  softmax('softmax, odd row count [37,1000]', 37, 1000, 'f32'),
 
   layerNorm('layerNorm + bias, MiniLM [128,384]', 128, 384, 'f32', true),
   layerNorm('layerNorm f16 + bias, MiniLM [512,384]', 512, 384, 'f16', true),

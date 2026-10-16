@@ -153,6 +153,14 @@ abSuite('conv', [
     k: 3,
     stride: 2,
   }),
+  // 1×1 with stride 2 can't use the 1×1 kernels, so it lands here.
+  conv2d('tiled (16 ch/block), 1×1 stride 2, 64→128 @80²', {
+    cIn: 64,
+    cOut: 128,
+    hw: 80,
+    k: 1,
+    stride: 2,
+  }),
   // kind 0: generic.
   conv2d('generic, YOLO26n layer0 3→16 k3 s2 @640²', {
     cIn: 3,
@@ -163,7 +171,6 @@ abSuite('conv', [
     act: 'silu',
   }),
   conv2d('generic, YOLO26n box head 64→16 k3 @80²', { cIn: 64, cOut: 16, hw: 80, k: 3 }),
-  conv2d('generic, 1×1 stride 2, 64→128 @80²', { cIn: 64, cOut: 128, hw: 80, k: 1, stride: 2 }),
   // kind 2: depthwise, 2 columns per thread on wide maps or k ≥ 7.
   conv2d('depthwise (2 cols), YOLO26n head 64ch k3 @80²', {
     cIn: 64,
