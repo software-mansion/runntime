@@ -1,9 +1,9 @@
 /** EmbeddingGemma 2 embed core: token ids in, pooled embeddings out.
  *
  *  The embedding table lives on the CPU, so a forward's input is the embedded
- *  rows, written with positions, segments and pool weights. Image and video
- *  tokens arrive as rows from the vision tower and replace the rows of their
- *  placeholder ids. One input up to the largest bucket runs as a recorded
+ *  rows, written with positions, segments and pool weights. Image, video and
+ *  audio tokens arrive as rows from their tower and replace the rows of
+ *  their placeholder ids. One input up to the largest bucket runs as a recorded
  *  replay per padded length; a longer input and a batch run eagerly. A
  *  batch packs its inputs into one sequence: segments keep them from
  *  attending to each other, positions restart per input and pick rope rows
@@ -21,10 +21,10 @@ import type { EmbeddingGemma2Inputs, EmbeddingGemma2Model } from './model.ts';
 import { ropeTables } from './rope.ts';
 
 /** Token counts a single input pads up to. Longer inputs run eagerly. */
-const EMBEDDINGGEMMA2_BUCKETS: readonly number[] = [16, 32, 64, 128, 256, 384, 512];
+const EMBEDDINGGEMMA2_BUCKETS: readonly number[] = [16, 32, 64, 128, 192, 256, 384, 512];
 
-/** One input: token ids, and the rows that stand in for its image and
- *  video tokens. */
+/** One input: token ids, and the rows that stand in for its media
+ *  tokens. */
 export interface EmbeddingGemma2Input {
   ids: readonly number[];
   /** Rows [n · hidden] that replace the embedded ids from `at` on. */

@@ -26,7 +26,7 @@ export {
   moeUp,
   type QuantExpertWeight,
 } from './ops/matmul.ts';
-export { rope, sdpa, sdpaPacked } from './ops/attention.ts';
+export { localAttention, rope, sdpa, sdpaPacked } from './ops/attention.ts';
 export {
   cat,
   chunk,
@@ -41,7 +41,7 @@ export {
 } from './ops/shape.ts';
 export { layerNorm, mean, rmsNorm, softmax, topk } from './ops/reduce.ts';
 export { channelAffine, toChw, toHwc4 } from './ops/hwc4.ts';
-export { conv1d } from './ops/conv/conv1d.ts';
+export { conv1d, gluConv1d } from './ops/conv/conv1d.ts';
 export { SSM_DIRS, SSM_STATE, ssmScanMerge, ssmScanProject, ssmSelectiveScan } from './ops/ssm.ts';
 export { type ConvAct, conv2d } from './ops/conv/conv2d.ts';
 export { ACT_CODE, type ActName, type SlotAct } from './ops/shared.ts';

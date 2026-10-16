@@ -75,9 +75,11 @@ export type OpName =
   | 'argmaxDot'
   // attention
   | 'attn'
+  | 'localAttention'
   | 'rope'
   // conv
   | 'conv1d'
+  | 'gluConv1d'
   | 'convTranspose2d'
   | 'conv2dHwc4'
   | 'maxPool2dHwc4'

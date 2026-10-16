@@ -1,6 +1,6 @@
 /** EmbeddingGemma 2 dimensions (google/embeddinggemma-2 config.json): the
- *  text model (text_config) and the vision tower (vision_config). One fixed
- *  size of each. */
+ *  text model (text_config), the vision tower (vision_config) and the audio
+ *  tower (audio_config). One fixed size of each. */
 
 /** The two layer kinds: sliding layers see ±slidingWindow tokens, full
  *  layers the whole input. */
@@ -87,6 +87,45 @@ export const IMAGE_TOKENS = 280;
 
 /** Tokens each video frame takes at most. */
 export const VIDEO_FRAME_TOKENS = 140;
+
+export interface EmbeddingGemma2AudioConfig {
+  hidden: number;
+  ffn: number;
+  layers: number;
+  heads: number;
+  headDim: number;
+  eps: number;
+  /** Mel bins per frame. */
+  mels: number;
+  /** Channels of the two stride-2 convs before the layers. */
+  convChannels: readonly [number, number];
+  /** Keys each token sees: itself and the ones before it. */
+  window: number;
+  /** Attention scores go through cap · tanh(score / cap). */
+  logitCap: number;
+  /** Taps of each layer's causal depthwise conv. */
+  convKernel: number;
+  /** Each feed-forward block's output is scaled by this before the residual. */
+  residualWeight: number;
+  /** Width of the tower's output, before the projection to the text model. */
+  outputDim: number;
+}
+
+export const EMBEDDINGGEMMA2_AUDIO: EmbeddingGemma2AudioConfig = {
+  hidden: 1024,
+  ffn: 4096,
+  layers: 12,
+  heads: 8,
+  headDim: 128,
+  eps: 1e-6,
+  mels: 128,
+  convChannels: [128, 32],
+  window: 12,
+  logitCap: 50,
+  convKernel: 5,
+  residualWeight: 0.5,
+  outputDim: 1536,
+};
 
 /** The instruction each task puts before the text (the checkpoint's
  *  sentence-transformers prompts). `query` and `document` are the two sides
