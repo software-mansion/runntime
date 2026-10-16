@@ -28,7 +28,7 @@ function conv2d(name: string, o: Conv): AbCase {
     build: (version) => {
       const x = randHwc4(version, cIn, hw, hw);
       const w = convWeight(version, cOut, cIn, k, groups);
-      const bias = version.up(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
+      const bias = version.upload(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
       const hOut = Math.floor((hw + 2 * padding - k) / stride) + 1;
       const res = o.residual ? randHwc4(version, cOut, hOut, hOut) : undefined;
       return () => {
@@ -74,11 +74,14 @@ function conv1d(
     name,
     build: (version) => {
       const x = randMat(version, tIn, cIn);
-      const w = version.up(version.lib.convToTapMajor(version.rand(cOut * cIn * k), cOut, cIn, k), {
-        elems: k * cIn * cOut,
-        dtype: 'f32',
-        dims: [k * cIn, cOut],
-      });
+      const w = version.upload(
+        version.lib.convToTapMajor(version.rand(cOut * cIn * k), cOut, cIn, k),
+        {
+          elems: k * cIn * cOut,
+          dtype: 'f32',
+          dims: [k * cIn, cOut],
+        },
+      );
       return () => version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act });
     },
   };
@@ -90,7 +93,7 @@ function convTranspose2d(name: string, cIn: number, cOut: number, hw: number): A
     name,
     needs: ['shader-f16'],
     build: (version) => {
-      const x = version.up(version.rand(cIn * hw * hw), chw(cIn, hw, hw, 'f16'));
+      const x = version.upload(version.rand(cIn * hw * hw), chw(cIn, hw, hw, 'f16'));
       const bits = version.lib.f32ArrayToF16Bits(version.rand(cIn * cOut * k * k)).data;
       const w = version.freeAfterCase(
         version.lib.materialized(
@@ -101,7 +104,7 @@ function convTranspose2d(name: string, cIn: number, cOut: number, hw: number): A
           ),
         ),
       );
-      const bias = version.up(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
+      const bias = version.upload(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
       return () => version.lib.convTranspose2d(x, w, bias, { kernelSize: k, stride: k });
     },
   };
@@ -245,7 +248,7 @@ abSuite('conv', [
     name: 'toHwc4 from f32, YOLO26n input 3ch @640²',
     needs: ['shader-f16'],
     build: (version) => {
-      const x = version.up(version.rand(3 * 640 * 640), chw(3, 640, 640));
+      const x = version.upload(version.rand(3 * 640 * 640), chw(3, 640, 640));
       return () => version.lib.toHwc4(x);
     },
   },
@@ -253,7 +256,7 @@ abSuite('conv', [
     name: 'toHwc4 from f16, 96ch @56²',
     needs: ['shader-f16'],
     build: (version) => {
-      const x = version.up(version.rand(96 * 56 * 56), chw(96, 56, 56, 'f16'));
+      const x = version.upload(version.rand(96 * 56 * 56), chw(96, 56, 56, 'f16'));
       return () => version.lib.toHwc4(x);
     },
   },

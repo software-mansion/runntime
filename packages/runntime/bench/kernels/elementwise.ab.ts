@@ -79,7 +79,7 @@ abSuite('elementwise', [
   {
     name: 'rsqrt [512,640]',
     build: (version) => {
-      const x = version.up(
+      const x = version.upload(
         version.rand(512 * 640).map((v) => Math.abs(v) + 0.5),
         mat(512, 640),
       );

@@ -13,7 +13,7 @@ function stage(c: number, rank: number): AbCase[] {
     {
       name: `ssmScanProject, DepthART-B c ${c} rank ${rank}`,
       build: (version) => {
-        const x = version.up(version.rand(c * P), chw(c, HW, HW));
+        const x = version.upload(version.rand(c * P), chw(c, HW, HW));
         const xw = randMat(version, 1, dirs * (rank + 2 * state) * c);
         const dw = randMat(version, 1, dirs * c * rank);
         return () => version.lib.ssmScanProject(x, xw, dw, { rank });
@@ -22,10 +22,10 @@ function stage(c: number, rank: number): AbCase[] {
     {
       name: `ssmSelectiveScan, DepthART-B c ${c} rank ${rank}`,
       build: (version) => {
-        const x = version.up(version.rand(c * P), chw(c, HW, HW));
+        const x = version.upload(version.rand(c * P), chw(c, HW, HW));
         const proj = randMat(version, dirs * (c + 2 * state + rank), P);
         // A is negative in the model: exp(Δ·A) decays.
-        const a = version.up(
+        const a = version.upload(
           version.rand(dirs * c * state).map((v) => -Math.abs(v) - 0.1),
           mat(1, dirs * c * state),
         );
