@@ -15,7 +15,7 @@ export function chw(c: number, h: number, w: number, dtype: Float = 'f32'): Valu
 
 /** A random [rows, cols] input. */
 export function randMat(version: Version, rows: number, cols: number, dtype: Float = 'f32'): Value {
-  return version.up(version.rand(rows * cols), mat(rows, cols, dtype));
+  return version.upload(version.rand(rows * cols), mat(rows, cols, dtype));
 }
 
 /** A random f16 image already stored hwc4, padding lanes zero. */
@@ -27,7 +27,7 @@ export function randHwc4(version: Version, c: number, h: number, w: number): Val
   for (let p = 0; p < h * w; p++) {
     for (let ch = 0; ch < c; ch++) data[p * c4 + ch] = vals[p * c + ch]!;
   }
-  return version.up(data, meta);
+  return version.upload(data, meta);
 }
 
 /** A conv2d weight from random torch-layout [cOut, cIn/groups, k, k], packed
@@ -74,7 +74,7 @@ export function quantWeight(
       version.lib.uploadU32(version.root, packed.qdata),
     ),
   );
-  const scales = version.up(packed.scales, mat((e * k) / groupSize, o));
+  const scales = version.upload(packed.scales, mat((e * k) / groupSize, o));
   return { w, scales };
 }
 

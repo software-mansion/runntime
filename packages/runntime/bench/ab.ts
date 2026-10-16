@@ -32,9 +32,9 @@ export interface Version {
   lib: Lib;
   root: TgpuRoot;
   /** `tensor()` on this version's device, freed after the case. */
-  up: (data: Float32Array, meta: ValueMeta) => Value;
+  upload: (data: Float32Array, meta: ValueMeta) => Value;
   /** Destroys the Value's buffer when the case ends and returns the Value as
-   *  is. For buffers `up` cannot make (`materialized` + `uploadF16`). */
+   *  is. For buffers `upload` cannot make (`materialized` + `uploadF16`). */
   freeAfterCase: (value: Value) => Value;
   /** Seeded values in [-1, 1). The seed restarts for each version, so A and B
    *  draw the same numbers in the same order. */
@@ -130,12 +130,12 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
     for (const i of bFirst ? [1, 0] : [0, 1]) {
       const label = i === 0 ? 'A' : 'B';
       const lib = i === 0 ? (libA as Lib) : libB;
-      const up = (data: Float32Array, meta: ValueMeta) =>
+      const upload = (data: Float32Array, meta: ValueMeta) =>
         freeAfterCase(lib.tensor(w.root, data, meta));
       let seed = 1;
       const rand = (n: number) => randomF32(n, seed++);
       try {
-        calls[i] = c.build({ label, lib, root: w.root, up, freeAfterCase, rand });
+        calls[i] = c.build({ label, lib, root: w.root, upload, freeAfterCase, rand });
       } catch (err) {
         return { kernel, case: c.name, note: `skipped, threw on ${label}: ${messageOf(err)}` };
       }

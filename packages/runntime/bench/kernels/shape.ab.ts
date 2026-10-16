@@ -46,8 +46,8 @@ abSuite('shape', [
   on(
     'cat channels CHW [48,56,56] + [48,56,56]',
     (version) => [
-      version.up(version.rand(48 * 56 * 56), chw(48, 56, 56)),
-      version.up(version.rand(48 * 56 * 56), chw(48, 56, 56)),
+      version.upload(version.rand(48 * 56 * 56), chw(48, 56, 56)),
+      version.upload(version.rand(48 * 56 * 56), chw(48, 56, 56)),
     ],
     (version, xs) => version.lib.cat(xs, 0),
   ),
@@ -70,7 +70,7 @@ abSuite('shape', [
   ),
   on(
     'slice channels CHW [96,28,28] → 32..64',
-    (version) => [version.up(version.rand(96 * 28 * 28), chw(96, 28, 28))],
+    (version) => [version.upload(version.rand(96 * 28 * 28), chw(96, 28, 28))],
     (version, [x]) => version.lib.slice(x!, 0, 32, 64),
   ),
   on(
@@ -100,12 +100,12 @@ abSuite('shape', [
   ),
   on(
     'gatherRowsFrom, Moonshine-tiny embedding [32768,288], 200 ids',
-    (version) => [randMat(version, 32768, 288), version.up(ids(200, 32768), mat(200, 1))],
+    (version) => [randMat(version, 32768, 288), version.upload(ids(200, 32768), mat(200, 1))],
     (version, [x, idx]) => version.lib.gatherRowsFrom(x!, idx!),
   ),
   on(
     'gatherRowsFrom f16, one id from [32768,640]',
-    (version) => [randMat(version, 32768, 640, 'f16'), version.up(ids(1, 32768), mat(1, 1))],
+    (version) => [randMat(version, 32768, 640, 'f16'), version.upload(ids(1, 32768), mat(1, 1))],
     (version, [x, idx]) => version.lib.gatherRowsFrom(x!, idx!),
     true,
   ),

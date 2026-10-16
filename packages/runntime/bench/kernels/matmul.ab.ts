@@ -56,7 +56,7 @@ function gather(name: string, t: number, e: number, k: number, n: number, bits?:
     build: (version) => {
       const a = randMat(version, t, k);
       const bias = randMat(version, e, n);
-      const expertIdx = version.up(ids(t, e), mat(t, 1));
+      const expertIdx = version.upload(ids(t, e), mat(t, 1));
       if (bits === undefined) {
         const w = randMat(version, e * k, n);
         return () => version.lib.matmulGather(a, w, expertIdx, { bias });

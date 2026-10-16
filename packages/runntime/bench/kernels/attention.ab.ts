@@ -59,7 +59,7 @@ function packed(name: string, t: number, heads: number, headDim: number, dtype: 
       const seg = Float32Array.from({ length: t * 2 }, (_, i) =>
         i >> 1 < half ? (i & 1 ? half : 0) : i & 1 ? t : half,
       );
-      const segments = version.up(seg, mat(t, 2));
+      const segments = version.upload(seg, mat(t, 2));
       return () =>
         version.lib.sdpaPacked(qkv, {
           qHeads: heads,
