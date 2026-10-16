@@ -94,43 +94,47 @@ export interface CaseResult {
   calls?: number;
 }
 
-const us = (x: number) => (x >= 100 ? x.toFixed(0) : x.toFixed(1));
-const pct = (x: number) => `${x > 0 ? '+' : ''}${(x * 100).toFixed(1)}%`;
-
-const HEADER = ['kernel', 'case', 'A (µs)', 'B (µs)', 'Δ', 'noise', 'verdict', 'max abs(A−B)'];
-/** Columns aligned right: the numbers. */
-const NUMERIC = [false, false, true, true, true, true, false, true];
-const VERDICT = HEADER.indexOf('verdict');
+/** A time in µs: no decimals from 100 up, where the decimal is noise. */
+const formatTime = (x: number) => (x >= 100 ? x.toFixed(0) : x.toFixed(1));
+/** A fraction as a signed percent: 0.673 → '+67.3%'. */
+const formatPercent = (x: number) => `${x > 0 ? '+' : ''}${(x * 100).toFixed(1)}%`;
 
 type Measured = CaseResult & { comparison: Comparison };
 
-/** One measured row's cells, in HEADER order. */
-function cells(r: Measured): string[] {
-  const { aUs, bUs, delta, noise, verdict } = r.comparison;
-  const diff = r.maxAbsDiff === 0 ? '0' : r.maxAbsDiff!.toExponential(1);
-  return [
-    r.kernel,
-    r.case,
-    us(aUs),
-    us(bUs),
-    pct(delta),
-    `±${(noise * 100).toFixed(1)}%`,
-    verdict,
-    diff,
-  ];
-}
+/** The report's columns, in order. A number column lines its values up on the
+ *  last digit, the way a spreadsheet does; the others line up on the first
+ *  letter. */
+const COLUMNS: { name: string; isNumber?: boolean; cell: (r: Measured) => string }[] = [
+  { name: 'kernel', cell: (r) => r.kernel },
+  { name: 'case', cell: (r) => r.case },
+  { name: 'A (µs)', isNumber: true, cell: (r) => formatTime(r.comparison.aUs) },
+  { name: 'B (µs)', isNumber: true, cell: (r) => formatTime(r.comparison.bUs) },
+  { name: 'Δ', isNumber: true, cell: (r) => formatPercent(r.comparison.delta) },
+  { name: 'noise', isNumber: true, cell: (r) => `±${(r.comparison.noise * 100).toFixed(1)}%` },
+  { name: 'verdict', cell: (r) => r.comparison.verdict },
+  {
+    name: 'max abs(A−B)',
+    isNumber: true,
+    cell: (r) => (r.maxAbsDiff === 0 ? '0' : r.maxAbsDiff!.toExponential(1)),
+  },
+];
+const HEADER = COLUMNS.map((c) => c.name);
+const VERDICT = HEADER.indexOf('verdict');
+
+const cells = (r: Measured) => COLUMNS.map((c) => c.cell(r));
+
+/** A skipped or failed case: kernel and case, the note under verdict. */
+const noteCells = (r: CaseResult) =>
+  HEADER.map((_, j) => (j === 0 ? r.kernel : j === 1 ? r.case : j === VERDICT ? r.note! : ''));
+
+const markdownRow = (c: readonly string[]) => `|${c.map((s) => (s ? ` ${s} ` : ' ')).join('|')}|`;
 
 /** The report as a markdown table for the pull request, one row per case. */
 export function formatTable(results: readonly CaseResult[]): string {
-  const rows = results.map((r) =>
-    r.comparison
-      ? `| ${cells(r as Measured).join(' | ')} |`
-      : `| ${r.kernel} | ${r.case} | | | | | ${r.note} | |`,
-  );
   return [
-    `| ${HEADER.join(' | ')} |`,
-    `| ${NUMERIC.map((n) => (n ? '--:' : '---')).join(' | ')} |`,
-    ...rows,
+    markdownRow(HEADER),
+    markdownRow(COLUMNS.map((c) => (c.isNumber ? '--:' : '---'))),
+    ...results.map((r) => markdownRow(r.comparison ? cells(r as Measured) : noteCells(r))),
   ].join('\n');
 }
 
@@ -147,7 +151,9 @@ export function formatTerminal(
   const rule = (l: string, m: string, r: string) =>
     l + widths.map((w) => '─'.repeat(w + 2)).join(m) + r;
   const line = (c: readonly string[], verdict?: Verdict) => {
-    const padded = c.map((s, j) => (NUMERIC[j] ? s.padStart(widths[j]!) : s.padEnd(widths[j]!)));
+    const padded = c.map((s, j) =>
+      COLUMNS[j]!.isNumber ? s.padStart(widths[j]!) : s.padEnd(widths[j]!),
+    );
     if (verdict) padded[VERDICT] = paint(verdict, padded[VERDICT]!);
     return `│ ${padded.join(' │ ')} │`;
   };
