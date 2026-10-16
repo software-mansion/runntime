@@ -307,6 +307,9 @@ const TILE_K = 32; // K-slab depth per barrier round
 const TILED_THREADS = 256; // 16×16 logical threads, a 4×4 output block each
 const A_LOADS = (TILE * TILE_K) / TILED_THREADS; // co-op loads per thread
 const B_LOADS = (TILE_K * TILE) / 4 / TILED_THREADS; // vec4 loads per thread
+// vec4 slots per bTile row. Computed here, not in the shader: `/` inside
+// 'use gpu' yields f32, which would make the B index lose precision past 2^24.
+const B_TILE_ROW_VEC4S = TILE / 4;
 
 const aTile = tgpu.workgroupVar(d.arrayOf(d.f32, TILE * TILE_K));
 const bTile = tgpu.workgroupVar(d.arrayOf(d.vec4f, (TILE_K * TILE) / 4));
@@ -348,8 +351,8 @@ function makeMatmulTiledKernel(cfg: MatmulCfg) {
       }
       for (const iv of tgpu.unroll(std.range(B_LOADS))) {
         const e = tid + iv * TILED_THREADS; // vec4 slot: row-major [TILE_K, TILE/4]
-        const er = d.u32(e / (TILE / 4));
-        const ec = (e % (TILE / 4)) * 4;
+        const er = d.u32(e / B_TILE_ROW_VEC4S);
+        const ec = (e % B_TILE_ROW_VEC4S) * 4;
         const bk = k0 + er;
         const bc = colBase + ec;
         const rowOk = bk < k;
@@ -376,7 +379,7 @@ function makeMatmulTiledKernel(cfg: MatmulCfg) {
       std.workgroupBarrier();
 
       for (const kk of std.range(TILE_K)) {
-        const bv = bTile.$[kk * (TILE / 4) + tc]!;
+        const bv = bTile.$[kk * B_TILE_ROW_VEC4S + tc]!;
         const aBase = tr * 4 * TILE_K + kk;
         acc0 += aTile.$[aBase]! * bv;
         acc1 += aTile.$[aBase + TILE_K]! * bv;
