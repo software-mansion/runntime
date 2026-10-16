@@ -63,52 +63,55 @@ const MIN_WARMUP_MS = 300;
 const MAX_WARMUP_MS = 5000;
 const SETTLED_SPREAD = 0.02;
 
-interface World {
+/** The GPU device a case runs on, and one executor per version on it. */
+interface GpuSetup {
   root: TgpuRoot;
   profiler: Profiler;
-  ex: [libA.RunntimeExecutor, libB.RunntimeExecutor];
+  executors: [libA.RunntimeExecutor, libB.RunntimeExecutor];
 }
 
-const worlds = new Map<boolean, Promise<World>>();
+/** Keyed by noSubgroups. */
+const gpuSetups = new Map<boolean, Promise<GpuSetup>>();
 
-/** The device a case runs on, made once: the production feature set, or the
- *  same without `subgroups`. Each version gets its own executor on it. */
-function world(noSubgroups: boolean): Promise<World> {
-  let w = worlds.get(noSubgroups);
-  if (!w) {
+/** Creates the device once and reuses it: the production feature set, or the
+ *  same without `subgroups`. A second device is needed for that, since
+ *  features are fixed when a device is created. */
+function gpuSetup(noSubgroups: boolean): Promise<GpuSetup> {
+  let setup = gpuSetups.get(noSubgroups);
+  if (!setup) {
     const features: GPUFeatureName[] = ['shader-f16', 'timestamp-query'];
     if (!noSubgroups) features.push('subgroups');
-    w = tgpu.init({ device: { optionalFeatures: features } }).then((root) => ({
+    setup = tgpu.init({ device: { optionalFeatures: features } }).then((root) => ({
       root,
       profiler: installProfiler(root.device),
-      ex: [libA.gpuExecutor(root), libB.gpuExecutor(root)],
+      executors: [libA.gpuExecutor(root), libB.gpuExecutor(root)],
     }));
-    worlds.set(noSubgroups, w);
+    gpuSetups.set(noSubgroups, setup);
   }
-  return w;
+  return setup;
 }
 
 /** GPU µs per call over one round of `calls` calls in a single submit. */
-async function round(w: World, i: 0 | 1, call: () => Value, calls: number): Promise<number> {
+async function round(gpu: GpuSetup, i: 0 | 1, call: () => Value, calls: number): Promise<number> {
   const lib = i === 0 ? (libA as Lib) : libB;
   const ys = Array.from({ length: calls }, call);
-  lib.evalValues(ys, w.ex[i]);
-  w.ex[i].releaseValues(ys);
-  await w.root.device.queue.onSubmittedWorkDone();
-  const ns = (await w.profiler.collect()).reduce((a, b) => a + b, 0);
+  lib.evalValues(ys, gpu.executors[i]);
+  gpu.executors[i].releaseValues(ys);
+  await gpu.root.device.queue.onSubmittedWorkDone();
+  const ns = (await gpu.profiler.collect()).reduce((a, b) => a + b, 0);
   if (ns === 0) throw new Error(`no GPU time recorded on ${i === 0 ? 'A' : 'B'}`);
   return ns / 1000 / calls;
 }
 
 /** Measures a case, and a flagged one a second time on fresh buffers: a row
  *  only says faster or slower when both runs agree. */
-async function runCase(kernel: string, c: AbCase, w: World): Promise<CaseResult> {
+async function runCase(kernel: string, c: AbCase, gpu: GpuSetup): Promise<CaseResult> {
   try {
-    const first = await measure(kernel, c, w, false);
+    const first = await measure(kernel, c, gpu, false);
     if (first.comparison?.verdict !== 'same' && first.comparison) {
       // B's buffers allocated first this time: a difference that only comes
       // from where the buffers landed flips sign and does not confirm.
-      const second = await measure(kernel, c, w, true);
+      const second = await measure(kernel, c, gpu, true);
       if (second.comparison) {
         return { ...first, comparison: confirm(first.comparison, second.comparison) };
       }
@@ -117,12 +120,17 @@ async function runCase(kernel: string, c: AbCase, w: World): Promise<CaseResult>
   } finally {
     // Pools keep every output size they have seen; across a file's cases
     // that is enough to lose the page.
-    w.ex[0].dispose();
-    w.ex[1].dispose();
+    gpu.executors[0].dispose();
+    gpu.executors[1].dispose();
   }
 }
 
-async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Promise<CaseResult> {
+async function measure(
+  kernel: string,
+  c: AbCase,
+  gpu: GpuSetup,
+  bFirst: boolean,
+): Promise<CaseResult> {
   const owned: Value[] = [];
   const freeAfterCase = (v: Value) => (owned.push(v), v);
   const calls: (() => Value)[] = [];
@@ -131,11 +139,11 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
       const label = i === 0 ? 'A' : 'B';
       const lib = i === 0 ? (libA as Lib) : libB;
       const upload = (data: Float32Array, meta: ValueMeta) =>
-        freeAfterCase(lib.tensor(w.root, data, meta));
+        freeAfterCase(lib.tensor(gpu.root, data, meta));
       let seed = 1;
       const rand = (n: number) => randomF32(n, seed++);
       try {
-        calls[i] = c.build({ label, lib, root: w.root, upload, freeAfterCase, rand });
+        calls[i] = c.build({ label, lib, root: gpu.root, upload, freeAfterCase, rand });
       } catch (err) {
         return { kernel, case: c.name, note: `skipped, threw on ${label}: ${messageOf(err)}` };
       }
@@ -145,10 +153,10 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
     // Output check, which also compiles both versions' pipelines.
     const yA = callA();
     const yB = callB();
-    const outA = await readOut(libA as Lib, yA, w.ex[0]);
-    const outB = await readOut(libB, yB, w.ex[1]);
-    w.ex[0].releaseValues([yA]);
-    w.ex[1].releaseValues([yB]);
+    const outA = await readOut(libA as Lib, yA, gpu.executors[0]);
+    const outB = await readOut(libB, yB, gpu.executors[1]);
+    gpu.executors[0].releaseValues([yA]);
+    gpu.executors[1].releaseValues([yB]);
     const outBytes = yB.shape.elems * (yB.shape.dtype === 'f16' ? 2 : 4);
 
     // Apple GPUs idle at a low clock and ramp up only under sustained load,
@@ -158,8 +166,8 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
     const recent: number[] = [];
     let n = 4;
     for (;;) {
-      await round(w, 0, callA, n);
-      recent.push(await round(w, 1, callB, n));
+      await round(gpu, 0, callA, n);
+      recent.push(await round(gpu, 1, callB, n));
       n = callsPerRound(recent.at(-1)!, outBytes);
       const elapsed = performance.now() - start;
       const settled = recent.length >= 3 && spread(recent.slice(-3)) <= SETTLED_SPREAD;
@@ -170,7 +178,7 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
     const times: [number[], number[]] = [[], []];
     for (let r = 0; r < ROUNDS; r++) {
       const order = r % 4 === 0 || r % 4 === 3 ? ([0, 1] as const) : ([1, 0] as const);
-      for (const i of order) times[i].push(await round(w, i, calls[i]!, n));
+      for (const i of order) times[i].push(await round(gpu, i, calls[i]!, n));
     }
     return {
       kernel,
@@ -186,8 +194,8 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
 
 /** Reads an output for the A/B check. hwc4 cannot be read back as is, so it
  *  goes through toChw first; that dispatch is never timed. */
-function readOut(lib: Lib, y: Value, ex: libB.RunntimeExecutor): Promise<Float32Array> {
-  return lib.toArray(y.shape.layout === 'hwc4' ? lib.toChw(y, 'f32') : y, ex);
+function readOut(lib: Lib, y: Value, executor: libB.RunntimeExecutor): Promise<Float32Array> {
+  return lib.toArray(y.shape.layout === 'hwc4' ? lib.toChw(y, 'f32') : y, executor);
 }
 
 function messageOf(err: unknown): string {
@@ -201,13 +209,13 @@ export function abSuite(kernel: string, cases: readonly AbCase[]): void {
   describe(kernel, () => {
     for (const c of cases) {
       it(c.name, async (ctx) => {
-        const w = await world(c.noSubgroups === true);
-        const missing = c.needs?.find((f) => !w.root.enabledFeatures.has(f));
+        const gpu = await gpuSetup(c.noSubgroups === true);
+        const missing = c.needs?.find((f) => !gpu.root.enabledFeatures.has(f));
         let result: CaseResult;
         try {
           result = missing
             ? { kernel, case: c.name, note: `skipped, device has no ${missing}` }
-            : await runCase(kernel, c, w);
+            : await runCase(kernel, c, gpu);
         } catch (err) {
           // Still a row in the report, and still a failed test.
           results.push({ kernel, case: c.name, note: `failed: ${messageOf(err)}` });
