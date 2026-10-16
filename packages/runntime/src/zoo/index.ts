@@ -21,12 +21,20 @@ export { models } from './models.ts';
 export {
   createTextEmbedder,
   similarity,
-  type EmbeddingTask,
-  type EmbedOptions,
   type TextEmbedder,
   type TextEmbedderModel,
-  type TextEmbeddingArch,
 } from './tasks/nlp/textEmbedding.ts';
+
+export {
+  createMultimodalEmbedder,
+  type EmbedInput,
+  type EmbedOptions,
+  type EmbedPart,
+  type MultimodalEmbedder,
+  type MultimodalEmbedderModel,
+  type EmbeddingTask,
+  type ImageTokenBudget,
+} from './tasks/multimodal/multimodalEmbedding.ts';
 
 export {
   createPrivacyFilter,

@@ -1,6 +1,6 @@
-/** EmbeddingGemma 2 text model dimensions (google/embeddinggemma-2
- *  config.json, text_config). One fixed size: the vision and audio towers
- *  are separate models. */
+/** EmbeddingGemma 2 dimensions (google/embeddinggemma-2 config.json): the
+ *  text model (text_config) and the vision tower (vision_config). One fixed
+ *  size of each. */
 
 /** The two layer kinds: sliding layers see ±slidingWindow tokens, full
  *  layers the whole input. */
@@ -46,9 +46,47 @@ export const EMBEDDING_DIM = EMBEDDINGGEMMA2_TEXT.embeddingDim;
 /** Output sizes the model was trained to be cut to (Matryoshka). */
 export const EMBEDDING_DIMS = [768, 512, 256, 128] as const;
 
-/** Longest input in tokens, `<bos>` and `<eos>` included. The model takes
- *  8192, this runner 2048. */
+/** Longest input in tokens, `<bos>` and `<eos>` included, image and video
+ *  tokens counted. The model takes 8192, this runner 2048. */
 export const EMBEDDINGGEMMA2_MAX_TOKENS = 2048;
+
+export interface EmbeddingGemma2VisionConfig {
+  hidden: number;
+  ffn: number;
+  layers: number;
+  heads: number;
+  headDim: number;
+  eps: number;
+  /** Side of a square patch in pixels. */
+  patch: number;
+  /** Side of the square of patches averaged into one image token. */
+  pool: number;
+  /** Rows of each of the x and y position embedding tables. */
+  positions: number;
+  ropeTheta: number;
+}
+
+export const EMBEDDINGGEMMA2_VISION: EmbeddingGemma2VisionConfig = {
+  hidden: 768,
+  ffn: 3072,
+  layers: 16,
+  heads: 12,
+  headDim: 64,
+  eps: 1e-6,
+  patch: 16,
+  pool: 3,
+  positions: 10240,
+  ropeTheta: 100,
+};
+
+/** Token budgets an image may take, most tokens for the most detail. */
+export const IMAGE_TOKEN_BUDGETS = [70, 140, 280, 560, 1120] as const;
+
+/** Tokens an image takes at most by default. */
+export const IMAGE_TOKENS = 280;
+
+/** Tokens each video frame takes at most. */
+export const VIDEO_FRAME_TOKENS = 140;
 
 /** The instruction each task puts before the text (the checkpoint's
  *  sentence-transformers prompts). `query` and `document` are the two sides

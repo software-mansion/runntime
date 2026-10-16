@@ -14,6 +14,7 @@ import type { DepthEstimatorModel } from './tasks/cv/depthEstimation.ts';
 import type { InstanceSegmenterModel } from './tasks/cv/instanceSegmentation.ts';
 import type { ObjectDetectorModel } from './tasks/cv/objectDetection.ts';
 import type { KeypointDetectorModel } from './tasks/cv/keypointDetection.ts';
+import type { MultimodalEmbedderModel } from './tasks/multimodal/multimodalEmbedding.ts';
 import type { PrivacyFilterModel } from './tasks/nlp/privacyFilter.ts';
 import type { TextEmbedderModel } from './tasks/nlp/textEmbedding.ts';
 
@@ -39,10 +40,19 @@ const precisions = <T extends object>(repo: string, size: string, common: T) => 
 const MINILM = precisions('all-MiniLM-L6-v2', 'base', {
   tokenizerPath: tokenizer('all-MiniLM-L6-v2'),
 } satisfies TextEmbedderModel);
-const EMBEDDINGGEMMA_2 = precisions('embeddinggemma-2', 'text', {
-  arch: 'embeddinggemma-2',
+
+/** EmbeddingGemma 2 ships the text model and the vision tower as two files
+ *  of each precision. */
+const embeddingGemma2 = (precision: string) => ({
+  modelPath: weights('embeddinggemma-2', 'text', precision),
+  visionPath: weights('embeddinggemma-2', 'vision', precision),
   tokenizerPath: tokenizer('embeddinggemma-2'),
-} satisfies TextEmbedderModel);
+});
+const EMBEDDINGGEMMA_2 = {
+  DEFAULT: embeddingGemma2('f16'),
+  F16: { ...embeddingGemma2('f16'), dtype: 'f16' as const },
+  F32: { ...embeddingGemma2('f32'), dtype: 'f32' as const },
+} satisfies Record<string, MultimodalEmbedderModel>;
 
 const MOONSHINE_TINY = precisions('moonshine', 'tiny', {
   arch: 'moonshine',
@@ -96,8 +106,11 @@ export const models = {
   textEmbedding: {
     /** 384-dim sentence embeddings, 22M parameters. */
     ALL_MINILM_L6_V2: MINILM,
-    /** Google's EmbeddingGemma 2 text model: 768-dim embeddings in 100+
-     *  languages and code, inputs up to 2048 tokens, 270M parameters. */
+  },
+  multimodalEmbedding: {
+    /** Google's EmbeddingGemma 2: text in 100+ languages and code, images
+     *  and video in one 768-dim space, inputs up to 2048 tokens. 270M
+     *  parameters in the text model, 170M in the vision tower. */
     EMBEDDINGGEMMA_2: EMBEDDINGGEMMA_2,
   },
   privacyFilter: {

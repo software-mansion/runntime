@@ -40,13 +40,10 @@ export function checkImageSize(width: number, height: number, what = 'image'): v
   }
 }
 
-/** Wraps raw bytes as an ImageBuffer. Checks the size and the byte count. */
-export function imageBuffer(
-  data: Uint8Array | Uint8ClampedArray,
-  width: number,
-  height: number,
-  format: ImageFormat = 'rgba',
-): ImageBuffer {
+/** Throws unless `image` has a positive size and exactly the bytes its
+ *  size and format need. */
+export function checkImageBuffer(image: ImageBuffer): void {
+  const { data, width, height, format } = image;
   checkImageSize(width, height);
   const expected = width * height * FORMAT_CHANNELS[format];
   if (data.length !== expected) {
@@ -55,7 +52,18 @@ export function imageBuffer(
       `image: ${data.length} bytes for ${width}x${height} ${format}, expected ${expected}`,
     );
   }
-  return { data, width, height, format, layout: 'hwc' };
+}
+
+/** Wraps raw bytes as an ImageBuffer. Checks the size and the byte count. */
+export function imageBuffer(
+  data: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  format: ImageFormat = 'rgba',
+): ImageBuffer {
+  const image: ImageBuffer = { data, width, height, format, layout: 'hwc' };
+  checkImageBuffer(image);
+  return image;
 }
 
 /** Views canvas ImageData as an ImageBuffer. No copy. */
