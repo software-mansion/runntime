@@ -241,6 +241,40 @@ describe('concat elision', () => {
     expect(held()).toEqual(['#0']);
   });
 
+  it('writes a fused residual add straight into its slot', () => {
+    const x = image(4);
+    const a = conv(x, 4);
+    const y = add(x, a);
+    const b = conv(x, 4);
+    const c = cat([y, b], 0);
+    const { ex, log, held } = recorder({ x, a, y, b, c }, { copyInto: true });
+    evalValues([c], ex);
+    expect(log).toEqual(['a → #0 +x @0', `b → #0 @${MAP4}`, 'submit']);
+    expect(y.buffer).toBe(c.buffer);
+    expect(held()).toEqual(['#0']);
+  });
+
+  it('copies an add that did not fuse into its conv', () => {
+    const x = image(4);
+    const a = conv(x, 4);
+    const t = tanh(a);
+    const y = add(x, a);
+    const b = conv(x, 4);
+    const c = cat([y, b], 0);
+    const { ex, log } = recorder({ a, t, y, b, c }, { copyInto: true });
+    evalValues([c, t], ex);
+    expect(log).toEqual([
+      'a → #0',
+      'y → #1',
+      `b → #2 @${MAP4}`,
+      'copy #1 → #2 @0',
+      'release #1',
+      't → #3',
+      'release #0',
+      'submit',
+    ]);
+  });
+
   it('copies an input that has another reader', () => {
     const x = image(8);
     const a = conv(x, 4);
