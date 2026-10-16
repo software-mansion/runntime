@@ -4,6 +4,7 @@ import {
   compare,
   confirm,
   formatTable,
+  formatTerminal,
   maxAbsDiff,
   median,
   spread,
@@ -148,5 +149,50 @@ describe('formatTable', () => {
       '| softmax | rows 8×1024 | 88.2 | 87.9 | -0.3% | ±3.1% | same | 0 |',
       '| conv2d | yolo 80×80 | | | | | skipped, threw on A: conv2d is not a function | |',
     ]);
+  });
+});
+
+describe('formatTerminal', () => {
+  const results = [
+    {
+      kernel: 'matmul',
+      case: 'gemv',
+      comparison: { aUs: 40, bUs: 40.4, delta: 0.01, noise: 0.03, verdict: 'same' },
+      maxAbsDiff: 0,
+    },
+    {
+      kernel: 'matmul',
+      case: 'tiled 64×64×64',
+      comparison: { aUs: 412, bUs: 298.3, delta: -0.276, noise: 0.03, verdict: 'faster' },
+      maxAbsDiff: 3.1e-4,
+    },
+    {
+      kernel: 'softmax',
+      case: 'rows 8×1024',
+      comparison: { aUs: 88.2, bUs: 87.9, delta: -0.0034, noise: 0.031, verdict: 'same' },
+      maxAbsDiff: 0,
+    },
+    { kernel: 'conv2d', case: 'yolo 80×80', note: 'skipped, device has no shader-f16' },
+  ] as const;
+
+  it('boxes the measured cases, a rule between kernels, skipped ones listed below', () => {
+    expect(formatTerminal(results).split('\n')).toEqual([
+      '┌─────────┬────────────────┬────────┬────────┬────────┬───────┬─────────┬──────────────┐',
+      '│ kernel  │ case           │ A (µs) │ B (µs) │      Δ │ noise │ verdict │ max abs(A−B) │',
+      '├─────────┼────────────────┼────────┼────────┼────────┼───────┼─────────┼──────────────┤',
+      '│ matmul  │ gemv           │   40.0 │   40.4 │  +1.0% │ ±3.0% │ same    │            0 │',
+      '│ matmul  │ tiled 64×64×64 │    412 │    298 │ -27.6% │ ±3.0% │ faster  │       3.1e-4 │',
+      '├─────────┼────────────────┼────────┼────────┼────────┼───────┼─────────┼──────────────┤',
+      '│ softmax │ rows 8×1024    │   88.2 │   87.9 │  -0.3% │ ±3.1% │ same    │            0 │',
+      '└─────────┴────────────────┴────────┴────────┴────────┴───────┴─────────┴──────────────┘',
+      '',
+      'conv2d · yolo 80×80: skipped, device has no shader-f16',
+    ]);
+  });
+
+  it('paints only the padded verdict cell', () => {
+    const table = formatTerminal(results.slice(1, 2), (v, text) => `<${v}>${text}</>`);
+    expect(table).toContain('│ <faster>faster </> │');
+    expect(table).not.toContain('<same>');
   });
 });

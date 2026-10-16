@@ -97,17 +97,69 @@ export interface CaseResult {
 const us = (x: number) => (x >= 100 ? x.toFixed(0) : x.toFixed(1));
 const pct = (x: number) => `${x > 0 ? '+' : ''}${(x * 100).toFixed(1)}%`;
 
-/** The report as a markdown table, one row per case. */
-export function formatTable(results: readonly CaseResult[]): string {
-  const rows = results.map((r) => {
-    if (!r.comparison) return `| ${r.kernel} | ${r.case} | | | | | ${r.note} | |`;
-    const { aUs, bUs, delta, noise, verdict } = r.comparison;
-    const diff = r.maxAbsDiff === 0 ? '0' : r.maxAbsDiff!.toExponential(1);
-    return `| ${r.kernel} | ${r.case} | ${us(aUs)} | ${us(bUs)} | ${pct(delta)} | ±${(noise * 100).toFixed(1)}% | ${verdict} | ${diff} |`;
-  });
+const HEADER = ['kernel', 'case', 'A (µs)', 'B (µs)', 'Δ', 'noise', 'verdict', 'max abs(A−B)'];
+/** Columns aligned right: the numbers. */
+const NUMERIC = [false, false, true, true, true, true, false, true];
+const VERDICT = HEADER.indexOf('verdict');
+
+type Measured = CaseResult & { comparison: Comparison };
+
+/** One measured row's cells, in HEADER order. */
+function cells(r: Measured): string[] {
+  const { aUs, bUs, delta, noise, verdict } = r.comparison;
+  const diff = r.maxAbsDiff === 0 ? '0' : r.maxAbsDiff!.toExponential(1);
   return [
-    '| kernel | case | A (µs) | B (µs) | Δ | noise | verdict | max abs(A−B) |',
-    '| --- | --- | --: | --: | --: | --: | --- | --: |',
+    r.kernel,
+    r.case,
+    us(aUs),
+    us(bUs),
+    pct(delta),
+    `±${(noise * 100).toFixed(1)}%`,
+    verdict,
+    diff,
+  ];
+}
+
+/** The report as a markdown table for the pull request, one row per case. */
+export function formatTable(results: readonly CaseResult[]): string {
+  const rows = results.map((r) =>
+    r.comparison
+      ? `| ${cells(r as Measured).join(' | ')} |`
+      : `| ${r.kernel} | ${r.case} | | | | | ${r.note} | |`,
+  );
+  return [
+    `| ${HEADER.join(' | ')} |`,
+    `| ${NUMERIC.map((n) => (n ? '--:' : '---')).join(' | ')} |`,
     ...rows,
   ].join('\n');
+}
+
+/** The report for the terminal: a boxed table of the measured cases, a rule
+ *  between kernels, then one line per skipped or failed case. `paint` colors
+ *  the verdict cell after padding, so escape codes never shift a column. */
+export function formatTerminal(
+  results: readonly CaseResult[],
+  paint: (verdict: Verdict, text: string) => string = (_, text) => text,
+): string {
+  const measured = results.filter((r): r is Measured => r.comparison !== undefined);
+  const rows = measured.map(cells);
+  const widths = HEADER.map((h, j) => Math.max(h.length, ...rows.map((c) => c[j]!.length)));
+  const rule = (l: string, m: string, r: string) =>
+    l + widths.map((w) => '─'.repeat(w + 2)).join(m) + r;
+  const line = (c: readonly string[], verdict?: Verdict) => {
+    const padded = c.map((s, j) => (NUMERIC[j] ? s.padStart(widths[j]!) : s.padEnd(widths[j]!)));
+    if (verdict) padded[VERDICT] = paint(verdict, padded[VERDICT]!);
+    return `│ ${padded.join(' │ ')} │`;
+  };
+
+  const out = [rule('┌', '┬', '┐'), line(HEADER), rule('├', '┼', '┤')];
+  measured.forEach((r, i) => {
+    const prev = measured[i - 1];
+    if (prev && prev.kernel !== r.kernel) out.push(rule('├', '┼', '┤'));
+    out.push(line(rows[i]!, r.comparison.verdict));
+  });
+  out.push(rule('└', '┴', '┘'));
+  const notes = results.filter((r) => !r.comparison);
+  if (notes.length) out.push('', ...notes.map((r) => `${r.kernel} · ${r.case}: ${r.note}`));
+  return out.join('\n');
 }
