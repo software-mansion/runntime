@@ -103,23 +103,25 @@ async function round(gpu: GpuSetup, i: 0 | 1, call: () => Value, calls: number):
   return ns / 1000 / calls;
 }
 
-/** Measures a case, and a flagged one a second time on fresh buffers: a row
- *  only says faster or slower when both runs agree. */
-async function runCase(kernel: string, c: AbCase, gpu: GpuSetup): Promise<CaseResult> {
+/** Measures a case. If it comes out faster or slower, measures it again on
+ *  fresh buffers and keeps that verdict only if both runs agree. */
+async function runCase(kernel: string, testCase: AbCase, gpu: GpuSetup): Promise<CaseResult> {
   try {
-    const first = await measure(kernel, c, gpu, false);
+    const first = await measure(kernel, testCase, gpu, false);
     if (first.comparison?.verdict !== 'same' && first.comparison) {
-      // B's buffers allocated first this time: a difference that only comes
-      // from where the buffers landed flips sign and does not confirm.
-      const second = await measure(kernel, c, gpu, true);
+      // Run again with B's buffers created first. If the first result only
+      // came from where the buffers landed in memory, it goes away or flips,
+      // and confirm() turns the verdict into 'same'.
+      const second = await measure(kernel, testCase, gpu, true);
       if (second.comparison) {
         return { ...first, comparison: confirm(first.comparison, second.comparison) };
       }
     }
     return first;
   } finally {
-    // Pools keep every output size they have seen; across a file's cases
-    // that is enough to lose the page.
+    // The buffer pools keep a buffer for every output size they have seen.
+    // Without freeing them after each case, a whole file's cases use enough
+    // GPU memory to crash the browser tab.
     gpu.executors[0].dispose();
     gpu.executors[1].dispose();
   }
@@ -127,7 +129,7 @@ async function runCase(kernel: string, c: AbCase, gpu: GpuSetup): Promise<CaseRe
 
 async function measure(
   kernel: string,
-  c: AbCase,
+  testCase: AbCase,
   gpu: GpuSetup,
   bFirst: boolean,
 ): Promise<CaseResult> {
@@ -143,9 +145,13 @@ async function measure(
       let seed = 1;
       const rand = (n: number) => randomF32(n, seed++);
       try {
-        calls[i] = c.build({ label, lib, root: gpu.root, upload, freeAfterCase, rand });
+        calls[i] = testCase.build({ label, lib, root: gpu.root, upload, freeAfterCase, rand });
       } catch (err) {
-        return { kernel, case: c.name, note: `skipped, threw on ${label}: ${messageOf(err)}` };
+        return {
+          kernel,
+          case: testCase.name,
+          note: `skipped, threw on ${label}: ${messageOf(err)}`,
+        };
       }
     }
     const [callA, callB] = [calls[0]!, calls[1]!];
@@ -182,7 +188,7 @@ async function measure(
     }
     return {
       kernel,
-      case: c.name,
+      case: testCase.name,
       comparison: compare(times[0], times[1]),
       maxAbsDiff: maxAbsDiff(outA, outB),
       calls: n,
@@ -207,18 +213,18 @@ function messageOf(err: unknown): string {
 export function abSuite(kernel: string, cases: readonly AbCase[]): void {
   const results: CaseResult[] = [];
   describe(kernel, () => {
-    for (const c of cases) {
-      it(c.name, async (ctx) => {
-        const gpu = await gpuSetup(c.noSubgroups === true);
-        const missing = c.needs?.find((f) => !gpu.root.enabledFeatures.has(f));
+    for (const testCase of cases) {
+      it(testCase.name, async (ctx) => {
+        const gpu = await gpuSetup(testCase.noSubgroups === true);
+        const missing = testCase.needs?.find((f) => !gpu.root.enabledFeatures.has(f));
         let result: CaseResult;
         try {
           result = missing
-            ? { kernel, case: c.name, note: `skipped, device has no ${missing}` }
-            : await runCase(kernel, c, gpu);
+            ? { kernel, case: testCase.name, note: `skipped, device has no ${missing}` }
+            : await runCase(kernel, testCase, gpu);
         } catch (err) {
           // Still a row in the report, and still a failed test.
-          results.push({ kernel, case: c.name, note: `failed: ${messageOf(err)}` });
+          results.push({ kernel, case: testCase.name, note: `failed: ${messageOf(err)}` });
           throw err;
         }
         results.push(result);
