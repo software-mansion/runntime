@@ -105,6 +105,10 @@ export function tensor(
         (meta.dims ? ` (dims [${meta.dims.join(', ')}])` : ''),
     );
   }
+  // WebGPU cannot bind an empty storage buffer.
+  if (meta.elems === 0) {
+    throw new RunntimeError('INVALID_ARGUMENT', 'tensor: the shape has no elements');
+  }
   // The meta decides the buffer: an f32 buffer under an f16 label would read
   // as garbage in every kernel.
   if (meta.dtype === 'f16') {
