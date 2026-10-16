@@ -1,6 +1,6 @@
 /** Every route gpu/dispatch/matmul.ts can pick, plus the epilogue variants,
  *  quantized weights, matmulGather and argmaxDot. Shapes come from the zoo. */
-import { abSuite, type AbCase, type Side } from '../ab.ts';
+import { abSuite, type AbCase, type Version } from '../ab.ts';
 import { ids, mat, quantWeight, randMat } from './inputs.ts';
 
 type Float = 'f32' | 'f16';
@@ -18,13 +18,13 @@ function mm(
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
-    build: (s: Side) => {
-      const a = randMat(s, m, k, dtype);
-      const b = randMat(s, k + (opts.baseRow ?? 0), n, dtype);
-      const bias = opts.bias ? randMat(s, 1, n, dtype) : undefined;
-      const addend = opts.addend ? randMat(s, m, n, dtype) : undefined;
+    build: (version: Version) => {
+      const a = randMat(version, m, k, dtype);
+      const b = randMat(version, k + (opts.baseRow ?? 0), n, dtype);
+      const bias = opts.bias ? randMat(version, 1, n, dtype) : undefined;
+      const addend = opts.addend ? randMat(version, m, n, dtype) : undefined;
       return () =>
-        s.lib.matmul(a, b, { bias, addend, activation: opts.act, baseRow: opts.baseRow });
+        version.lib.matmul(a, b, { bias, addend, activation: opts.act, baseRow: opts.baseRow });
     },
   };
 }
@@ -38,13 +38,13 @@ function quant(name: string, t: number, e: number, k: number, o: number, bits: 8
   const groupSize = 32;
   return {
     name,
-    build: (s) => {
-      const a = randMat(s, t, k);
-      const { w, scales } = quantWeight(s, e, k, o, bits, groupSize);
+    build: (version) => {
+      const a = randMat(version, t, k);
+      const { w, scales } = quantWeight(version, e, k, o, bits, groupSize);
       // The last expert, so the base row and scale offsets are nonzero.
       const baseRow = (e - 1) * k;
       const scaleBase = (e - 1) * (k / groupSize) * o;
-      return () => s.lib.matmul(a, w, { scales, bits, groupSize, baseRow, scaleBase });
+      return () => version.lib.matmul(a, w, { scales, bits, groupSize, baseRow, scaleBase });
     },
   };
 }
@@ -53,16 +53,16 @@ function gather(name: string, t: number, e: number, k: number, n: number, bits?:
   const groupSize = 32;
   return {
     name,
-    build: (s) => {
-      const a = randMat(s, t, k);
-      const bias = randMat(s, e, n);
-      const expertIdx = s.up(ids(t, e), mat(t, 1));
+    build: (version) => {
+      const a = randMat(version, t, k);
+      const bias = randMat(version, e, n);
+      const expertIdx = version.up(ids(t, e), mat(t, 1));
       if (bits === undefined) {
-        const w = randMat(s, e * k, n);
-        return () => s.lib.matmulGather(a, w, expertIdx, { bias });
+        const w = randMat(version, e * k, n);
+        return () => version.lib.matmulGather(a, w, expertIdx, { bias });
       }
-      const { w, scales } = quantWeight(s, e, k, n, bits, groupSize);
-      return () => s.lib.matmulGather(a, w, expertIdx, { bias, scales, bits, groupSize });
+      const { w, scales } = quantWeight(version, e, k, n, bits, groupSize);
+      return () => version.lib.matmulGather(a, w, expertIdx, { bias, scales, bits, groupSize });
     },
   };
 }
@@ -71,10 +71,10 @@ function argmaxDot(name: string, v: number, n: number, dtype: Float = 'f32'): Ab
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
-    build: (s) => {
-      const w = randMat(s, v, n, dtype);
-      const x = randMat(s, 1, n, dtype);
-      return () => s.lib.argmaxDot(w, x);
+    build: (version) => {
+      const w = randMat(version, v, n, dtype);
+      const x = randMat(version, 1, n, dtype);
+      return () => version.lib.argmaxDot(w, x);
     },
   };
 }

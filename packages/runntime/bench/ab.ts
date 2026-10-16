@@ -1,7 +1,7 @@
 /** The kernel A/B runner. A is the base ref's `src` (copied to `.bench/base`
  *  by `bench/cli.ts`), B is this checkout's `src`. Both run in one page on the
  *  same device and inputs, with their rounds interleaved so GPU clock
- *  changes hit both sides alike. */
+ *  changes hit both versions alike. */
 import tgpu, { type TgpuRoot } from 'typegpu';
 import { afterAll, describe, inject, it } from 'vitest';
 import { commands } from 'vitest/browser';
@@ -19,22 +19,24 @@ import {
   type CaseResult,
 } from './stats.ts';
 
-/** The core API. Both sides are typed as this checkout's; a case that uses
+/** The core API. Both versions are typed as this checkout's; a case that uses
  *  something the base lacks throws on A and is reported as skipped. */
 export type Lib = typeof libB;
 type Value = libB.Value;
 type ValueMeta = libB.ValueMeta;
 
-/** What a case builds with, on one side. */
-export interface Side {
+/** What a case builds with, for one of the two library versions: A (the
+ *  base ref) or B (this checkout). */
+export interface Version {
   label: 'A' | 'B';
   lib: Lib;
   root: TgpuRoot;
-  /** `tensor()` on this side's device, freed after the case. */
+  /** `tensor()` on this version's device, freed after the case. */
   up: (data: Float32Array, meta: ValueMeta) => Value;
-  /** Frees a Value built another way (`materialized` + `uploadF16`) after the case. */
-  keep: (value: Value) => Value;
-  /** Seeded values in [-1, 1). The seed restarts for each side, so A and B
+  /** Destroys the Value's buffer when the case ends and returns the Value as
+   *  is. For buffers `up` cannot make (`materialized` + `uploadF16`). */
+  freeAfterCase: (value: Value) => Value;
+  /** Seeded values in [-1, 1). The seed restarts for each version, so A and B
    *  draw the same numbers in the same order. */
   rand: (n: number) => Float32Array;
 }
@@ -48,10 +50,10 @@ export interface AbCase {
    *  exist there. */
   noSubgroups?: boolean;
   /** Uploads the inputs and returns a function that builds one call. */
-  build: (side: Side) => () => Value;
+  build: (version: Version) => () => Value;
 }
 
-/** Rounds per side. Alternating ABBA over 8 rounds puts each side first
+/** Rounds per version. Alternating ABBA over 8 rounds puts each version first
  *  equally often. */
 const ROUNDS = 8;
 
@@ -70,7 +72,7 @@ interface World {
 const worlds = new Map<boolean, Promise<World>>();
 
 /** The device a case runs on, made once: the production feature set, or the
- *  same without `subgroups`. Each side gets its own executor on it. */
+ *  same without `subgroups`. Each version gets its own executor on it. */
 function world(noSubgroups: boolean): Promise<World> {
   let w = worlds.get(noSubgroups);
   if (!w) {
@@ -122,24 +124,25 @@ async function runCase(kernel: string, c: AbCase, w: World): Promise<CaseResult>
 
 async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Promise<CaseResult> {
   const owned: Value[] = [];
-  const keep = (v: Value) => (owned.push(v), v);
+  const freeAfterCase = (v: Value) => (owned.push(v), v);
   const calls: (() => Value)[] = [];
   try {
     for (const i of bFirst ? [1, 0] : [0, 1]) {
       const label = i === 0 ? 'A' : 'B';
       const lib = i === 0 ? (libA as Lib) : libB;
-      const up = (data: Float32Array, meta: ValueMeta) => keep(lib.tensor(w.root, data, meta));
+      const up = (data: Float32Array, meta: ValueMeta) =>
+        freeAfterCase(lib.tensor(w.root, data, meta));
       let seed = 1;
       const rand = (n: number) => randomF32(n, seed++);
       try {
-        calls[i] = c.build({ label, lib, root: w.root, up, keep, rand });
+        calls[i] = c.build({ label, lib, root: w.root, up, freeAfterCase, rand });
       } catch (err) {
         return { kernel, case: c.name, note: `skipped, threw on ${label}: ${messageOf(err)}` };
       }
     }
     const [callA, callB] = [calls[0]!, calls[1]!];
 
-    // Output check, which also compiles both sides' pipelines.
+    // Output check, which also compiles both versions' pipelines.
     const yA = callA();
     const yB = callB();
     const outA = await readOut(libA as Lib, yA, w.ex[0]);
@@ -149,7 +152,7 @@ async function measure(kernel: string, c: AbCase, w: World, bFirst: boolean): Pr
     const outBytes = yB.shape.elems * (yB.shape.dtype === 'f16' ? 2 : 4);
 
     // Apple GPUs idle at a low clock and ramp up only under sustained load,
-    // so warm up with full-size rounds on both sides until B's time settles,
+    // so warm up with full-size rounds on both versions until B's time settles,
     // and size the timed rounds from there.
     const start = performance.now();
     const recent: number[] = [];

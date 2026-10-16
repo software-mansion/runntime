@@ -2,7 +2,7 @@
  *  generic, depthwise), the fused epilogues, conv1d, convTranspose2d and the
  *  other hwc4 image kernels. Shapes are YOLO26n at 640, MobileNetV4-S at 224,
  *  DepthART and Moonshine. */
-import { abSuite, type AbCase, type Side } from '../ab.ts';
+import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
 import { chw, convWeight, randHwc4, randMat } from './inputs.ts';
 
@@ -25,33 +25,38 @@ function conv2d(name: string, o: Conv): AbCase {
   return {
     name,
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = randHwc4(s, cIn, hw, hw);
-      const w = convWeight(s, cOut, cIn, k, groups);
-      const bias = s.up(s.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
+    build: (version) => {
+      const x = randHwc4(version, cIn, hw, hw);
+      const w = convWeight(version, cOut, cIn, k, groups);
+      const bias = version.up(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
       const hOut = Math.floor((hw + 2 * padding - k) / stride) + 1;
-      const res = o.residual ? randHwc4(s, cOut, hOut, hOut) : undefined;
+      const res = o.residual ? randHwc4(version, cOut, hOut, hOut) : undefined;
       return () => {
-        const y = s.lib.conv2d(x, w, bias, {
+        const y = version.lib.conv2d(x, w, bias, {
           kernelSize: k,
           stride,
           padding,
           groups,
           activation: o.act,
         });
-        return res ? s.lib.add(res, y) : y;
+        return res ? version.lib.add(res, y) : y;
       };
     },
   };
 }
 
-function image(name: string, c: number, hw: number, op: (s: Side, x: Value) => Value): AbCase {
+function image(
+  name: string,
+  c: number,
+  hw: number,
+  op: (version: Version, x: Value) => Value,
+): AbCase {
   return {
     name,
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = randHwc4(s, c, hw, hw);
-      return () => op(s, x);
+    build: (version) => {
+      const x = randHwc4(version, c, hw, hw);
+      return () => op(version, x);
     },
   };
 }
@@ -67,14 +72,14 @@ function conv1d(
 ): AbCase {
   return {
     name,
-    build: (s) => {
-      const x = randMat(s, tIn, cIn);
-      const w = s.up(s.lib.convToTapMajor(s.rand(cOut * cIn * k), cOut, cIn, k), {
+    build: (version) => {
+      const x = randMat(version, tIn, cIn);
+      const w = version.up(version.lib.convToTapMajor(version.rand(cOut * cIn * k), cOut, cIn, k), {
         elems: k * cIn * cOut,
         dtype: 'f32',
         dims: [k * cIn, cOut],
       });
-      return () => s.lib.conv1d(x, w, { kernelSize: k, stride, activation: act });
+      return () => version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act });
     },
   };
 }
@@ -84,17 +89,20 @@ function convTranspose2d(name: string, cIn: number, cOut: number, hw: number): A
   return {
     name,
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = s.up(s.rand(cIn * hw * hw), chw(cIn, hw, hw, 'f16'));
-      const bits = s.lib.f32ArrayToF16Bits(s.rand(cIn * cOut * k * k)).data;
-      const w = s.keep(
-        s.lib.materialized(
+    build: (version) => {
+      const x = version.up(version.rand(cIn * hw * hw), chw(cIn, hw, hw, 'f16'));
+      const bits = version.lib.f32ArrayToF16Bits(version.rand(cIn * cOut * k * k)).data;
+      const w = version.freeAfterCase(
+        version.lib.materialized(
           { elems: cOut * k * k * cIn, dtype: 'f16', dims: [cOut * k * k, cIn] },
-          s.lib.uploadF16(s.root, s.lib.permuteConvTransposeF16(bits, cIn, cOut, k)),
+          version.lib.uploadF16(
+            version.root,
+            version.lib.permuteConvTransposeF16(bits, cIn, cOut, k),
+          ),
         ),
       );
-      const bias = s.up(s.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
-      return () => s.lib.convTranspose2d(x, w, bias, { kernelSize: k, stride: k });
+      const bias = version.up(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
+      return () => version.lib.convTranspose2d(x, w, bias, { kernelSize: k, stride: k });
     },
   };
 }
@@ -182,16 +190,16 @@ abSuite('conv', [
   {
     name: 'two convs into a cat (copy elided), YOLO26n neck 64+64 @40²',
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = randHwc4(s, 64, 40, 40);
-      const w1 = convWeight(s, 64, 64, 1);
-      const w2 = convWeight(s, 64, 64, 3);
+    build: (version) => {
+      const x = randHwc4(version, 64, 40, 40);
+      const w1 = convWeight(version, 64, 64, 1);
+      const w2 = convWeight(version, 64, 64, 3);
       const opts = { stride: 1, groups: 1 };
       return () =>
-        s.lib.cat(
+        version.lib.cat(
           [
-            s.lib.conv2d(x, w1, undefined, { ...opts, kernelSize: 1, padding: 0 }),
-            s.lib.conv2d(x, w2, undefined, { ...opts, kernelSize: 3, padding: 1 }),
+            version.lib.conv2d(x, w1, undefined, { ...opts, kernelSize: 1, padding: 0 }),
+            version.lib.conv2d(x, w2, undefined, { ...opts, kernelSize: 3, padding: 1 }),
           ],
           0,
         );
@@ -205,48 +213,48 @@ abSuite('conv', [
   convTranspose2d('convTranspose2d (paired), YOLO26n-seg proto 64→64 @80²', 64, 64, 80),
   convTranspose2d('convTranspose2d (unpaired), cIn 3 @64²', 3, 8, 64),
 
-  image('maxPool2d k5, YOLO26n SPPF 128ch @20²', 128, 20, (s, x) =>
-    s.lib.maxPool2d(x, { kernelSize: 5, stride: 1, padding: 2 }),
+  image('maxPool2d k5, YOLO26n SPPF 128ch @20²', 128, 20, (version, x) =>
+    version.lib.maxPool2d(x, { kernelSize: 5, stride: 1, padding: 2 }),
   ),
-  image('avgPool2d k8, DepthART stage0 12ch @112²', 12, 112, (s, x) =>
-    s.lib.avgPool2d(x, { kernelSize: 8 }),
+  image('avgPool2d k8, DepthART stage0 12ch @112²', 12, 112, (version, x) =>
+    version.lib.avgPool2d(x, { kernelSize: 8 }),
   ),
-  image('upsample2d ×2, YOLO26n neck 256ch @20²', 256, 20, (s, x) =>
-    s.lib.upsample2d(x, { scale: 2 }),
+  image('upsample2d ×2, YOLO26n neck 256ch @20²', 256, 20, (version, x) =>
+    version.lib.upsample2d(x, { scale: 2 }),
   ),
-  image('resizeBilinear2d alignCorners, DepthART head 48ch @112²→224²', 48, 112, (s, x) =>
-    s.lib.resizeBilinear2d(x, { outH: 224, outW: 224 }),
+  image('resizeBilinear2d alignCorners, DepthART head 48ch @112²→224²', 48, 112, (version, x) =>
+    version.lib.resizeBilinear2d(x, { outH: 224, outW: 224 }),
   ),
-  image('resizeBilinear2d halfPixel, 3ch @112²→448²', 3, 112, (s, x) =>
-    s.lib.resizeBilinear2d(x, { outH: 448, outW: 448, mode: 'halfPixel' }),
+  image('resizeBilinear2d halfPixel, 3ch @112²→448²', 3, 112, (version, x) =>
+    version.lib.resizeBilinear2d(x, { outH: 448, outW: 448, mode: 'halfPixel' }),
   ),
-  image('toChw f32, MobileNetV4 960ch @7²', 960, 7, (s, x) => s.lib.toChw(x, 'f32')),
-  image('toChw f16, YOLO26n PSA 128ch @20²', 128, 20, (s, x) => s.lib.toChw(x, 'f16')),
-  image('pad2d, 64ch @80²', 64, 80, (s, x) => s.lib.pad2d(x, { padH: 1, padW: 1 })),
+  image('toChw f32, MobileNetV4 960ch @7²', 960, 7, (version, x) => version.lib.toChw(x, 'f32')),
+  image('toChw f16, YOLO26n PSA 128ch @20²', 128, 20, (version, x) => version.lib.toChw(x, 'f16')),
+  image('pad2d, 64ch @80²', 64, 80, (version, x) => version.lib.pad2d(x, { padH: 1, padW: 1 })),
   {
     name: 'channelAffine + shift, 96ch @56²',
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = randHwc4(s, 96, 56, 56);
-      const scale = randMat(s, 1, 96);
-      const shift = randMat(s, 1, 96);
-      return () => s.lib.channelAffine(x, scale, shift);
+    build: (version) => {
+      const x = randHwc4(version, 96, 56, 56);
+      const scale = randMat(version, 1, 96);
+      const shift = randMat(version, 1, 96);
+      return () => version.lib.channelAffine(x, scale, shift);
     },
   },
   {
     name: 'toHwc4 from f32, YOLO26n input 3ch @640²',
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = s.up(s.rand(3 * 640 * 640), chw(3, 640, 640));
-      return () => s.lib.toHwc4(x);
+    build: (version) => {
+      const x = version.up(version.rand(3 * 640 * 640), chw(3, 640, 640));
+      return () => version.lib.toHwc4(x);
     },
   },
   {
     name: 'toHwc4 from f16, 96ch @56²',
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = s.up(s.rand(96 * 56 * 56), chw(96, 56, 56, 'f16'));
-      return () => s.lib.toHwc4(x);
+    build: (version) => {
+      const x = version.up(version.rand(96 * 56 * 56), chw(96, 56, 56, 'f16'));
+      return () => version.lib.toHwc4(x);
     },
   },
 ]);
