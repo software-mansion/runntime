@@ -3,7 +3,13 @@
  *  moves channels first and normalizes, all in one pass over the output. */
 
 import { RunntimeError } from '../../../../core/index.ts';
-import { checkImageSize, FORMAT_CHANNELS, type ImageBuffer, type ResizeMode } from '../image.ts';
+import {
+  checkImageBuffer,
+  checkImageSize,
+  FORMAT_CHANNELS,
+  type ImageBuffer,
+  type ResizeMode,
+} from '../image.ts';
 import type { ScaleBoxOptions } from '../ops/box.ts';
 import { resizeTransform, type Size } from '../ops/point.ts';
 
@@ -42,7 +48,7 @@ export interface ImagePreprocessor {
 }
 
 /** Index of the R, G and B byte inside one pixel of each format. */
-const RGB_INDEX = {
+export const RGB_INDEX = {
   rgb: [0, 1, 2],
   rgba: [0, 1, 2],
   bgr: [2, 1, 0],
@@ -130,15 +136,9 @@ export function createImagePreprocessor(
     if (out.length !== 3 * hw) {
       throw new RunntimeError('INVALID_ARGUMENT', `out: ${out.length} floats, expected ${3 * hw}`);
     }
-    checkImageSize(input.width, input.height);
+    checkImageBuffer(input);
     const ch = FORMAT_CHANNELS[input.format];
     const { data } = input;
-    if (data.length !== input.width * input.height * ch) {
-      throw new RunntimeError(
-        'INVALID_ARGUMENT',
-        `image: ${data.length} bytes for ${input.width}x${input.height} ${input.format}`,
-      );
-    }
     const [ri, gi, bi] = RGB_INDEX[input.format];
     const [ar, ag, ab] = alpha;
     const [br, bg, bb] = beta;

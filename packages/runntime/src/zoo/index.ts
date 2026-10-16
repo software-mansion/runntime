@@ -29,9 +29,11 @@ export {
   createMultimodalEmbedder,
   type EmbedInput,
   type EmbedOptions,
+  type EmbedPart,
   type MultimodalEmbedder,
   type MultimodalEmbedderModel,
   type EmbeddingTask,
+  type ImageTokenBudget,
 } from './tasks/multimodal/multimodalEmbedding.ts';
 
 export {

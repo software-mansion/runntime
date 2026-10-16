@@ -1,12 +1,13 @@
 /** EmbeddingGemma 2 embed core: token ids in, pooled embeddings out.
  *
  *  The embedding table lives on the CPU, so a forward's input is the embedded
- *  rows, written with positions, segments and pool weights. One input up to
- *  the largest bucket runs as a recorded replay per padded length; a longer
- *  input and a batch run eagerly. A batch packs its inputs into one
- *  sequence: segments keep them from attending to each other, positions
- *  restart per input and pick rope rows from one shared table, and each pool
- *  row averages one input. */
+ *  rows, written with positions, segments and pool weights. Image and video
+ *  tokens arrive as rows from the vision tower and replace the rows of their
+ *  placeholder ids. One input up to the largest bucket runs as a recorded
+ *  replay per padded length; a longer input and a batch run eagerly. A
+ *  batch packs its inputs into one sequence: segments keep them from
+ *  attending to each other, positions restart per input and pick rope rows
+ *  from one shared table, and each pool row averages one input. */
 
 import {
   createReplayCache,
@@ -20,7 +21,15 @@ import type { EmbeddingGemma2Inputs, EmbeddingGemma2Model } from './model.ts';
 import { ropeTables } from './rope.ts';
 
 /** Token counts a single input pads up to. Longer inputs run eagerly. */
-const EMBEDDINGGEMMA2_BUCKETS: readonly number[] = [16, 32, 64, 128, 256, 512];
+const EMBEDDINGGEMMA2_BUCKETS: readonly number[] = [16, 32, 64, 128, 256, 384, 512];
+
+/** One input: token ids, and the rows that stand in for its image and
+ *  video tokens. */
+export interface EmbeddingGemma2Input {
+  ids: readonly number[];
+  /** Rows [n · hidden] that replace the embedded ids from `at` on. */
+  media: readonly { at: number; rows: Float32Array }[];
+}
 
 interface Planes {
   x0: Float32Array;
@@ -34,15 +43,17 @@ interface Planes {
 function fillInputs(
   model: EmbeddingGemma2Model,
   T: number,
-  idsList: readonly (readonly number[])[],
+  inputs: readonly EmbeddingGemma2Input[],
   out: Planes,
 ): void {
+  const { hidden } = model.cfg;
   out.x0.fill(0);
   out.selector.fill(0);
   let start = 0;
-  idsList.forEach((ids, b) => {
+  inputs.forEach(({ ids, media }, b) => {
     const len = ids.length;
     model.embedRows(ids, out.x0, start);
+    for (const { at, rows } of media) out.x0.set(rows, (start + at) * hidden);
     for (let i = 0; i < len; i++) {
       const t = start + i;
       out.positions[t] = i;
@@ -61,11 +72,11 @@ function fillInputs(
 
 export interface EmbeddingGemma2EmbedCore {
   /** One input's pooled embedding [embeddingDim]. */
-  embedPooled(ids: readonly number[]): Promise<Float32Array>;
+  embedPooled(input: EmbeddingGemma2Input): Promise<Float32Array>;
   /** Pooled embeddings of many inputs, [B · embeddingDim] in order. */
-  embedPooledBatch(idsList: readonly (readonly number[])[]): Promise<Float32Array>;
+  embedPooledBatch(inputs: readonly EmbeddingGemma2Input[]): Promise<Float32Array>;
   /** Records every bucket's replay now. */
-  warmBuckets(probeIds: readonly number[]): Promise<void>;
+  warmBuckets(probe: EmbeddingGemma2Input): Promise<void>;
   dispose(): void;
 }
 
@@ -108,22 +119,23 @@ export function createEmbeddingGemma2EmbedCore(
       ({ x0: [T, hidden], positions: [T, 1], segments: [T, 2], selector: [1, T] }) as const,
     planeDtype: { x0: act, selector: act },
     // One full-length input of <pad> rows keeps the recording run finite.
-    captureFill: (T, scratch) => fillInputs(model, T, [new Array<number>(T).fill(0)], scratch),
+    captureFill: (T, scratch) =>
+      fillInputs(model, T, [{ ids: new Array<number>(T).fill(0), media: [] }], scratch),
     build: (T, inp) => model.forward(inputsOf(inp, T)),
   });
 
   /** One eager forward over inputs packed back to back. T rounds up to a
    *  multiple of 4, so the attention score matmuls take the vec4 kernels. */
-  const runEager = async (idsList: readonly (readonly number[])[]): Promise<Float32Array> => {
-    const T = Math.ceil(idsList.reduce((s, ids) => s + ids.length, 0) / 4) * 4;
-    const B = idsList.length;
+  const runEager = async (inputs: readonly EmbeddingGemma2Input[]): Promise<Float32Array> => {
+    const T = Math.ceil(inputs.reduce((s, { ids }) => s + ids.length, 0) / 4) * 4;
+    const B = inputs.length;
     const planes: Planes = {
       x0: new Float32Array(T * hidden),
       positions: new Float32Array(T),
       segments: new Float32Array(2 * T),
       selector: new Float32Array(B * T),
     };
-    fillInputs(model, T, idsList, planes);
+    fillInputs(model, T, inputs, planes);
     const upload = (data: Float32Array, rows: number, dtype: 'f32' | 'f16') =>
       tensor(data, { elems: data.length, dtype, dims: [rows, data.length / rows] });
     const values = {
@@ -133,35 +145,37 @@ export function createEmbeddingGemma2EmbedCore(
       selector: upload(planes.selector, B, act),
     };
     try {
-      const longest = Math.max(...idsList.map((ids) => ids.length));
+      const longest = Math.max(...inputs.map(({ ids }) => ids.length));
       return await toArray(model.forward(inputsOf(values, longest)));
     } finally {
       for (const v of Object.values(values)) v.buffer.destroy();
     }
   };
 
-  const embedPooled = (ids: readonly number[]): Promise<Float32Array> => {
-    const T = replays.pick(ids.length);
+  const embedPooled = (input: EmbeddingGemma2Input): Promise<Float32Array> => {
+    const T = replays.pick(input.ids.length);
     return T === undefined
-      ? runEager([ids])
-      : replays.run(T, (_, scratch) => fillInputs(model, T, [ids], scratch));
+      ? runEager([input])
+      : replays.run(T, (_, scratch) => fillInputs(model, T, [input], scratch));
   };
 
   const embedPooledBatch = async (
-    idsList: readonly (readonly number[])[],
+    inputs: readonly EmbeddingGemma2Input[],
   ): Promise<Float32Array> => {
     // Greedy packs in order, each up to maxT tokens.
-    const packs: (readonly number[])[][] = [];
+    const packs: EmbeddingGemma2Input[][] = [];
+    let pack: EmbeddingGemma2Input[] = [];
     let tokens = maxT;
-    for (const ids of idsList) {
-      if (tokens + ids.length > maxT) {
-        packs.push([]);
+    for (const input of inputs) {
+      if (tokens + input.ids.length > maxT) {
+        pack = [];
+        packs.push(pack);
         tokens = 0;
       }
-      packs.at(-1)!.push(ids);
-      tokens += ids.length;
+      pack.push(input);
+      tokens += input.ids.length;
     }
-    const out = new Float32Array(idsList.length * embeddingDim);
+    const out = new Float32Array(inputs.length * embeddingDim);
     let row = 0;
     for (const pack of packs) {
       out.set(await runEager(pack), row * embeddingDim);
@@ -170,9 +184,9 @@ export function createEmbeddingGemma2EmbedCore(
     return out;
   };
 
-  const warmBuckets = async (probeIds: readonly number[]): Promise<void> => {
+  const warmBuckets = async (probe: EmbeddingGemma2Input): Promise<void> => {
     for (const T of EMBEDDINGGEMMA2_BUCKETS) {
-      await replays.run(T, (_, scratch) => fillInputs(model, T, [probeIds], scratch));
+      await replays.run(T, (_, scratch) => fillInputs(model, T, [probe], scratch));
     }
   };
 
