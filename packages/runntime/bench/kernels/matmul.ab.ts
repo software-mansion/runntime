@@ -30,8 +30,8 @@ function mm(
 }
 
 /** The same routes on a device without subgroups, where smallm does not exist. */
-function noSg(c: AbCase): AbCase {
-  return { ...c, name: `${c.name}, no subgroups`, noSubgroups: true };
+function noSg(testCase: AbCase): AbCase {
+  return { ...testCase, name: `${testCase.name}, no subgroups`, noSubgroups: true };
 }
 
 function quant(name: string, t: number, e: number, k: number, o: number, bits: 8 | 4): AbCase {
