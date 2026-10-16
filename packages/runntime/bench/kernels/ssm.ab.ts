@@ -12,33 +12,33 @@ function stage(c: number, rank: number): AbCase[] {
   return [
     {
       name: `ssmScanProject, DepthART-B c ${c} rank ${rank}`,
-      build: (s) => {
-        const x = s.up(s.rand(c * P), chw(c, HW, HW));
-        const xw = randMat(s, 1, dirs * (rank + 2 * state) * c);
-        const dw = randMat(s, 1, dirs * c * rank);
-        return () => s.lib.ssmScanProject(x, xw, dw, { rank });
+      build: (version) => {
+        const x = version.up(version.rand(c * P), chw(c, HW, HW));
+        const xw = randMat(version, 1, dirs * (rank + 2 * state) * c);
+        const dw = randMat(version, 1, dirs * c * rank);
+        return () => version.lib.ssmScanProject(x, xw, dw, { rank });
       },
     },
     {
       name: `ssmSelectiveScan, DepthART-B c ${c} rank ${rank}`,
-      build: (s) => {
-        const x = s.up(s.rand(c * P), chw(c, HW, HW));
-        const proj = randMat(s, dirs * (c + 2 * state + rank), P);
+      build: (version) => {
+        const x = version.up(version.rand(c * P), chw(c, HW, HW));
+        const proj = randMat(version, dirs * (c + 2 * state + rank), P);
         // A is negative in the model: exp(Δ·A) decays.
-        const a = s.up(
-          s.rand(dirs * c * state).map((v) => -Math.abs(v) - 0.1),
+        const a = version.up(
+          version.rand(dirs * c * state).map((v) => -Math.abs(v) - 0.1),
           mat(1, dirs * c * state),
         );
-        const dSkip = randMat(s, 1, dirs * c);
-        const deltaBias = randMat(s, 1, dirs * c);
-        return () => s.lib.ssmSelectiveScan(x, proj, a, dSkip, deltaBias);
+        const dSkip = randMat(version, 1, dirs * c);
+        const deltaBias = randMat(version, 1, dirs * c);
+        return () => version.lib.ssmSelectiveScan(x, proj, a, dSkip, deltaBias);
       },
     },
     {
       name: `ssmScanMerge, DepthART-B c ${c}`,
-      build: (s) => {
-        const dir = randMat(s, dirs * c, P);
-        return () => s.lib.ssmScanMerge(dir, { c, h: HW, w: HW });
+      build: (version) => {
+        const dir = randMat(version, dirs * c, P);
+        return () => version.lib.ssmScanMerge(dir, { c, h: HW, w: HW });
       },
     },
   ];

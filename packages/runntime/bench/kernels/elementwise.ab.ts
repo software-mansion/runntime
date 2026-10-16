@@ -1,6 +1,6 @@
 /** The elementwise kernels: add, sub and mul in all four broadcast modes,
  *  the scalar and unary kernels, swiglu, and hwc4 inputs. */
-import { abSuite, type AbCase, type Side } from '../ab.ts';
+import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
 import { mat, randHwc4, randMat } from './inputs.ts';
 
@@ -17,10 +17,10 @@ function binary(
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
-    build: (s) => {
-      const x = randMat(s, m, n, dtype);
-      const y = randMat(s, b[0], b[1], dtype);
-      return () => s.lib[op](x, y);
+    build: (version) => {
+      const x = randMat(version, m, n, dtype);
+      const y = randMat(version, b[0], b[1], dtype);
+      return () => version.lib[op](x, y);
     },
   };
 }
@@ -30,25 +30,25 @@ function unary(
   m: number,
   n: number,
   dtype: Float,
-  op: (s: Side, x: Value) => Value,
+  op: (version: Version, x: Value) => Value,
 ): AbCase {
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
-    build: (s) => {
-      const x = randMat(s, m, n, dtype);
-      return () => op(s, x);
+    build: (version) => {
+      const x = randMat(version, m, n, dtype);
+      return () => op(version, x);
     },
   };
 }
 
-function hwc4(name: string, op: (s: Side, x: Value) => Value): AbCase {
+function hwc4(name: string, op: (version: Version, x: Value) => Value): AbCase {
   return {
     name,
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = randHwc4(s, 64, 80, 80);
-      return () => op(s, x);
+    build: (version) => {
+      const x = randHwc4(version, 64, 80, 80);
+      return () => op(version, x);
     },
   };
 }
@@ -67,56 +67,60 @@ abSuite('elementwise', [
   binary('mul f16, same shape [512,640]', 'mul', 512, 640, [512, 640], 'f16'),
   binary('add, 2D grid, 2^23 elements', 'add', 1, BIG, [1, BIG]),
 
-  unary('addScalar [512,640]', 512, 640, 'f32', (s, x) => s.lib.add(x, 0.5)),
-  unary('mulScalar f16 [512,640]', 512, 640, 'f16', (s, x) => s.lib.mul(x, 0.5)),
-  unary('clamp [512,640]', 512, 640, 'f32', (s, x) => s.lib.clamp(x, -0.5, 0.5)),
-  unary('gelu, MiniLM fc1 [128,1536]', 128, 1536, 'f32', (s, x) => s.lib.gelu(x)),
-  unary('gelu f16 [128,1536]', 128, 1536, 'f16', (s, x) => s.lib.gelu(x)),
-  unary('silu, streaming [500,320]', 500, 320, 'f32', (s, x) => s.lib.silu(x)),
-  unary('sigmoid [512,640]', 512, 640, 'f32', (s, x) => s.lib.sigmoid(x)),
-  unary('tanh [512,640]', 512, 640, 'f32', (s, x) => s.lib.tanh(x)),
-  unary('asinh, streaming frontend [500,80]', 500, 80, 'f32', (s, x) => s.lib.asinh(x)),
+  unary('addScalar [512,640]', 512, 640, 'f32', (version, x) => version.lib.add(x, 0.5)),
+  unary('mulScalar f16 [512,640]', 512, 640, 'f16', (version, x) => version.lib.mul(x, 0.5)),
+  unary('clamp [512,640]', 512, 640, 'f32', (version, x) => version.lib.clamp(x, -0.5, 0.5)),
+  unary('gelu, MiniLM fc1 [128,1536]', 128, 1536, 'f32', (version, x) => version.lib.gelu(x)),
+  unary('gelu f16 [128,1536]', 128, 1536, 'f16', (version, x) => version.lib.gelu(x)),
+  unary('silu, streaming [500,320]', 500, 320, 'f32', (version, x) => version.lib.silu(x)),
+  unary('sigmoid [512,640]', 512, 640, 'f32', (version, x) => version.lib.sigmoid(x)),
+  unary('tanh [512,640]', 512, 640, 'f32', (version, x) => version.lib.tanh(x)),
+  unary('asinh, streaming frontend [500,80]', 500, 80, 'f32', (version, x) => version.lib.asinh(x)),
   {
     name: 'rsqrt [512,640]',
-    build: (s) => {
-      const x = s.up(
-        s.rand(512 * 640).map((v) => Math.abs(v) + 0.5),
+    build: (version) => {
+      const x = version.up(
+        version.rand(512 * 640).map((v) => Math.abs(v) + 0.5),
         mat(512, 640),
       );
-      return () => s.lib.rsqrt(x);
+      return () => version.lib.rsqrt(x);
     },
   },
-  unary('silu, 2D grid, 2^23 elements', 1, BIG, 'f32', (s, x) => s.lib.silu(x)),
+  unary('silu, 2D grid, 2^23 elements', 1, BIG, 'f32', (version, x) => version.lib.silu(x)),
 
   {
     name: 'swiglu, privacy-filter [512,640]',
-    build: (s) => {
-      const glu = randMat(s, 512, 640);
-      const lin = randMat(s, 512, 640);
-      return () => s.lib.swiglu(glu, lin);
+    build: (version) => {
+      const glu = randMat(version, 512, 640);
+      const lin = randMat(version, 512, 640);
+      return () => version.lib.swiglu(glu, lin);
     },
   },
   {
     name: 'swiglu f16 [512,640]',
     needs: ['shader-f16'],
-    build: (s) => {
-      const glu = randMat(s, 512, 640, 'f16');
-      const lin = randMat(s, 512, 640, 'f16');
-      return () => s.lib.swiglu(glu, lin);
+    build: (version) => {
+      const glu = randMat(version, 512, 640, 'f16');
+      const lin = randMat(version, 512, 640, 'f16');
+      return () => version.lib.swiglu(glu, lin);
     },
   },
-  unary('swigluChunk, Moonshine-tiny fc1 [1,2304]', 1, 2304, 'f32', (s, x) => s.lib.swigluChunk(x)),
-  unary('swigluChunk f16, prefill [200,2304]', 200, 2304, 'f16', (s, x) => s.lib.swigluChunk(x)),
+  unary('swigluChunk, Moonshine-tiny fc1 [1,2304]', 1, 2304, 'f32', (version, x) =>
+    version.lib.swigluChunk(x),
+  ),
+  unary('swigluChunk f16, prefill [200,2304]', 200, 2304, 'f16', (version, x) =>
+    version.lib.swigluChunk(x),
+  ),
 
-  hwc4('silu on hwc4, YOLO26n [64,80,80]', (s, x) => s.lib.silu(x)),
-  hwc4('mulScalar on hwc4 [64,80,80]', (s, x) => s.lib.mul(x, 0.5)),
+  hwc4('silu on hwc4, YOLO26n [64,80,80]', (version, x) => version.lib.silu(x)),
+  hwc4('mulScalar on hwc4 [64,80,80]', (version, x) => version.lib.mul(x, 0.5)),
   {
     name: 'add hwc4 + hwc4, YOLO26n residual [64,80,80]',
     needs: ['shader-f16'],
-    build: (s) => {
-      const x = randHwc4(s, 64, 80, 80);
-      const y = randHwc4(s, 64, 80, 80);
-      return () => s.lib.add(x, y);
+    build: (version) => {
+      const x = randHwc4(version, 64, 80, 80);
+      const y = randHwc4(version, 64, 80, 80);
+      return () => version.lib.add(x, y);
     },
   },
 ]);

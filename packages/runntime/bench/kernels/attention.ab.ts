@@ -24,17 +24,17 @@ function sdpa(name: string, o: Attn): AbCase {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
     noSubgroups: o.noSubgroups,
-    build: (s) => {
-      const q = randMat(s, qLen, qHeads * headDim, dtype);
-      const k = randMat(s, kvLen, kvHeads * headDim, dtype);
-      const v = randMat(s, kvLen, kvHeads * headDim, dtype);
-      const sinks = o.sinks ? randMat(s, 1, qHeads) : undefined;
+    build: (version) => {
+      const q = randMat(version, qLen, qHeads * headDim, dtype);
+      const k = randMat(version, kvLen, kvHeads * headDim, dtype);
+      const v = randMat(version, kvLen, kvHeads * headDim, dtype);
+      const sinks = o.sinks ? randMat(version, 1, qHeads) : undefined;
       const windowLeft = o.window ?? Infinity;
       const windowRight = o.causal ? 0 : (o.window ?? Infinity);
       // A causal query block sits at the end of the keys, like a decoder step.
       const qPosOffset = o.causal ? kvLen - qLen : undefined;
       return () =>
-        s.lib.sdpa(q, k, v, {
+        version.lib.sdpa(q, k, v, {
           qHeads,
           kvHeads,
           headDim,
@@ -52,16 +52,16 @@ function packed(name: string, t: number, heads: number, headDim: number, dtype: 
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
-    build: (s) => {
-      const qkv = randMat(s, t, 3 * heads * headDim, dtype);
+    build: (version) => {
+      const qkv = randMat(version, t, 3 * heads * headDim, dtype);
       // Two sentences in one batch: rows attend within their own half.
       const half = t / 2;
       const seg = Float32Array.from({ length: t * 2 }, (_, i) =>
         i >> 1 < half ? (i & 1 ? half : 0) : i & 1 ? t : half,
       );
-      const segments = s.up(seg, mat(t, 2));
+      const segments = version.up(seg, mat(t, 2));
       return () =>
-        s.lib.sdpaPacked(qkv, {
+        version.lib.sdpaPacked(qkv, {
           qHeads: heads,
           kvHeads: heads,
           headDim,
@@ -78,11 +78,11 @@ function rope(name: string, t: number, width: number, headDim: number, dtype: Fl
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
-    build: (s) => {
-      const x = randMat(s, t, width, dtype);
-      const cos = randMat(s, t, headDim);
-      const sin = randMat(s, t, headDim);
-      return () => s.lib.rope(x, cos, sin, { headDim });
+    build: (version) => {
+      const x = randMat(version, t, width, dtype);
+      const cos = randMat(version, t, headDim);
+      const sin = randMat(version, t, headDim);
+      return () => version.lib.rope(x, cos, sin, { headDim });
     },
   };
 }
