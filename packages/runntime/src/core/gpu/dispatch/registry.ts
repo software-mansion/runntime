@@ -21,7 +21,7 @@ import {
   tanhSpec,
 } from './elementwise.ts';
 import { layerNormSpec, meanSpec, rmsNormSpec, softmaxSpec, topkSpec } from './reduce.ts';
-import { attnSpec, ropeSpec } from './attention.ts';
+import { attnSpec, localAttentionSpec, ropeSpec } from './attention.ts';
 import {
   avgPool2dHwc4Spec,
   channelAffineHwc4Spec,
@@ -29,6 +29,7 @@ import {
   conv1dSpec,
   conv2dHwc4Spec,
   convTranspose2dSpec,
+  gluConv1dSpec,
   maxPool2dHwc4Spec,
   pad2dHwc4Spec,
   resizeBilinearHwc4Spec,
@@ -86,9 +87,11 @@ export const specs = {
   argmaxDot: argmaxDotSpec,
   // attention
   attn: attnSpec,
+  localAttention: localAttentionSpec,
   rope: ropeSpec,
   // conv
   conv1d: conv1dSpec,
+  gluConv1d: gluConv1dSpec,
   convTranspose2d: convTranspose2dSpec,
   conv2dHwc4: conv2dHwc4Spec,
   maxPool2dHwc4: maxPool2dHwc4Spec,

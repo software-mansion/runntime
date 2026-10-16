@@ -84,3 +84,25 @@ export function conv1d(
     [kernelSize, stride, padLeft, padRight, bias ? 1 : 0, act],
   );
 }
+
+/** GLU then a causal depthwise conv over time, in one dispatch. x [T, 2C] is
+ *  clamped to [lo, hi] and gated, first half by σ of the second; w tap-major
+ *  [kernelSize, C] then mixes each channel's last kernelSize frames.
+ *  Returns [T, C]. C must be a multiple of 4. */
+export function gluConv1d(x: Value, w: Value, opts: { lo: number; hi: number }): Value {
+  const [t, cols, dtype] = want2d('gluConv1d', x, FLOAT_DTYPES);
+  const [kernelSize, c, wDtype] = want2d('gluConv1d.w', w, FLOAT_DTYPES);
+  if (wDtype !== dtype) {
+    throw new Error(`gluConv1d: weight dtype ${wDtype} must match the input's ${dtype}`);
+  }
+  if (cols !== 2 * c || c % 4 !== 0) {
+    throw new Error(`gluConv1d: x cols ${cols} must be 2·C for weight [K, C], C a multiple of 4`);
+  }
+  const { lo, hi } = opts;
+  if (!(lo <= hi)) throw new Error(`gluConv1d: lo (${lo}) must be <= hi (${hi})`);
+  return pending({ elems: t * c, dtype, dims: [t, c] }, 'gluConv1d', [x, w], undefined, [
+    kernelSize,
+    lo,
+    hi,
+  ]);
+}

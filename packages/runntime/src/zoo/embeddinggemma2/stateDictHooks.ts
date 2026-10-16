@@ -1,14 +1,19 @@
 /** Maps the HF EmbeddingGemma2Model checkpoint onto the text model and the
- *  vision tower as lazy derived tensors; nothing is fetched here. Each
- *  keeps only its own tensors, so one checkpoint with every tower loads
- *  into either. */
+ *  vision and audio towers as lazy derived tensors; nothing is fetched here.
+ *  Each keeps only its own tensors, so one checkpoint with every tower loads
+ *  into any of them. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
-import type { EmbeddingGemma2Config, EmbeddingGemma2VisionConfig } from './config.ts';
+import type {
+  EmbeddingGemma2AudioConfig,
+  EmbeddingGemma2Config,
+  EmbeddingGemma2VisionConfig,
+} from './config.ts';
 
 const SOURCE = 'language_model.';
 const VISION_SOURCES = ['vision_tower.', 'embed_vision.'] as const;
+const AUDIO_SOURCES = ['audio_tower.', 'embed_audio.'] as const;
 
 /** Row r of each d-row head moves so (p, p + d/2) become (2p, 2p + 1). */
 function interleaveHeads(src: Float32Array, rows: number, cols: number, d: number): Float32Array {
@@ -54,6 +59,10 @@ function remap(sd: LazyStateDict, prefix: string, sources: readonly string[], wh
     },
   };
 }
+
+/** A weightless norm's ones. */
+const ones = (n: number) =>
+  derivedTensor([n], () => Promise.resolve(new Float32Array(n).fill(1)), 0);
 
 /** q, k and v in one weight. q and k rows go from the checkpoint's
  *  half-split rope layout to the kernel's interleaved pairs, per `block`
@@ -212,10 +221,162 @@ export function transformEmbeddingGemma2VisionStateDict(
     }
     for (const n of LAYER_NORMS) put(`${L}.${n}.scale`, take(`${S}.${n}.weight`));
   }
-  put(
-    'embedding_pre_projection_norm.scale',
-    derivedTensor([hidden], () => Promise.resolve(new Float32Array(hidden).fill(1)), 0),
-  );
+  put('embedding_pre_projection_norm.scale', ones(hidden));
   put('embedding_projection.weight', take('embed_vision.embedding_projection.weight'));
+  done();
+}
+
+/** The audio tower's mapping. Each clipped linear's four bounds become one
+ *  CPU tensor [inMin, inMax, outMin, outMax]. q, k and v fuse into one
+ *  weight; they share their bounds. Each layer's distance bias rows and q
+ *  column scales are computed here, and the feed-forward residual weight
+ *  folds into its post norm. */
+export function transformEmbeddingGemma2AudioStateDict(
+  sd: LazyStateDict,
+  prefix: string,
+  cfg: EmbeddingGemma2AudioConfig,
+): void {
+  const what = 'embeddinggemma2 audio state dict';
+  const { take, put, done } = remap(sd, prefix, AUDIO_SOURCES, what);
+  const { hidden, headDim, convKernel: K, window } = cfg;
+  const [c0, c1] = cfg.convChannels;
+  const S = 'audio_tower.';
+  const scalar = async (t: LazyTensor) => (await t.f32())[0]!;
+  const bounds = (name: string) =>
+    ['input_min', 'input_max', 'output_min', 'output_max'].map((b) => take(`${name}.${b}`));
+  const clip = (b: LazyTensor[]) =>
+    derivedTensor([4], async () => Float32Array.from(await Promise.all(b.map(scalar))), 0);
+  const clipped = (from: string, to: string) => {
+    put(`${to}.weight`, take(`${from}.linear.weight`));
+    put(`${to}.clip`, clip(bounds(from)));
+  };
+  const reshaped = (t: LazyTensor, shape: number[], map?: (src: Float32Array) => Float32Array) =>
+    derivedTensor(shape, async () => (map ? map(await t.f32()) : t.f32()), t.byteLength);
+
+  // The first conv has one input channel: [c0, 9] as a linear over 3×3
+  // taps. The second reads its taps (row, column, channel) major.
+  const sub = `${S}subsample_conv_projection.`;
+  put('conv0.weight', reshaped(take(`${sub}layer0.conv.weight`), [c0, 9]));
+  put('norm0.weight', take(`${sub}layer0.norm.weight`));
+  put(
+    'conv1.weight',
+    reshaped(take(`${sub}layer1.conv.weight`), [c1, 9 * c0], (w) => {
+      const out = new Float32Array(w.length);
+      for (let o = 0; o < c1; o++) {
+        for (let c = 0; c < c0; c++) {
+          for (let k = 0; k < 9; k++) out[(o * 9 + k) * c0 + c] = w[(o * c0 + c) * 9 + k]!;
+        }
+      }
+      return out;
+    }),
+  );
+  put('norm1.weight', take(`${sub}layer1.norm.weight`));
+  put('input_proj.weight', take(`${sub}input_proj_linear.weight`));
+
+  // Sinusoidal rows for distances 0 … window − 1: sines, then cosines.
+  const half = hidden / 2;
+  const pe = new Float32Array(window * hidden);
+  for (let j = 0; j < window; j++) {
+    for (let i = 0; i < half; i++) {
+      const a = j * Math.exp((-i * Math.log(10000)) / (half - 1));
+      pe[j * hidden + i] = Math.sin(a);
+      pe[j * hidden + half + i] = Math.cos(a);
+    }
+  }
+  // q's scale before the per-column softplus, fixed by the architecture.
+  const qScale = headDim ** -0.5 / Math.LN2;
+
+  for (let i = 0; i < cfg.layers; i++) {
+    const L = `layers.${i}`;
+    const T = `${S}layers.${i}`;
+    for (const ff of ['feed_forward1', 'feed_forward2']) {
+      put(`${L}.${ff}.pre_layer_norm.scale`, take(`${T}.${ff}.pre_layer_norm.weight`));
+      clipped(`${T}.${ff}.ffw_layer_1`, `${L}.${ff}.ffw_layer_1`);
+      clipped(`${T}.${ff}.ffw_layer_2`, `${L}.${ff}.ffw_layer_2`);
+      put(
+        `${L}.${ff}.post_layer_norm.scale`,
+        reshaped(take(`${T}.${ff}.post_layer_norm.weight`), [hidden], (w) =>
+          w.map((v) => v * cfg.residualWeight),
+        ),
+      );
+    }
+
+    const A = `${T}.self_attn`;
+    const qkv = ['q_proj', 'k_proj', 'v_proj'].map((n) => ({
+      w: take(`${A}.${n}.linear.weight`),
+      b: bounds(`${A}.${n}`),
+    }));
+    put(
+      `${L}.qkv.weight`,
+      derivedTensor(
+        [3 * hidden, hidden],
+        async () => {
+          const out = new Float32Array(3 * hidden * hidden);
+          for (const [n, t] of qkv.entries()) out.set(await t.w.f32(), n * hidden * hidden);
+          return out;
+        },
+        qkv.reduce((s, t) => s + t.w.byteLength, 0),
+      ),
+    );
+    put(
+      `${L}.qkv.clip`,
+      derivedTensor([4], async () => {
+        const all = await Promise.all(qkv.map((t) => Promise.all(t.b.map(scalar))));
+        if (new Set(all.map(String)).size > 1) {
+          throw checkpointMismatch(what, `${A}: q, k and v have different bounds`);
+        }
+        return Float32Array.from(all.flat().slice(0, 4));
+      }),
+    );
+    clipped(`${A}.post`, `${L}.post`);
+    const rk = take(`${A}.relative_k_proj.weight`);
+    put(
+      `${L}.rel`,
+      derivedTensor(
+        [window, hidden],
+        async () => {
+          const w = await rk.f32();
+          const out = new Float32Array(window * hidden);
+          for (let j = 0; j < window; j++) {
+            for (let o = 0; o < hidden; o++) {
+              let s = 0;
+              for (let n = 0; n < hidden; n++) s += pe[j * hidden + n]! * w[o * hidden + n]!;
+              out[j * hidden + o] = s;
+            }
+          }
+          return out;
+        },
+        rk.byteLength,
+      ),
+    );
+    put(
+      `${L}.q_scale`,
+      reshaped(take(`${A}.per_dim_scale`), [headDim], (s) =>
+        s.map((x) => qScale * Math.log1p(Math.exp(x))),
+      ),
+    );
+
+    const C = `${T}.lconv1d`;
+    put(`${L}.lconv.pre_layer_norm.scale`, take(`${C}.pre_layer_norm.weight`));
+    clipped(`${C}.linear_start`, `${L}.lconv.linear_start`);
+    put(
+      `${L}.lconv.conv`,
+      reshaped(take(`${C}.depthwise_conv1d.weight`), [K, hidden], (w) => {
+        const out = new Float32Array(w.length);
+        for (let c = 0; c < hidden; c++)
+          for (let t = 0; t < K; t++) out[t * hidden + c] = w[c * K + t]!;
+        return out;
+      }),
+    );
+    put(`${L}.lconv.conv_norm.scale`, take(`${C}.conv_norm.weight`));
+    clipped(`${C}.linear_end`, `${L}.lconv.linear_end`);
+    for (const n of ['norm_pre_attn', 'norm_post_attn', 'norm_out']) {
+      put(`${L}.${n}.scale`, take(`${T}.${n}.weight`));
+    }
+  }
+  put('output_proj.weight', take(`${S}output_proj.weight`));
+  put('output_proj.bias', take(`${S}output_proj.bias`));
+  put('embedding_pre_projection_norm.scale', ones(cfg.outputDim));
+  put('embedding_projection.weight', take('embed_audio.embedding_projection.weight'));
   done();
 }

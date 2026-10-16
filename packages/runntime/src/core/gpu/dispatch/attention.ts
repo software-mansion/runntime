@@ -29,6 +29,7 @@ import {
   attnFlashLanes,
   createAttnFlashPipeline,
 } from '../../kernels/attention/attnFlash.ts';
+import { attnLocalHandle, createAttnLocalPipeline } from '../../kernels/attention/attnLocal.ts';
 import { createRopePipeline, ropeHandle } from '../../kernels/attention/rope.ts';
 import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
@@ -185,6 +186,44 @@ export const attnSpec = defineSpec({
         );
       }
     }
+  },
+});
+
+export const localAttentionSpec = defineSpec({
+  attrs: (p) => {
+    const [heads, headDim, window, kScale, softcap] = p.attrs as [
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    return { heads, headDim, window, kScale, softcap };
+  },
+  cfg: (_node, attrs) => ({ heads: attrs.heads, headDim: attrs.headDim, window: attrs.window }),
+  pipeline: (root, dtype, cfg) => createAttnLocalPipeline(root, cfg, elemFor(dtype)),
+  encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
+    const dtype = node.shape.dtype;
+    const [rows] = node.shape.dims as [number, number];
+    return [
+      attnLocalHandle(
+        ctx.root,
+        pipeline,
+        {
+          rows,
+          heads: attrs.heads,
+          kScale: attrs.kScale,
+          softcap: attrs.softcap,
+        },
+        {
+          qkv: narrowFloat(inputs[0]!, dtype),
+          rel: narrow(inputs[1]!, 'f32'),
+          qScale: narrow(inputs[2]!, 'f32'),
+          out: narrowFloat(out, dtype),
+        },
+        elemFor(dtype),
+      ),
+    ];
   },
 });
 

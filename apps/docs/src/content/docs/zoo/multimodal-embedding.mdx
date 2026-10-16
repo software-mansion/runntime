@@ -1,12 +1,13 @@
 ---
 title: Multimodal embedding
-description: Turn text, images and video into vectors in one space.
+description: Turn text, images, video and audio into vectors in one space.
 ---
 
-Multimodal embedding turns text, images and video into vectors of numbers
-in one shared space. A photo of cats and the words "cats asleep on a sofa"
-get similar vectors, so one search finds pictures by a description,
-descriptions by a picture, or both mixed together.
+Multimodal embedding turns text, images, video and audio into vectors of
+numbers in one shared space. A photo of cats and the words "cats asleep on
+a sofa" get similar vectors, so one search finds pictures by a
+description, descriptions by a picture, recordings by what is said in
+them, or all of them mixed together.
 
 `createMultimodalEmbedder` runs Google's
 [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) and
@@ -65,7 +66,8 @@ interface MultimodalEmbedder {
 }
 
 type EmbedInput = EmbedPart | readonly EmbedPart[];
-type EmbedPart = string | { image: ImageBuffer } | { video: readonly ImageBuffer[] };
+type EmbedPart =
+  string | { image: ImageBuffer } | { video: readonly ImageBuffer[] } | { audio: Float32Array };
 
 interface EmbedOptions {
   task?: EmbeddingTask;
@@ -95,6 +97,23 @@ An input is one part, or a list of parts that together make one vector:
 - **video** - `{ video }`, its frames as `ImageBuffer`s in order. Pick the
   frames yourself, about one per second. Each frame takes at most 140
   tokens.
+- **audio** - `{ audio }`, a clip as mono samples at 16 kHz: speech, music
+  or other sounds. It takes one token per 40 ms, and only
+  its first 30 seconds count, at most 750 tokens.
+
+`decodeAudio` turns an audio file into samples, see
+[Speech to text](/zoo/speech-to-text/#audio-input):
+
+```ts twoslash
+import { createMultimodalEmbedder, decodeAudio, models } from 'runntime/zoo';
+declare const file: File;
+const embedder = await createMultimodalEmbedder(
+  models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
+);
+// ---cut---
+const audio = await decodeAudio(await file.arrayBuffer());
+const clip = await embedder.embed({ audio });
+```
 
 A list mixes them in reading order, like a product page with its text and
 photos:
@@ -115,18 +134,18 @@ const listing = await embedder.embed([
 ]);
 ```
 
-An input must fit in `maxTokens`, 2048 by default. Each image or frame
-counts its tokens plus two, so at the default budget an input holds at
-least 7 images or 14 video frames. Text that does not fit is cut; an input
-with images or video that does not fit is an error, thrown before any
-image runs.
+An input must fit in `maxTokens`, 2048 by default. Each image, frame or
+clip counts its tokens plus two, so at the default budget an input holds
+at least 7 images, 14 video frames or 2 clips of 30 seconds. Text that
+does not fit is cut; an input with images, video or audio that does not
+fit is an error, thrown before any of it runs.
 
 ## Tasks
 
 The model was trained with a short instruction before each text, and
 `task` adds it. A search embeds its queries with `query` and what it
 searches with `document`. The instructions are for text only, so embed
-images and video without a task. In a mixed input the instruction goes
+images, video and audio without a task. In a mixed input the instruction goes
 before the whole input.
 
 ```ts twoslash
@@ -193,6 +212,7 @@ copy it with a field changed, or point at your own files.
 interface MultimodalEmbedderModel {
   readonly modelPath?: ModelPath;
   readonly visionPath?: ModelPath | null;
+  readonly audioPath?: ModelPath | null;
   readonly tokenizerPath?: string;
   readonly dtype?: 'f32' | 'f16';
   readonly maxTokens?: number; // default 2048
@@ -207,10 +227,11 @@ Examples:
 ```ts twoslash
 import { createMultimodalEmbedder, models } from 'runntime/zoo';
 
-// Text only: the vision tower is not downloaded.
+// Text only: neither tower is downloaded.
 await createMultimodalEmbedder({
   ...models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
   visionPath: null,
+  audioPath: null,
 });
 
 // More detail per image, slower.
@@ -222,13 +243,15 @@ await createMultimodalEmbedder({
 
 - **modelPath** - the text model's weights, a `model.safetensors` file.
 - **visionPath** - the vision tower's weights, needed for images and
-  video. `null` loads no vision tower: a smaller download for text only,
-  and images and video become an error.
+  video. `null` loads no vision tower: a smaller download, and images and
+  video become an error.
+- **audioPath** - the audio tower's weights, needed for audio. `null` loads
+  no audio tower: a smaller download, and audio becomes an error.
 - **tokenizerPath** - the `tokenizer.json` file.
 - **dtype** - `'f16'` or `'f32'`. `f16` runs the model in half precision,
   half the GPU memory, and needs a device with `shader-f16`. Default: `f16`
   where the device has it, `f32` elsewhere. Either loads any weight file.
-- **maxTokens** - longest input in tokens, image and video tokens
+- **maxTokens** - longest input in tokens, image, video and audio tokens
   included, at most 2048.
 - **imageTokens** - most tokens one image takes: 70, 140, 280, 560 or
   1120 tokens. More detail takes longer. Video frames always take at
@@ -242,10 +265,19 @@ Every field is optional. A missing one comes from
 The second argument controls the download, the same as for every task:
 `cache`, `onProgress`, `signal`. See
 [Text embedding](/zoo/text-embedding/#loading-options). `onProgress`
-counts the text model and the vision tower together.
+counts the text model and the towers together.
 
 ## Supported models
 
-| Model                                                                                 | Config                                        | Inputs              | Max tokens | Embedding dimensions | Weights                                                                     |
-| ------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------- | ---------- | -------------------- | --------------------------------------------------------------------------- |
-| [EmbeddingGemma 2](https://huggingface.co/software-mansion/runntime-embeddinggemma-2) | `models.multimodalEmbedding.EMBEDDINGGEMMA_2` | text, images, video | 2048       | 768, 512, 256, 128   | text f16 542 MB, f32 816 MB; vision f16 336 MB, f32 671 MB; tokenizer 32 MB |
+| Model                | [EmbeddingGemma 2](https://huggingface.co/software-mansion/runntime-embeddinggemma-2) |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| Config               | `models.multimodalEmbedding.EMBEDDINGGEMMA_2`                                         |
+| Inputs               | text, images, video, audio                                                            |
+| Max tokens           | 2048                                                                                  |
+| Embedding dimensions | 768, 512, 256, 128                                                                    |
+| Text model           | f16 542 MB, f32 816 MB                                                                |
+| Vision tower         | f16 336 MB, f32 671 MB                                                                |
+| Audio tower          | f16 611 MB, f32 1223 MB                                                               |
+| Tokenizer            | 32 MB                                                                                 |
+
+`visionPath: null` or `audioPath: null` skips a tower's download.

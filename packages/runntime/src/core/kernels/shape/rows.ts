@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type F32Buffer,
@@ -106,7 +106,8 @@ function makeGatherFromVariant(elem: Elem) {
     if (i >= meta.total) {
       return;
     }
-    const r = d.u32(i / meta.cols); // explicit integer division (codebase convention)
+    // Integer division: an f32 quotient loses rows past 2^24 elements.
+    const r = std.intdiv(i, meta.cols);
     const c = i % meta.cols;
     const srcRow = d.u32(layout.$.idx[r]!);
     layout.$.out[i] = layout.$.x[srcRow * meta.cols + c]!;
@@ -176,7 +177,8 @@ function makeGatherVariant(elem: Elem) {
     if (i >= meta.total) {
       return;
     }
-    const r = d.u32(i / meta.cols); // explicit integer division (codebase convention)
+    // Integer division: an f32 quotient loses rows past 2^24 elements.
+    const r = std.intdiv(i, meta.cols);
     const c = i % meta.cols;
     layout.$.out[i] = layout.$.x[layout.$.idx[r]! * meta.cols + c]!;
   });
