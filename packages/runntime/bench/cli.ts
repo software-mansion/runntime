@@ -1,11 +1,12 @@
 /** `pnpm bench:ab kernels [-b <ref>] [-k matmul,softmax]`: copies the base
  *  ref's `src` to `.bench/base`, runs the kernel A/B in headless Chromium and
- *  prints the report, also saved to `.bench/results/report.md`. */
+ *  prints the report as a table, with a markdown copy for the pull request in
+ *  `.bench/results/report.md`. */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from 'node:util';
-import { formatTable, type CaseResult } from './stats.ts';
+import { parseArgs, styleText } from 'node:util';
+import { formatTable, formatTerminal, type CaseResult, type Verdict } from './stats.ts';
 
 const pkg = fileURLToPath(new URL('..', import.meta.url));
 const base = `${pkg}.bench/base`;
@@ -43,12 +44,15 @@ const run = spawnSync(
 const rows = readdirSync(results)
   .filter((f) => f.endsWith('.json'))
   .flatMap((f) => JSON.parse(readFileSync(`${results}/${f}`, 'utf8')) as CaseResult[]);
-const report = [
-  `A: \`${values.base}\` (${sha}), B: \`HEAD\` (${head})${dirty}`,
-  '',
-  formatTable(rows),
-  '',
-].join('\n');
-writeFileSync(`${results}/report.md`, report);
-console.log(`\n${report}`);
+const title = `A: \`${values.base}\` (${sha}), B: \`HEAD\` (${head})${dirty}`;
+writeFileSync(`${results}/report.md`, `${title}\n\n${formatTable(rows)}\n`);
+
+const colors: Record<Verdict, 'green' | 'red' | 'dim'> = {
+  faster: 'green',
+  slower: 'red',
+  same: 'dim',
+};
+const paint = (v: Verdict, text: string) => styleText(colors[v], text);
+console.log(`\n${title.replaceAll('`', '')}\n\n${formatTerminal(rows, paint)}\n`);
+console.log(`Markdown for the pull request: ${results}/report.md`);
 process.exit(run.status ?? 1);
