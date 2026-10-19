@@ -251,6 +251,15 @@ describe('attn kernels', () => {
     await checkSdpa(deviceFor(ctx, device, dtype, subgroups), c, dtype);
   });
 
+  // Known bug: the batch kernel splits its flat index into row and head with
+  // d.u32(idx / qHeads), which TypeGPU compiles to u32(f32(idx) /
+  // f32(qHeads)). f32 counts exactly only up to 2^24, so past 2^24 row-heads
+  // rows come out wrong. Turn into a plain `it` with the fix.
+  // batch: past GRID_Y_STRIDE row-heads
+  it.fails('past 2^24 row-heads (batch)', () =>
+    checkSdpa(withoutSubgroups, { qLen: 2 ** 24 + 3, kvLen: 2, qHeads: 1, kvHeads: 1, headDim: 1 }),
+  );
+
   // Known bug: an empty tensor reaches createBuffer and fails with the
   // browser's TypeError instead of a RunntimeError. Turn into `it` with the fix.
   it.fails('rejects qLen = 0 with an INVALID_ARGUMENT', () => {
