@@ -77,7 +77,7 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
 - Benchmarks always run on the same machine, and every run is saved to a file,
   so a slow regression over many PRs shows up.
 - A change to a kernel gets a kernel A/B against `main`:
-  `pnpm --filter runntime bench:ab kernels [-b <ref>] [-k matmul,softmax]`.
+  `pnpm --filter runntime bench:ab kernels [-b <ref>] [-k matmul,reduce]`.
   It copies the base ref's `src` to `.bench/base`, runs both copies in one
   headless Chromium page on the same inputs with their rounds interleaved,
   and prints a table, with a markdown copy for the pull request in
