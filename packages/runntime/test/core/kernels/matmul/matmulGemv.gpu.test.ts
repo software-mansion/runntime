@@ -67,6 +67,10 @@ describe('matmulGemv kernels', () => {
     { name: 'the most rows it takes', m: MATMUL_SMALL_M_MAX_ROWS, k: 70, n: 4, dtype: 'f32' },
     { name: 'four rows', m: 4, k: 256, n: 128, dtype: 'f16' },
     { name: 'a k % 32 tail', m: 8, k: 70, n: 36, dtype: 'f16' },
+    // smallm: n < 1024, so tiledVec4 does not take it
+    { name: 'one quad under the tiledVec4 handoff', m: 8, k: 64, n: 1020, dtype: 'f32' },
+    // smallm: n >= 1024, but tiledVec4 needs m >= 8
+    { name: 'four rows at the tiledVec4 handoff', m: 4, k: 64, n: 1024, dtype: 'f32' },
   ] as const)('smallm, $dtype $name: [$m, $k] × [$k, $n]', async ({ m, k, n, dtype }, ctx) => {
     requireFeature(ctx, root, 'subgroups');
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
@@ -76,6 +80,9 @@ describe('matmulGemv kernels', () => {
   // Just past each smallm limit, so the other route runs. No subgroups
   // needed: these never take smallm.
   it.for([
+    // tiledVec4: n >= 1024 with m >= 8, k >= 64, k and n % 4 == 0
+    { name: 'at the tiledVec4 handoff (tiledVec4)', m: 8, k: 64, n: 1024, dtype: 'f32' },
+    { name: 'at the tiledVec4 handoff (tiledVec4)', m: 8, k: 64, n: 1024, dtype: 'f16' },
     // tiled: m = 36 is past smallm's 32 rows
     { name: 'one quad past the most rows (tiled)', m: 36, k: 70, n: 36, dtype: 'f32' },
     // plain: m = 2 is under smallm's 4 rows and over gemv's 1
