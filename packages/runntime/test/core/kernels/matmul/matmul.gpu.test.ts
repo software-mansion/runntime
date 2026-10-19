@@ -72,28 +72,10 @@ describe('matmul kernel: plain and tiled routes', () => {
       })),
     ),
   ];
-  // Known bug: reluAct compares against a vec4f, but the plain kernel's scalar
-  // tail (n % 4 != 0) calls it on an f32. The shader does not compile, the
-  // dispatch is dropped and the output keeps whatever the pooled buffer held.
-  // Fold these back into the list above with the fix.
-  const tailRelu = (c: (typeof epilogueCases)[number]) =>
-    c.route === 'plain' && c.n % 4 !== 0 && c.epilogue.activation === 'relu';
-
-  it.for(epilogueCases.filter((c) => !tailRelu(c)))(
-    '$route $dtype with $name: [$m, $k] × [$k, $n]',
-    async (c, ctx) => {
-      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
-      await checkMatmul(c.m, c.k, c.n, c.dtype as 'f32' | 'f16', c.epilogue);
-    },
-  );
-
-  it.fails.for(epilogueCases.filter(tailRelu))(
-    '$route $dtype with $name: [$m, $k] × [$k, $n]',
-    async (c, ctx) => {
-      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
-      await checkMatmul(c.m, c.k, c.n, c.dtype as 'f32' | 'f16', c.epilogue);
-    },
-  );
+  it.for(epilogueCases)('$route $dtype with $name: [$m, $k] × [$k, $n]', async (c, ctx) => {
+    if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkMatmul(c.m, c.k, c.n, c.dtype as 'f32' | 'f16', c.epilogue);
+  });
 
   // plain: a baseRow view always takes plain, whatever the shape
   it.for([
