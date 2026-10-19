@@ -69,14 +69,16 @@ type EmbedPart = string | { image: ImageBuffer } | { video: readonly ImageBuffer
 
 interface EmbedOptions {
   task?: EmbeddingTask;
+  dims?: number; // 768, 512, 256 or 128, default 768
 }
 ```
 
-- `embed(input)` turns one input into one vector of `dim` numbers.
+- `embed(input)` turns one input into one vector, of `dim` numbers or of
+  `dims` when the call sets it.
 - `embedBatch(inputs)` does many inputs in one go, one vector per input in
   the same order. For text it is much faster than `embed()` in a loop.
-- `dim` is the length of every vector, 768 unless the config asks for
-  fewer.
+- `dim` is the full length of a vector, 768. A call with `dims` returns
+  fewer, see [Shorter vectors](#shorter-vectors).
 - `dispose()` frees the GPU memory.
 
 `similarity(a, b)` compares two vectors, see
@@ -159,6 +161,26 @@ The first four go on one side of a search, `document` on the other. The
 last three go on every text being compared. Without `task` a text gets no
 instruction, which still works but matches less well.
 
+## Shorter vectors
+
+`dims` cuts the returned vectors to 512, 256 or 128 numbers, for less
+storage at a small cost in quality, see the
+[scores per length](https://huggingface.co/google/embeddinggemma-2#evaluation-results-with-vector-truncation)
+on the model card. The model was trained so that the first numbers carry
+the most meaning: a shorter vector keeps them and is made unit length
+again. Compare only vectors of the same length.
+
+```ts twoslash
+import { createMultimodalEmbedder, models } from 'runntime/zoo';
+const embedder = await createMultimodalEmbedder(
+  models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
+);
+// ---cut---
+// A third of the storage.
+const short = await embedder.embed('cats asleep on a sofa', { dims: 256 });
+short.length; // 256
+```
+
 ## Options
 
 The first argument is the model config, a plain object with the fields
@@ -174,7 +196,6 @@ interface MultimodalEmbedderModel {
   readonly tokenizerPath?: string;
   readonly dtype?: 'f32' | 'f16';
   readonly maxTokens?: number; // default 2048
-  readonly dims?: number; // default 768
   readonly imageTokens?: 70 | 140 | 280 | 560 | 1120; // default 280
 }
 
@@ -197,12 +218,6 @@ await createMultimodalEmbedder({
   ...models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
   imageTokens: 560,
 });
-
-// Shorter vectors, a quarter of the storage.
-await createMultimodalEmbedder({
-  ...models.multimodalEmbedding.EMBEDDINGGEMMA_2.DEFAULT,
-  dims: 256,
-});
 ```
 
 - **modelPath** - the text model's weights, a `model.safetensors` file.
@@ -215,9 +230,6 @@ await createMultimodalEmbedder({
   where the device has it, `f32` elsewhere. Either loads any weight file.
 - **maxTokens** - longest input in tokens, image and video tokens
   included, at most 2048.
-- **dims** - length of the returned vectors: 768, 512, 256 or 128. A
-  shorter vector keeps the first numbers and is made unit length again,
-  for less storage at a small cost in quality.
 - **imageTokens** - most tokens one image takes: 70, 140, 280, 560 or
   1120 tokens. More detail takes longer. Video frames always take at
   most 140.

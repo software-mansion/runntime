@@ -73,10 +73,6 @@ export interface MultimodalEmbedderModel {
    *  at most 2048. Longer text is cut; a longer input with images or video
    *  is an error. Default 2048. */
   readonly maxTokens?: number;
-  /** Length of the returned vectors: 768, 512, 256 or 128. A shorter vector
-   *  keeps the first values and is made unit length again, for less storage
-   *  at a small cost in quality. Default 768. */
-  readonly dims?: number;
   /** Most tokens one image takes: 70, 140, 280, 560 or 1120. More tokens
    *  keep more detail and take longer. Default 280. */
   readonly imageTokens?: ImageTokenBudget;
@@ -88,11 +84,16 @@ export interface EmbedOptions {
    *  what it searches with `document`. The instruction goes before the
    *  whole input. Default: no instruction. */
   readonly task?: EmbeddingTask;
+  /** Length of the returned vectors: 768, 512, 256 or 128. A shorter vector
+   *  keeps the first values and is made unit length again, for less storage
+   *  at a small cost in quality. Compare only vectors of the same length.
+   *  Default 768. */
+  readonly dims?: number;
 }
 
 /** The runner createMultimodalEmbedder() returns. */
 export interface MultimodalEmbedder {
-  /** Length of every returned vector. */
+  /** Length of a returned vector when the call sets no `dims`. */
   readonly dim: number;
   /** One input → unit-length vector. */
   embed(input: EmbedInput, options?: EmbedOptions): Promise<Float32Array>;
@@ -125,16 +126,8 @@ export async function createMultimodalEmbedder(
       tokenizerPath = defaults.tokenizerPath,
       dtype = supportsF16() ? 'f16' : 'f32',
       maxTokens = EMBEDDINGGEMMA2_MAX_TOKENS,
-      dims = EMBEDDING_DIM,
       imageTokens = IMAGE_TOKENS,
     } = config;
-    const allowedDims: readonly number[] = EMBEDDING_DIMS;
-    if (!allowedDims.includes(dims)) {
-      throw new RunntimeError(
-        'INVALID_ARGUMENT',
-        `createMultimodalEmbedder: dims must be one of ${allowedDims.join(', ')}, got ${dims}`,
-      );
-    }
     if (!Number.isInteger(maxTokens) || maxTokens < 2 || maxTokens > EMBEDDINGGEMMA2_MAX_TOKENS) {
       throw new RunntimeError(
         'INVALID_ARGUMENT',
@@ -281,20 +274,35 @@ export async function createMultimodalEmbedder(
       }
     };
 
+    const allowedDims: readonly number[] = EMBEDDING_DIMS;
+    const checkDims = (where: string, dims: unknown): void => {
+      if (dims !== undefined && (typeof dims !== 'number' || !allowedDims.includes(dims))) {
+        throw new RunntimeError(
+          'INVALID_ARGUMENT',
+          `${where}: dims must be one of ${allowedDims.join(', ')}, got ${dims}`,
+        );
+      }
+    };
+
     /** Pooled output to the returned vector: the first `dims` values, unit length. */
-    const finish = (pooled: Float32Array, offset: number): Float32Array =>
+    const finish = (pooled: Float32Array, offset: number, dims: number): Float32Array =>
       normalize(pooled.slice(offset, offset + dims));
 
-    const embedInput = async (input: EmbeddingGemma2Input): Promise<Float32Array> =>
-      finish(await core.embedPooled(input), 0);
+    const embedInput = async (
+      input: EmbeddingGemma2Input,
+      dims = EMBEDDING_DIM,
+    ): Promise<Float32Array> => finish(await core.embedPooled(input), 0, dims);
 
-    const embedInputs = async (inputs: EmbeddingGemma2Input[]): Promise<Float32Array[]> => {
+    const embedInputs = async (
+      inputs: EmbeddingGemma2Input[],
+      dims = EMBEDDING_DIM,
+    ): Promise<Float32Array[]> => {
       const [first, ...rest] = inputs;
       if (first === undefined) return [];
       // A batch of one is a single input: take the replay path.
-      if (rest.length === 0) return [await embedInput(first)];
+      if (rest.length === 0) return [await embedInput(first, dims)];
       const pooled = await core.embedPooledBatch(inputs);
-      return inputs.map((_, b) => finish(pooled, b * EMBEDDING_DIM));
+      return inputs.map((_, b) => finish(pooled, b * EMBEDDING_DIM, dims));
     };
 
     // Run every GPU path once. First use compiles kernels and records the
@@ -327,12 +335,15 @@ export async function createMultimodalEmbedder(
     };
 
     return {
-      dim: dims,
+      dim: EMBEDDING_DIM,
       async embed(input, embedOpts = {}) {
         guard();
         check('embed', input);
         checkTask('embed', embedOpts.task);
-        return serial(async () => embedInput(await toInput('embed', input, embedOpts.task)));
+        checkDims('embed', embedOpts.dims);
+        return serial(async () =>
+          embedInput(await toInput('embed', input, embedOpts.task), embedOpts.dims),
+        );
       },
       async embedBatch(inputs, embedOpts = {}) {
         guard();
@@ -341,12 +352,13 @@ export async function createMultimodalEmbedder(
         }
         for (const input of inputs) check('embedBatch', input);
         checkTask('embedBatch', embedOpts.task);
+        checkDims('embedBatch', embedOpts.dims);
         return serial(async () => {
           const prepared: EmbeddingGemma2Input[] = [];
           for (const input of inputs) {
             prepared.push(await toInput('embedBatch', input, embedOpts.task));
           }
-          return embedInputs(prepared);
+          return embedInputs(prepared, embedOpts.dims);
         });
       },
       dispose() {

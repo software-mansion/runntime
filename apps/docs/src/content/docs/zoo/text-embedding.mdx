@@ -83,10 +83,10 @@ function similarity(a: Float32Array, b: Float32Array): number;
 ## Options
 
 The first argument is the model config, a plain object with the fields
-below. `models` holds ready-made ones: `DEFAULT`, the f16 weights (45 MB)
-run in f16 where the device has `shader-f16` and in f32 elsewhere; `F16`,
-the same file with f16 forced; `F32`, the f32 weights (91 MB) run in f32.
-Pass one as is, copy it with a field changed, or point at your own files.
+below. `models` holds ready-made ones: `DEFAULT`, the f16 weights run in
+f16 where the device has `shader-f16` and in f32 elsewhere; `F16`, the same
+file with f16 forced; `F32`, the f32 weights run in f32. Pass one as is,
+copy it with a field changed, or point at your own files.
 
 ```ts
 interface TextEmbedderModel {
