@@ -97,20 +97,18 @@ kernels run much faster with `subgroups`. Every vision model - object
 detection, instance segmentation, pose, depth estimation and image
 classification - runs in half precision and needs `shader-f16`. Without it
 the `create` call throws `UNSUPPORTED_DEVICE`, see
-[Error handling](/zoo/error-handling/). Text and multimodal embedding,
-speech to text and the privacy filter run in f32 on such devices. If your
+[Error handling](/zoo/error-handling/). Embedding, speech to
+text and the privacy filter run in f32 on such devices. If your
 app already uses TypeGPU, pass the root you have.
 
 ## Pick a model
 
-Every model has its own factory function, like `createTextEmbedder(...)`,
+Every model has its own factory function, like `createObjectDetector(...)`,
 and its own methods. The model's page shows how to load it, call it and
 free it:
 
-- [Text embedding](/zoo/text-embedding/) - text to vectors, for search and
-  similarity.
-- [Multimodal embedding](/zoo/multimodal-embedding/) - text, images, video
-  and audio to vectors in one space.
+- [Embedding](/zoo/embedding/) - text, images, video
+  and audio to vectors in one space, for search and similarity.
 - [Speech to text](/zoo/speech-to-text/) - recorded speech to text.
 - [Privacy filter](/zoo/privacy-filter/) - finds personal data in text.
 - [Object detection](/zoo/object-detection/) - finds objects in an image.

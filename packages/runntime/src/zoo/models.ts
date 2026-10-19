@@ -14,9 +14,8 @@ import type { DepthEstimatorModel } from './tasks/cv/depthEstimation.ts';
 import type { InstanceSegmenterModel } from './tasks/cv/instanceSegmentation.ts';
 import type { ObjectDetectorModel } from './tasks/cv/objectDetection.ts';
 import type { KeypointDetectorModel } from './tasks/cv/keypointDetection.ts';
-import type { MultimodalEmbedderModel } from './tasks/multimodal/multimodalEmbedding.ts';
+import type { EmbedderModel } from './tasks/multimodal/embedding.ts';
 import type { PrivacyFilterModel } from './tasks/nlp/privacyFilter.ts';
-import type { TextEmbedderModel } from './tasks/nlp/textEmbedding.ts';
 
 const HUB = 'https://huggingface.co/software-mansion';
 
@@ -39,7 +38,7 @@ const precisions = <T extends object>(repo: string, size: string, common: T) => 
 
 const MINILM = precisions('all-MiniLM-L6-v2', 'base', {
   tokenizerPath: tokenizer('all-MiniLM-L6-v2'),
-} satisfies TextEmbedderModel);
+} satisfies EmbedderModel);
 
 /** EmbeddingGemma 2 ships the text model and the vision tower as two files
  *  of each precision. */
@@ -53,7 +52,7 @@ const EMBEDDINGGEMMA_2 = {
   DEFAULT: embeddingGemma2('f16'),
   F16: { ...embeddingGemma2('f16'), dtype: 'f16' as const },
   F32: { ...embeddingGemma2('f32'), dtype: 'f32' as const },
-} satisfies Record<string, MultimodalEmbedderModel>;
+} satisfies Record<string, EmbedderModel>;
 
 const MOONSHINE_TINY = precisions('moonshine', 'tiny', {
   arch: 'moonshine',
@@ -104,15 +103,13 @@ const DEPTHART_S = { modelPath: weights('depthart', 's', 'f16') } satisfies Dept
 const DEPTHART_B = { modelPath: weights('depthart', 'b', 'f16') } satisfies DepthEstimatorModel;
 
 export const models = {
-  textEmbedding: {
-    /** 384-dim sentence embeddings, 22M parameters. */
-    ALL_MINILM_L6_V2: MINILM,
-  },
-  multimodalEmbedding: {
+  embedding: {
     /** Google's EmbeddingGemma 2: text in 100+ languages and code, images
      *  and video in one 768-dim space, inputs up to 2048 tokens. 270M
      *  parameters in the text model, 170M in the vision tower. */
     EMBEDDINGGEMMA_2: EMBEDDINGGEMMA_2,
+    /** all-MiniLM-L6-v2: English text in 384-dim vectors, 22M parameters. */
+    ALL_MINILM_L6_V2: MINILM,
   },
   privacyFilter: {
     /** OpenAI's privacy-filter: 1.5B parameters, 50M active per token,

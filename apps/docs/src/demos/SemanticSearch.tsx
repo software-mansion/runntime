@@ -1,10 +1,4 @@
-import {
-  createTextEmbedder,
-  models,
-  similarity,
-  type LoadOptions,
-  type TextEmbedder,
-} from 'runntime/zoo';
+import { createEmbedder, models, similarity, type Embedder, type LoadOptions } from 'runntime/zoo';
 import { useEffect, useState, type FormEvent } from 'react';
 import { CORPUS } from './corpus.ts';
 import { useModel } from './useModel.ts';
@@ -16,14 +10,14 @@ const TOP_K = 4;
 /** Module scope on purpose: a stable identity, so the loader hook does not
  *  see a new factory on every render. */
 const loadEmbedder = (opts: LoadOptions) =>
-  createTextEmbedder(models.textEmbedding.ALL_MINILM_L6_V2.F16, opts);
+  createEmbedder(models.embedding.ALL_MINILM_L6_V2.F16, opts);
 
 interface Hit {
   text: string;
   score: number;
 }
 
-function Search({ embedder }: { embedder: TextEmbedder }) {
+function Search({ embedder }: { embedder: Embedder }) {
   const [index, setIndex] = useState<Float32Array[]>();
   const [query, setQuery] = useState(DEFAULT_QUERY);
   const [hits, setHits] = useState<Hit[]>([]);

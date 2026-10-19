@@ -63,6 +63,7 @@ export default defineConfig({
   redirects: {
     '/': `${base}zoo/getting-started/`,
     '/zoo/': `${base}zoo/getting-started/`,
+    '/zoo/text-embedding/': `${base}zoo/embedding/`,
   },
   integrations: [
     starlight({
@@ -143,8 +144,7 @@ export default defineConfig({
                 {
                   label: 'Models',
                   items: [
-                    { label: 'Text embedding', slug: 'zoo/text-embedding' },
-                    { label: 'Multimodal embedding', slug: 'zoo/multimodal-embedding' },
+                    { label: 'Embedding', slug: 'zoo/embedding' },
                     { label: 'Speech to text', slug: 'zoo/speech-to-text' },
                     { label: 'Privacy filter', slug: 'zoo/privacy-filter' },
                     { label: 'Object detection', slug: 'zoo/object-detection' },

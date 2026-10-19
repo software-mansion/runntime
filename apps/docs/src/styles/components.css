@@ -224,7 +224,7 @@ starlight-toc a[aria-current='true'] {
 }
 
 /*
- * Long identifiers in a cell (`models.textEmbedding.ALL_MINILM_L6_V2`) have no
+ * Long identifiers in a cell (`models.embedding.ALL_MINILM_L6_V2`) have no
  * break opportunities, so under table-layout: auto they claim whatever width
  * they need and squeeze every other column. Letting them wrap puts the column
  * proportions back under the content's control rather than one token's — and

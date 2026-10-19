@@ -19,22 +19,16 @@ export type { LoadOptions, ModelPath } from './load.ts';
 export { models } from './models.ts';
 
 export {
-  createTextEmbedder,
+  createEmbedder,
   similarity,
-  type TextEmbedder,
-  type TextEmbedderModel,
-} from './tasks/nlp/textEmbedding.ts';
-
-export {
-  createMultimodalEmbedder,
   type EmbedInput,
   type EmbedOptions,
   type EmbedPart,
-  type MultimodalEmbedder,
-  type MultimodalEmbedderModel,
+  type Embedder,
+  type EmbedderModel,
   type EmbeddingTask,
   type ImageTokenBudget,
-} from './tasks/multimodal/multimodalEmbedding.ts';
+} from './tasks/multimodal/embedding.ts';
 
 export {
   createPrivacyFilter,

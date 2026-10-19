@@ -1,5 +1,5 @@
 /** MiniLM network pieces, for code that builds on the model directly. The
- *  ready-to-use runner is createTextEmbedder at the runntime/zoo root. */
+ *  ready-to-use runner is createEmbedder at the runntime/zoo root. */
 
 export { EMBEDDING_DIM, MINILM_L6, type MinilmConfig } from './config.ts';
 export { MinilmModel, type MinilmReplayInputs } from './model.ts';

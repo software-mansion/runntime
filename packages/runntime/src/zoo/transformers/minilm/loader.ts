@@ -8,7 +8,7 @@ import type { RunntimeModelLoader } from '../registry.ts';
 
 /** The hosted f16 export; loadStateDict fuses qkv and folds the token-type
  *  embedding while loading it. */
-const MINILM_WEIGHTS_URL = models.textEmbedding.ALL_MINILM_L6_V2.DEFAULT.modelPath;
+const MINILM_WEIGHTS_URL = models.embedding.ALL_MINILM_L6_V2.DEFAULT.modelPath;
 
 export const MINILM_MODEL_IDS = [
   'Xenova/all-MiniLM-L6-v2',
