@@ -1,6 +1,8 @@
 /** The row reductions (softmax, layerNorm, mean, topk) and the norms composed
- *  from them (rmsNorm, groupNorm). None picks a route; the cases vary dtype,
- *  row count and row width. */
+ *  from them (rmsNorm, groupNorm). softmax and rmsNorm pick vec4 when the row
+ *  width (rmsNorm: the group) is a multiple of 4, scalar otherwise, each with
+ *  and without subgroups. The rest pick no route; the cases vary dtype, row
+ *  count and row width. */
 import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
 import { randMat } from './inputs.ts';
@@ -37,11 +39,21 @@ const rmsNorm = (name: string, m: number, n: number, dtype: Float) =>
     return () => version.lib.rmsNorm(x, w, 1e-5);
   });
 
+/** The same route on a device without subgroups. */
+function noSubgroups(testCase: AbCase): AbCase {
+  return { ...testCase, name: `${testCase.name}, no subgroups`, noSubgroups: true };
+}
+
 abSuite('reduce', [
   softmax('softmax f16, YOLO26n PSA [400,400]', 400, 400, 'f16'),
   softmax('softmax, MiniLM scores [1536,128]', 1536, 128, 'f32'),
   softmax('softmax, one wide row [1,32768]', 1, 32768, 'f32'),
   softmax('softmax, odd row count [37,1000]', 37, 1000, 'f32'),
+  // scalar: cols % 4 != 0
+  softmax('softmax scalar, odd sizes [37,1001]', 37, 1001, 'f32'),
+  softmax('softmax scalar f16, odd sizes [37,1001]', 37, 1001, 'f16'),
+  noSubgroups(softmax('softmax, MiniLM scores [1536,128]', 1536, 128, 'f32')),
+  noSubgroups(softmax('softmax scalar, odd sizes [37,1001]', 37, 1001, 'f32')),
 
   layerNorm('layerNorm + bias, MiniLM [128,384]', 128, 384, 'f32', true),
   layerNorm('layerNorm f16 + bias, MiniLM [512,384]', 512, 384, 'f16', true),
@@ -68,6 +80,11 @@ abSuite('reduce', [
 
   rmsNorm('rmsNorm, privacy-filter [512,640]', 512, 640, 'f32'),
   rmsNorm('rmsNorm f16, privacy-filter [512,640]', 512, 640, 'f16'),
+  // scalar: cols % 4 != 0
+  rmsNorm('rmsNorm scalar, odd width [512,642]', 512, 642, 'f32'),
+  rmsNorm('rmsNorm scalar f16, odd width [512,642]', 512, 642, 'f16'),
+  noSubgroups(rmsNorm('rmsNorm, privacy-filter [512,640]', 512, 640, 'f32')),
+  noSubgroups(rmsNorm('rmsNorm scalar, odd width [512,642]', 512, 642, 'f32')),
 
   rows('groupNorm 1 group, Moonshine stem [500,288]', 500, 288, 'f32', (version, x) => {
     const w = randMat(version, 1, 288);
