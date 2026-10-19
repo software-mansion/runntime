@@ -41,7 +41,8 @@ function erf(x: number): number {
   return (2 / Math.sqrt(Math.PI)) * sum;
 }
 
-const ACTIVATION_REF: Record<SlotAct, (x: number) => number> = {
+/** Each fused activation from its definition, in f64. */
+export const ACTIVATION_REF: Record<SlotAct, (x: number) => number> = {
   tanh: Math.tanh,
   gelu: (x) => 0.5 * x * (1 + erf(x / Math.SQRT2)),
   silu: (x) => x / (1 + Math.exp(-x)),
