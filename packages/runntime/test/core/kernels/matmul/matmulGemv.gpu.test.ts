@@ -6,32 +6,45 @@ import { checkMatmul, EPILOGUES } from './checkMatmul.ts';
 const { root } = await gpu();
 
 describe('matmulGemv kernels', () => {
-  // gemv: m = 1 with no activation (smallm needs m >= 4)
+  // m = 1 with no activation (smallm needs m >= 4). gemvVec4 takes n % 4 == 0,
+  // gemv the rest.
   it.each([
-    { name: '1×1', k: 1, n: 1 },
-    { name: 'a single row', k: 288, n: 864 },
-    { name: 'a single column out', k: 64, n: 1 },
-    { name: 'odd sizes', k: 33, n: 67 },
-    { name: 'long K', k: 8192, n: 256 },
-  ])('gemv, $name: [1, $k] × [$k, $n]', ({ k, n }) => checkMatmul(1, k, n));
+    // gemv: n % 4 != 0
+    { name: '1×1 (gemv)', k: 1, n: 1 },
+    { name: 'a single column out (gemv)', k: 64, n: 1 },
+    { name: 'odd sizes (gemv)', k: 33, n: 67 },
+    // gemvVec4: n % 4 == 0
+    { name: 'one quad out (gemvVec4)', k: 33, n: 4 },
+    { name: 'a single row (gemvVec4)', k: 288, n: 864 },
+    { name: 'long K (gemvVec4)', k: 8192, n: 256 },
+  ])('$name: [1, $k] × [$k, $n]', ({ k, n }) => checkMatmul(1, k, n));
 
   it.for([
-    { name: 'a single row', k: 288, n: 864 },
-    { name: 'odd sizes', k: 33, n: 67 },
-  ])('f16 gemv, $name: [1, $k] × [$k, $n]', async ({ k, n }, ctx) => {
+    // gemv: n % 4 != 0
+    { name: 'odd sizes (gemv)', k: 33, n: 67 },
+    // gemvVec4: n % 4 == 0
+    { name: 'a single row (gemvVec4)', k: 288, n: 864 },
+    { name: 'odd K (gemvVec4)', k: 33, n: 68 },
+  ])('f16 $name: [1, $k] × [$k, $n]', async ({ k, n }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     await checkMatmul(1, k, n, 'f16');
   });
 
-  // gemv: m = 1. An activation sends m = 1 to plain, so only bias and addend
-  // run here; matmul.gpu.test.ts covers the activations.
+  // m = 1. An activation sends m = 1 to plain, so only bias and addend run
+  // here; matmul.gpu.test.ts covers the activations. gemv: n = 67, gemvVec4:
+  // n = 68.
   it.for(
     (['f32', 'f16'] as const).flatMap((dtype) =>
-      EPILOGUES.filter((e) => !e.epilogue.activation).map((e) => ({ dtype, ...e })),
+      [
+        { route: 'gemv', n: 67 },
+        { route: 'gemvVec4', n: 68 },
+      ].flatMap((shape) =>
+        EPILOGUES.filter((e) => !e.epilogue.activation).map((e) => ({ dtype, ...shape, ...e })),
+      ),
     ),
-  )('gemv $dtype with $name: [1, 33] × [33, 67]', async (c, ctx) => {
+  )('$route $dtype with $name: [1, 33] × [33, $n]', async (c, ctx) => {
     if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
-    await checkMatmul(1, 33, 67, c.dtype, c.epilogue);
+    await checkMatmul(1, 33, c.n, c.dtype, c.epilogue);
   });
 
   // smallm: m % 4 == 0, 4 <= m <= 32, n % 4 == 0, subgroups. k = 70 leaves a
