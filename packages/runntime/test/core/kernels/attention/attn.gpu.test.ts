@@ -3,7 +3,7 @@ import { sdpa } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
 import { GRID_Y_STRIDE } from '../../../../src/core/kernels/common.ts';
 import { gpu, gpuWithoutSubgroups, requireFeature, upload } from '../../../gpu.ts';
-import { checkSdpa, type SdpaCase } from './checkSdpa.ts';
+import { checkSdpa, SDPA_OPTIONS, type SdpaCase } from './checkSdpa.ts';
 
 const main = await gpu();
 const withoutSubgroups = await gpuWithoutSubgroups();
@@ -19,21 +19,6 @@ function deviceFor(ctx: TestContext, device: Device, dtype: 'f32' | 'f16', subgr
   if (dtype === 'f16') requireFeature(ctx, dev.root, 'shader-f16');
   return dev;
 }
-
-/** Every mask and input form, on a square self-attention shape. */
-const OPTIONS: { name: string; opts: Partial<SdpaCase> }[] = [
-  { name: 'full', opts: {} },
-  { name: 'causal', opts: { windowRight: 0 } },
-  { name: 'a sliding window', opts: { windowLeft: 3, windowRight: 0 } },
-  { name: 'a two-sided window', opts: { windowLeft: 2, windowRight: 1 } },
-  { name: 'sinks', opts: { sinks: true, windowRight: 0 } },
-  { name: 'segments', opts: { segments: true } },
-  { name: 'segments and causal', opts: { segments: true, windowRight: 0 } },
-  { name: 'packed qkv', opts: { packed: true, windowRight: 0 } },
-  { name: 'packed qkv, sinks and segments', opts: { packed: true, sinks: true, segments: true } },
-  { name: 'every query head on one kv head', opts: { kvHeads: 1, windowRight: 0 } },
-  { name: 'as many kv heads as query heads', opts: { kvHeads: 4 } },
-];
 
 // Routes are picked in gpu/dispatch/attention.ts. qLen > 1, and headDim 40
 // is not a multiple of 16, so flash never takes these.
@@ -52,7 +37,7 @@ const ROUTES = [
 ] as const;
 
 describe('attn kernels', () => {
-  it.for(ROUTES.flatMap((r) => OPTIONS.map((o) => ({ ...r, ...o }))))(
+  it.for(ROUTES.flatMap((r) => SDPA_OPTIONS.map((o) => ({ ...r, ...o }))))(
     '$route $dtype on $device with $name: t = $t, headDim 40',
     async (c, ctx) => {
       const dev = deviceFor(ctx, c.device, c.dtype, c.subgroups);

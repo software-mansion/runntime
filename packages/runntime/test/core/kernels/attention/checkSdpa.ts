@@ -27,6 +27,22 @@ export interface SdpaCase {
   packed?: boolean;
 }
 
+/** Every mask and input form, for a square self-attention shape with 4
+ *  query heads and 2 kv heads. Every prefill route runs this list. */
+export const SDPA_OPTIONS: readonly { name: string; opts: Partial<SdpaCase> }[] = [
+  { name: 'full', opts: {} },
+  { name: 'causal', opts: { windowRight: 0 } },
+  { name: 'a sliding window', opts: { windowLeft: 3, windowRight: 0 } },
+  { name: 'a two-sided window', opts: { windowLeft: 2, windowRight: 1 } },
+  { name: 'sinks', opts: { sinks: true, windowRight: 0 } },
+  { name: 'segments', opts: { segments: true } },
+  { name: 'segments and causal', opts: { segments: true, windowRight: 0 } },
+  { name: 'packed qkv', opts: { packed: true, windowRight: 0 } },
+  { name: 'packed qkv, sinks and segments', opts: { packed: true, sinks: true, segments: true } },
+  { name: 'every query head on one kv head', opts: { kvHeads: 1, windowRight: 0 } },
+  { name: 'as many kv heads as query heads', opts: { kvHeads: 4 } },
+];
+
 /** softmax(q·kᵀ) v per query row and head, in f64, over the keys the window
  *  and the row's segment leave visible. q and k arrive pre-scaled. A sink
  *  adds exp(sink · ln 2) to the denominator alone. A row that sees no key
