@@ -49,7 +49,9 @@ export const siluAct = ((x: d.v4f) => {
 
 export const reluAct = ((x: d.v4f) => {
   'use gpu';
-  return std.max(x, d.vec4f(0));
+  // A zero of x's own type: the plain matmul's tail calls this on an f32.
+  // sign(x) * 0 stays finite where x * 0 would turn -inf into NaN.
+  return std.max(x, std.sign(x) * 0);
 }) as Activation;
 
 const SQRT_2_OVER_PI = Math.sqrt(2 / Math.PI);
