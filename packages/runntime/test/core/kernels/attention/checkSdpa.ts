@@ -30,8 +30,8 @@ export interface SdpaCase {
 /** softmax(q·kᵀ) v per query row and head, in f64, over the keys the window
  *  and the row's segment leave visible. q and k arrive pre-scaled. A sink
  *  adds exp(sink · ln 2) to the denominator alone. A row that sees no key
- *  and has no sink comes out 0. */
-function sdpaRef(
+ *  comes out 0. */
+export function sdpaRef(
   q: Float32Array,
   k: Float32Array,
   v: Float32Array,
