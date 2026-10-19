@@ -3,7 +3,12 @@
 import tgpu, { type TgpuRoot } from 'typegpu';
 import { expect, onTestFinished, type TestContext } from 'vitest';
 import { tensor } from '../src/core/gpu/buffers.ts';
-import { initRunntime, subgroupKernelsOk, type RunntimeExecutor } from '../src/core/gpu/eval.ts';
+import {
+  gpuExecutor,
+  initRunntime,
+  subgroupKernelsOk,
+  type RunntimeExecutor,
+} from '../src/core/gpu/eval.ts';
 import type { Value, ValueMeta } from '../src/core/graph/value.ts';
 
 let device: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
@@ -15,6 +20,18 @@ export function gpu(): Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> {
     .init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } })
     .then((root) => ({ root, ex: initRunntime(root) }));
   return device;
+}
+
+let deviceWithoutSubgroups: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
+
+/** A second device with the same features minus `subgroups`, for the routes
+ *  only such a device takes. Features are fixed when a device is created, so
+ *  it cannot be the one gpu() returns. */
+export function gpuWithoutSubgroups(): Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> {
+  deviceWithoutSubgroups ??= tgpu
+    .init({ device: { optionalFeatures: ['shader-f16'] } })
+    .then((root) => ({ root, ex: gpuExecutor(root) }));
+  return deviceWithoutSubgroups;
 }
 
 /** `tensor()` whose buffer is destroyed when the test ends: uploads are
