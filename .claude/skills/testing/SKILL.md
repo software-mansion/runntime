@@ -49,8 +49,8 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
   dtype other than the declared one, sizes past a kernel's limit (it throws,
   it does not return garbage), and unusual shapes (1×1, odd sizes, sizes that
   are not a multiple of the tile or vec4 width).
-- Cover every route a kernel can take: matmul alone has plain, gemv, smallm,
-  tiled and tiledF16, each picked by shape and device features.
+- Cover every route a kernel can take: matmul alone has plain, gemv, gemvVec4, smallm,
+  tiled and tiledVec4, each picked by shape and device features.
 - A new route in a kernel lands with the cases that cover it fully: every
   dtype it runs, every option it handles, and shapes on both sides of each
   threshold that picks it, so the cases show which inputs take the route and

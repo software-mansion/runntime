@@ -15,28 +15,32 @@ describe('matmul kernel: plain and tiled routes', () => {
     // plain: m < 8 and not a multiple of 4
     { name: 'odd sizes (plain)', m: 3, k: 7, n: 5 },
     { name: 'one row under the tiled cutoff (plain)', m: 7, k: 16, n: 12 },
-    // tiled: f32, m >= 8 and not a smallm shape
+    // tiled: f32, m >= 8, not a smallm shape and not a tiledVec4 shape
     // tiled: m = 9 is the first m >= 8 that smallm does not take on a subgroups device
     { name: 'one row past the tiled cutoff (tiled)', m: 9, k: 16, n: 12 },
-    { name: 'exactly one tile (tiled)', m: 64, k: 64, n: 64 },
+    { name: 'K too short for tiledVec4 (tiled)', m: 9, k: 60, n: 8 },
     { name: 'one past the tile edge in every dim (tiled)', m: 65, k: 33, n: 67 },
     { name: 'tall and thin (tiled)', m: 1000, k: 3, n: 2 },
+    // tiledVec4: m >= 8, k >= 64, k and n % 4 == 0
+    { name: 'exactly one tile (tiledVec4)', m: 64, k: 64, n: 64 },
+    { name: 'one row past the tiledVec4 cutoff (tiledVec4)', m: 9, k: 64, n: 64 },
+    { name: 'past the tile edge (tiledVec4)', m: 70, k: 132, n: 68 },
   ])('$name: [$m, $k] × [$k, $n]', ({ m, k, n }) => checkMatmul(m, k, n));
 
   it.for([
     // plain: m < 8
     { name: 'odd sizes (plain)', m: 3, k: 16, n: 5 },
-    { name: 'one row under the tiledF16 cutoff (plain)', m: 7, k: 64, n: 64 },
-    // plain: m >= 8, but tiledF16 needs k >= 64
-    { name: 'K too short for tiledF16 (plain)', m: 9, k: 60, n: 8 },
-    // plain: m > 32 and k >= 64, but tiledF16 also needs k and n % 4 == 0
+    { name: 'one row under the tiledVec4 cutoff (plain)', m: 7, k: 64, n: 64 },
+    // plain: m >= 8, but tiledVec4 needs k >= 64 and f16 has no tiled route
+    { name: 'K too short for tiledVec4 (plain)', m: 9, k: 60, n: 8 },
+    // plain: m > 32 and k >= 64, but tiledVec4 also needs k and n % 4 == 0
     { name: 'K not a multiple of 4 (plain)', m: 40, k: 66, n: 64 },
     { name: 'N not a multiple of 4 (plain)', m: 40, k: 64, n: 66 },
-    // tiledF16: f16, m >= 8 and past smallm's 32 rows, k >= 64, k and n % 4 == 0
-    { name: 'tiledF16 at the shortest K', m: 64, k: 64, n: 64 },
-    // tiledF16: m = 9 is the first m >= 8 that smallm does not take on a subgroups device
-    { name: 'one row past the tiledF16 cutoff', m: 9, k: 64, n: 64 },
-    { name: 'tiledF16 past the tile edge', m: 70, k: 132, n: 68 },
+    // tiledVec4: m >= 8, k >= 64, k and n % 4 == 0
+    { name: 'tiledVec4 at the shortest K', m: 64, k: 64, n: 64 },
+    // tiledVec4: m = 9 is the first m >= 8 that smallm does not take on a subgroups device
+    { name: 'one row past the tiledVec4 cutoff', m: 9, k: 64, n: 64 },
+    { name: 'tiledVec4 past the tile edge', m: 70, k: 132, n: 68 },
   ])('f16 $name: [$m, $k] × [$k, $n]', async ({ m, k, n }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     await checkMatmul(m, k, n, 'f16');
@@ -50,10 +54,11 @@ describe('matmul kernel: plain and tiled routes', () => {
       { route: 'plain', m: 3, k: 7, n: 8, dtype: 'f32' },
       { route: 'plain', m: 3, k: 16, n: 5, dtype: 'f16' },
       { route: 'plain', m: 3, k: 16, n: 8, dtype: 'f16' },
-      // tiled: f32, m >= 8 and not a smallm shape
+      // tiled: f32, m >= 8, not a smallm shape and not a tiledVec4 shape
       { route: 'tiled', m: 65, k: 33, n: 67, dtype: 'f32' },
-      // tiledF16: f16, m > 32, k >= 64, k and n % 4 == 0
-      { route: 'tiledF16', m: 70, k: 132, n: 68, dtype: 'f16' },
+      // tiledVec4: m >= 8, k >= 64, k and n % 4 == 0
+      { route: 'tiledVec4', m: 70, k: 132, n: 68, dtype: 'f32' },
+      { route: 'tiledVec4', m: 70, k: 132, n: 68, dtype: 'f16' },
     ].flatMap((shape) => EPILOGUES.map((e) => ({ ...shape, ...e }))),
     // plain: m = 1 with an activation skips gemv, which has no activation slot
     ...['f32', 'f16'].flatMap((dtype) =>

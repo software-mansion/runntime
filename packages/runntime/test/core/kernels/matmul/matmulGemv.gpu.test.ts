@@ -71,7 +71,7 @@ describe('matmulGemv kernels', () => {
     { name: 'six rows (plain)', m: 6, k: 70, n: 36, dtype: 'f32' },
     // tiled: n = 34 is not a multiple of 4
     { name: 'n % 4 != 0 (tiled)', m: 8, k: 70, n: 34, dtype: 'f32' },
-    // plain: same, and tiledF16 needs n % 4 == 0 too
+    // plain: same, and tiledVec4 needs n % 4 == 0 too
     { name: 'n % 4 != 0 (plain)', m: 8, k: 70, n: 34, dtype: 'f16' },
   ] as const)('past smallm, $dtype $name: [$m, $k] × [$k, $n]', async ({ m, k, n, dtype }, ctx) => {
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
