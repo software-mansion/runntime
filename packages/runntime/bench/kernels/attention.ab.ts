@@ -1,5 +1,6 @@
-/** Every route gpu/dispatch/attention.ts can pick, plus rope. Windows are
- *  (left, right): causal is (Infinity, 0), full is (Infinity, Infinity). */
+/** Every route gpu/dispatch/attention.ts can pick, plus local attention and
+ *  rope. Windows are (left, right): causal is (Infinity, 0), full is
+ *  (Infinity, Infinity). */
 import { abSuite, type AbCase } from '../ab.ts';
 import { mat, randMat } from './inputs.ts';
 
@@ -83,6 +84,37 @@ function rope(name: string, t: number, width: number, headDim: number, dtype: Fl
       const cos = randMat(version, t, headDim);
       const sin = randMat(version, t, headDim);
       return () => version.lib.rope(x, cos, sin, { headDim });
+    },
+  };
+}
+
+/** Local attention as the EmbeddingGemma 2 audio tower runs it. */
+function local(
+  name: string,
+  t: number,
+  heads: number,
+  headDim: number,
+  window: number,
+  dtype: Float,
+): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      // A base without the op throws here, which skips the case.
+      const { localAttention } = version.lib;
+      if (typeof localAttention !== 'function') throw new Error('no localAttention op');
+      const qkv = randMat(version, t, 3 * heads * headDim, dtype);
+      const rel = randMat(version, window, heads * headDim);
+      const qScale = randMat(version, 1, headDim);
+      return () =>
+        localAttention(qkv, rel, qScale, {
+          heads,
+          headDim,
+          window,
+          kScale: Math.log1p(Math.E) / Math.LN2,
+          softcap: 50,
+        });
     },
   };
 }
@@ -213,6 +245,17 @@ abSuite('attention', [
     headDim: 8,
     dtype: 'f16',
   }),
+
+  // localAttention: its own kernel.
+  local(
+    'localAttention, EmbeddingGemma 2 audio 30 s, 8 heads hd 128, window 12',
+    750,
+    8,
+    128,
+    12,
+    'f32',
+  ),
+  local('localAttention f16, EmbeddingGemma 2 audio 30 s', 750, 8, 128, 12, 'f16'),
 
   rope('rope, privacy-filter q [512,896] hd 64', 512, 896, 64, 'f32'),
   rope('rope f16, Moonshine-tiny [200,288] hd 36', 200, 288, 36, 'f16'),

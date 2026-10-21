@@ -109,4 +109,14 @@ abSuite('shape', [
     (version, [x, idx]) => version.lib.gatherRowsFrom(x!, idx!),
     true,
   ),
+  // Output past 2^24 values, where the row needs an integer division.
+  on(
+    'gatherRowsFrom f16, EmbeddingGemma 2 audio 30 s im2col, 216000 of [96001,128]',
+    (version) => [
+      randMat(version, 96001, 128, 'f16'),
+      version.upload(ids(216000, 96001), mat(216000, 1)),
+    ],
+    (version, [x, idx]) => version.lib.gatherRowsFrom(x!, idx!),
+    true,
+  ),
 ]);

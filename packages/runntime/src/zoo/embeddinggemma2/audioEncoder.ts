@@ -113,7 +113,7 @@ function fft(re: Float64Array, im: Float64Array, cos: Float64Array, sin: Float64
 }
 
 /** The first `frames` log-mel frames of `samples`, [frames, mels]. */
-function logMel(samples: Float32Array, frames: number, mels: number): Float32Array {
+export function logMel(samples: Float32Array, frames: number, mels: number): Float32Array {
   const { window, filters, order, cos, sin } = melBank(mels);
   const out = new Float32Array(frames * mels);
   const re = new Float64Array(FFT);
@@ -141,7 +141,7 @@ function logMel(samples: Float32Array, frames: number, mels: number): Float32Arr
 
 /** The first conv's taps [P + 1, 9]: a 3×3 window at stride 2, padded by 1,
  *  over the [frames, mels] image, then a row of zeros. */
-function convPatches(mel: Float32Array, frames: number, mels: number): Float32Array {
+export function convPatches(mel: Float32Array, frames: number, mels: number): Float32Array {
   const rows = Math.ceil(frames / 2);
   const cols = mels / 2;
   const out = new Float32Array((rows * cols + 1) * 9);
@@ -163,7 +163,7 @@ function convPatches(mel: Float32Array, frames: number, mels: number): Float32Ar
 
 /** The second conv's taps: for each of its output pixels, the 3×3 first-conv
  *  pixels it reads at stride 2, the zero row where it reads padding. */
-function convTaps(rows: number, cols: number): Float32Array {
+export function convTaps(rows: number, cols: number): Float32Array {
   const outRows = Math.ceil(rows / 2);
   const outCols = cols / 2;
   const zero = rows * cols;

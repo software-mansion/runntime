@@ -87,6 +87,22 @@ function conv1d(
   };
 }
 
+/** GLU then a causal depthwise conv over time: x [T, 2C], taps [K, C]. */
+function gluConv1d(name: string, t: number, c: number, k: number, dtype: 'f32' | 'f16'): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      // A base without the op throws here, which skips the case.
+      const { gluConv1d: op } = version.lib;
+      if (typeof op !== 'function') throw new Error('no gluConv1d op');
+      const x = randMat(version, t, 2 * c, dtype);
+      const w = randMat(version, k, c, dtype);
+      return () => op(x, w, { lo: -0.6, hi: 0.7 });
+    },
+  };
+}
+
 function convTranspose2d(name: string, cIn: number, cOut: number, hw: number): AbCase {
   const k = 2;
   return {
@@ -219,6 +235,10 @@ abSuite('conv', [
   conv1d('conv1d + tanh, Moonshine-tiny stem 1→288 k127 s64', 16000, 1, 288, 127, 64, 'tanh'),
   conv1d('conv1d + gelu, Moonshine-tiny conv2 288→576 k7 s3', 249, 288, 576, 7, 3, 'gelu'),
   conv1d('conv1d, cOut not a multiple of 4, 32→6 k3', 500, 32, 6, 3, 1),
+
+  // gluConv1d: its own kernel.
+  gluConv1d('gluConv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5', 750, 1024, 5, 'f32'),
+  gluConv1d('gluConv1d f16, EmbeddingGemma 2 audio 30 s', 750, 1024, 5, 'f16'),
 
   convTranspose2d('convTranspose2d (paired), YOLO26n-seg proto 64→64 @80²', 64, 64, 80),
   convTranspose2d('convTranspose2d (unpaired), cIn 3 @64²', 3, 8, 64),
