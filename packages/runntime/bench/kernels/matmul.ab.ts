@@ -49,20 +49,15 @@ function quant(name: string, t: number, e: number, k: number, o: number, bits: 8
   };
 }
 
-function gather(name: string, t: number, e: number, k: number, n: number, bits?: 8 | 4): AbCase {
-  const groupSize = 32;
+function gather(name: string, t: number, e: number, k: number, n: number): AbCase {
   return {
     name,
     build: (version) => {
       const a = randMat(version, t, k);
+      const w = randMat(version, e * k, n);
       const bias = randMat(version, e, n);
       const expertIdx = version.upload(ids(t, e), mat(t, 1));
-      if (bits === undefined) {
-        const w = randMat(version, e * k, n);
-        return () => version.lib.matmulGather(a, w, expertIdx, { bias });
-      }
-      const { w, scales } = quantWeight(version, e, k, n, bits, groupSize);
-      return () => version.lib.matmulGather(a, w, expertIdx, { bias, scales, bits, groupSize });
+      return () => version.lib.matmulGather(a, w, expertIdx, { bias });
     },
   };
 }
@@ -165,8 +160,6 @@ abSuite('matmul', [
 
   // matmulGather: one expert per row.
   gather('matmulGather f32, privacy-filter [64,640], 16 experts', 64, 16, 640, 640),
-  gather('matmulGather int8, privacy-filter [64,640], 128 experts', 64, 128, 640, 640, 8),
-  gather('matmulGather int4, privacy-filter [64,640], 128 experts', 64, 128, 640, 640, 4),
 
   // argmaxDot: greedy next token.
   argmaxDot('argmaxDot, Moonshine-tiny vocab [32768,288]', 32768, 288),
