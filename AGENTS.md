@@ -37,6 +37,9 @@ Before writing or reviewing code, comments or docs, read
 - Intermediate buffers come from the executor's pool and go back when their
   last consumer is dispatched. Uploads made with `tensor()` or `uploadF32`
   are outside the pool and must be destroyed by whoever made them.
+- The pool keeps free buffers per exact size. A model whose input length
+  varies runs on its own executor and calls `trim()` after each call, or the
+  pool keeps a set of buffers for every length it has seen.
 - One `gpuExecutor` per model, created once. Pooled buffers and memoized bind
   groups only pay off across calls.
 - The user's `tgpu.init` (and the plugin's `initRunntimeBackend`) requests

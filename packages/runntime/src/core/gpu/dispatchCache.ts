@@ -9,19 +9,26 @@
  *
  *  Bind groups are keyed by the identity of their entries, meaning the layout
  *  plus which buffers fill the slots. The BufferPool recycles the same buffers
- *  frame over frame, so those combinations recur too.
+ *  frame over frame, so those combinations recur too. The bind group cache is
+ *  weak in every entry, so a buffer the program drops takes its bind groups
+ *  with it.
  *
- *  Growth is bounded by the distinct dim values and buffer combinations
- *  actually seen. On the LLM path that is one small entry per distinct token
- *  count. */
+ *  Uniform growth is bounded by the distinct dim values actually seen. On the
+ *  LLM path that is one small entry per distinct token count. */
 
 import type { TgpuBindGroup, TgpuRoot } from 'typegpu';
 
+/** A node of the bind group cache. Each entry, in name order, picks the next
+ *  node by its object; the node after the last entry holds the bind group. */
+interface BindGroupNode {
+  next: WeakMap<object, BindGroupNode>;
+  bindGroup?: TgpuBindGroup;
+}
+
 interface RootCaches {
   uniforms: WeakMap<object, Map<string, object>>;
-  bindGroups: WeakMap<object, Map<string, TgpuBindGroup>>;
-  ids: WeakMap<object, number>;
-  nextId: number;
+  /** Layout, then the sorted entry names, to the first node. */
+  bindGroups: WeakMap<object, Map<string, BindGroupNode>>;
 }
 
 const perRoot = new WeakMap<TgpuRoot, RootCaches>();
@@ -29,19 +36,10 @@ const perRoot = new WeakMap<TgpuRoot, RootCaches>();
 function caches(root: TgpuRoot): RootCaches {
   let c = perRoot.get(root);
   if (c === undefined) {
-    c = { uniforms: new WeakMap(), bindGroups: new WeakMap(), ids: new WeakMap(), nextId: 1 };
+    c = { uniforms: new WeakMap(), bindGroups: new WeakMap() };
     perRoot.set(root, c);
   }
   return c;
-}
-
-function idOf(c: RootCaches, o: object): number {
-  let v = c.ids.get(o);
-  if (v === undefined) {
-    v = c.nextId++;
-    c.ids.set(o, v);
-  }
-  return v;
 }
 
 export function cachedUniform(
@@ -79,12 +77,25 @@ export function cachedBindGroup(
     c.bindGroups.set(layout, byLayout);
   }
   const names = Object.keys(entries).sort();
-  let key = '';
-  for (const n of names) key += `${n}=${idOf(c, entries[n]!)},`;
-  let bg = byLayout.get(key);
-  if (bg === undefined) {
-    bg = (root.createBindGroup as (l: object, e: object) => TgpuBindGroup)(layout, entries);
-    byLayout.set(key, bg);
+  const namesKey = names.join(',');
+  let first = byLayout.get(namesKey);
+  if (first === undefined) {
+    first = { next: new WeakMap() };
+    byLayout.set(namesKey, first);
   }
-  return bg;
+  let node = first;
+  for (const n of names) {
+    const entry = entries[n]!;
+    let child = node.next.get(entry);
+    if (child === undefined) {
+      child = { next: new WeakMap() };
+      node.next.set(entry, child);
+    }
+    node = child;
+  }
+  node.bindGroup ??= (root.createBindGroup as (l: object, e: object) => TgpuBindGroup)(
+    layout,
+    entries,
+  );
+  return node.bindGroup;
 }

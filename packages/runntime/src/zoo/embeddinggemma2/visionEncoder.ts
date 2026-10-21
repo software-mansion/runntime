@@ -1,7 +1,7 @@
 /** EmbeddingGemma 2 image encoding: an image in, its token rows for the
  *  text model out, one eager forward of the vision tower per image. */
 
-import { tensor, toArray } from '../../core/index.ts';
+import { tensor, toArray, type RunntimeExecutor } from '../../core/index.ts';
 import { checkImageSize, type ImageBuffer } from '../tasks/cv/image.ts';
 import { resizeBicubic } from '../tasks/cv/utils/resizeBicubic.ts';
 import type { EmbeddingGemma2VisionInputs, EmbeddingGemma2VisionModel } from './visionModel.ts';
@@ -76,11 +76,13 @@ function poolWeights(cols: number, rows: number, pool: number): Float32Array {
 }
 
 /** An image to its token rows [N · text hidden], N at most `maxTokens`.
- *  Throws INVALID_ARGUMENT for a malformed image. */
+ *  Runs on `ex` and trims its pool after. Throws INVALID_ARGUMENT for a
+ *  malformed image. */
 export async function encodeImage(
   model: EmbeddingGemma2VisionModel,
   image: ImageBuffer,
   maxTokens: number,
+  ex: RunntimeExecutor,
 ): Promise<Float32Array> {
   const { patch, pool, headDim, ropeTheta } = model.cfg;
   const [cols, rows] = patchGrid(image.width, image.height, maxTokens, patch, pool);
@@ -104,8 +106,9 @@ export async function encodeImage(
     pool: upload(poolWeights(cols, rows, pool), p / (pool * pool), act),
   };
   try {
-    return await toArray(model.forward(inputs));
+    return await toArray(model.forward(inputs), ex);
   } finally {
     for (const v of Object.values(inputs)) v.buffer.destroy();
+    ex.trim();
   }
 }
