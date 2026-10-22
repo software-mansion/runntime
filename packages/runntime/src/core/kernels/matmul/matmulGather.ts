@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type F32Buffer,
@@ -48,7 +48,7 @@ function makeGatherVariant(elem: Elem) {
     if (idx >= layout.$.dims.m * C.n4) {
       return;
     }
-    const row = d.u32(idx / C.n4);
+    const row = std.intdiv(idx, C.n4); // u32 division: f32 / rounds past 2^23 units
     const col0 = (idx % C.n4) * 4;
 
     const expert = d.u32(layout.$.expertIdx[row]!);

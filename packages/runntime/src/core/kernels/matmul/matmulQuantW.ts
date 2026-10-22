@@ -63,7 +63,7 @@ export const matmulQuantWKernel = tgpu.computeFn({
   if (idx >= D.m * C.n4) {
     return;
   }
-  const row = d.u32(idx / C.n4);
+  const row = std.intdiv(idx, C.n4); // u32 division: f32 / rounds past 2^23 units
   const unit = idx % C.n4; // this thread's 4-col unit
   const col0 = unit * 4;
 

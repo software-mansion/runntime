@@ -96,10 +96,9 @@ describe('matmulGather kernel', () => {
     await checkGather(c, dtype);
   });
 
-  // Known bug: the row is d.u32(idx / n4), which TypeGPU compiles to f32
-  // division. Past ~2^23 units it rounds up to the next row, so the end of a
-  // row is never written. Turn into `it` with the fix.
-  it.fails('f16 rows past 2^23 units', async (ctx) => {
+  // The row must come from u32 division: an f32 idx / n4 rounds up to the
+  // next row past ~2^23 units, so the end of a row is never written.
+  it('f16 rows past 2^23 units', async (ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const [m, n] = [2100, 16380];
     // out[i, c] = a[i]: K 1, every weight 1, bias 0. f16 output keeps the
