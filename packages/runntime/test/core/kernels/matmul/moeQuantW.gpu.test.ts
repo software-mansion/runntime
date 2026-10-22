@@ -26,13 +26,14 @@ interface Shape {
 }
 
 /** topk's packed [T, 8] output: 4 expert ids, then 4 gate weights summing
- *  to 1. Ids cycle through the experts and repeat when there are fewer than 4. */
+ *  to 1. Ids cycle through the experts and repeat when there are fewer than 4.
+ *  Gates rotate per token, so reading another token's gates fails. */
 function routeFor(tokens: number, experts: number): Float32Array {
   const route = new Float32Array(tokens * 2 * MOE_SLOTS);
   for (let t = 0; t < tokens; t++) {
     for (let s = 0; s < MOE_SLOTS; s++) {
       route[t * 2 * MOE_SLOTS + s] = (t * 3 + s * 5) % experts;
-      route[t * 2 * MOE_SLOTS + MOE_SLOTS + s] = [0.4, 0.3, 0.2, 0.1][s]!;
+      route[t * 2 * MOE_SLOTS + MOE_SLOTS + s] = [0.4, 0.3, 0.2, 0.1][(s + t) % MOE_SLOTS]!;
     }
   }
   return route;
