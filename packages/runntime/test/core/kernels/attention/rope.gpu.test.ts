@@ -137,9 +137,7 @@ describe('rope kernel', () => {
     await checkRope({ rows, cols, headDim: 64 }, 'f16');
   });
 
-  // Known bug: an empty tensor reaches createBuffer and fails with the
-  // browser's TypeError instead of a RunntimeError. Turn into `it` with the fix.
-  it.fails('rejects an empty input with an INVALID_ARGUMENT', () => {
+  it('rejects an empty input with an INVALID_ARGUMENT', () => {
     expect(() => upload(root, new Float32Array(0), [0, 4])).toThrow(
       expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
     );

@@ -260,9 +260,7 @@ describe('attn kernels', () => {
     checkSdpa(withoutSubgroups, { qLen: 2 ** 24 + 3, kvLen: 2, qHeads: 1, kvHeads: 1, headDim: 1 }),
   );
 
-  // Known bug: an empty tensor reaches createBuffer and fails with the
-  // browser's TypeError instead of a RunntimeError. Turn into `it` with the fix.
-  it.fails('rejects qLen = 0 with an INVALID_ARGUMENT', () => {
+  it('rejects qLen = 0 with an INVALID_ARGUMENT', () => {
     expect(() => upload(root, new Float32Array(0), [0, 8])).toThrow(
       expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
     );
