@@ -52,11 +52,20 @@ describe('argmaxDot kernel', () => {
   });
 
   // Ties go to the lowest row, as torch.argmax does: within a step, across
-  // steps of one workgroup, and across workgroups.
+  // steps of one workgroup, and across workgroups. The last two put the lower
+  // row after the higher one in the reduce order, so only the index compare
+  // can pick it: row STEP sits in thread row 0 and workgroup 0, row 1 in
+  // thread row 1, row 40 in workgroup 1.
   it.each([
     { name: 'in one step', rows: 20, tied: [3, 7] },
     { name: 'across steps of one workgroup', rows: 3 * STEP, tied: [2 * STEP + 5, 5] },
     { name: 'across workgroups', rows: STEP, tied: [STEP - 1, 40] },
+    { name: 'with the lower row reduced later in a workgroup', rows: STEP + 1, tied: [STEP, 1] },
+    {
+      name: 'with the lower row reduced later across workgroups',
+      rows: STEP + 1,
+      tied: [STEP, 40],
+    },
     { name: 'every row', rows: 100, tied: Array.from({ length: 100 }, (_, i) => 99 - i) },
   ])('breaks a tie $name toward the lowest row', async ({ rows, tied }) => {
     const cols = 8;
