@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toArray } from '../../../../src/core/gpu/eval.ts';
 import { matmulGather } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
+import { GRID_Y_STRIDE } from '../../../../src/core/kernels/common.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../../gpu.ts';
 
 const { root, ex } = await gpu();
@@ -76,6 +77,16 @@ describe('matmulGather kernel', () => {
             n: 68,
             numExperts: 4,
             experts: Array.from({ length: 70 }, (_, i) => (i * 7) % 4),
+          },
+        },
+        // Past GRID_Y_STRIDE units the dispatch goes 2-D.
+        {
+          name: 'units past GRID_Y_STRIDE',
+          c: {
+            k: 4,
+            n: 8,
+            numExperts: 3,
+            experts: Array.from({ length: GRID_Y_STRIDE / 2 + 5 }, (_, i) => i % 3),
           },
         },
       ].map((c) => ({ dtype, ...c })),

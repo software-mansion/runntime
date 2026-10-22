@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toArray } from '../../../../src/core/gpu/eval.ts';
 import { matmul, type MatmulOpts } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
+import { GRID_Y_STRIDE } from '../../../../src/core/kernels/common.ts';
 import { expectClose, gpu, randomF32, requireFeature, upload } from '../../../gpu.ts';
 import { randomQuantWeight } from './quantW.ts';
 
@@ -56,6 +57,8 @@ describe('matmulQuantW kernel', () => {
         { name: 'groups of 8', m: 5, k: 64, n: 24, groupSize: 8 },
         { name: 'rows past a workgroup of units', m: 70, k: 32, n: 8, groupSize: 16 },
         { name: 'a wide row', m: 2, k: 640, n: 640, groupSize: 32 },
+        // Past GRID_Y_STRIDE units the dispatch goes 2-D.
+        { name: 'units past GRID_Y_STRIDE', m: GRID_Y_STRIDE / 2 + 5, k: 4, n: 8, groupSize: 4 },
       ].map((c) => ({ bits, ...c })),
     ),
   )('int$bits $name: [$m, $k] × [$k, $n], groupSize $groupSize', (c) => checkQuantMatmul(c));
