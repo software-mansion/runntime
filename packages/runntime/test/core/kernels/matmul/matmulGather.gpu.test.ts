@@ -96,6 +96,29 @@ describe('matmulGather kernel', () => {
     await checkGather(c, dtype);
   });
 
+  // Known bug: the row is d.u32(idx / n4), which TypeGPU compiles to f32
+  // division. Past ~2^23 units it rounds up to the next row, so the end of a
+  // row is never written. Turn into `it` with the fix.
+  it.fails('f16 rows past 2^23 units', async (ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    const [m, n] = [2100, 16380];
+    // out[i, c] = a[i]: K 1, every weight 1, bias 0. f16 output keeps the
+    // buffer under the default maxStorageBufferBindingSize.
+    const a = Float32Array.from({ length: m }, (_, i) => (i % 7) + 1);
+    const meta = (rows: number, cols: number) => ({ ...matrix(rows, cols), dtype: 'f16' as const });
+    const got = await toArray(
+      matmulGather(
+        upload(root, a, meta(m, 1)),
+        upload(root, new Float32Array(n).fill(1), meta(1, n)),
+        upload(root, new Float32Array(m), { elems: m, dtype: 'f32' }),
+        { bias: upload(root, new Float32Array(n), meta(1, n)) },
+      ),
+      ex,
+    );
+    const firstWrong = got.findIndex((v, i) => v !== a[Math.floor(i / n)]);
+    expect(firstWrong).toBe(-1);
+  });
+
   // Known bug: the op checks bias's dtype but not its size, so a bias of N
   // elements for 4 experts passes and the kernel reads past its end for
   // experts 1 to 3. It should refuse anything but [E, N]. Turn into `it`
