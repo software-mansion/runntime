@@ -147,6 +147,18 @@ describe('rows kernels', () => {
     expectClose(got, [...a, ...b], EXACT);
   });
 
+  // The inner concat lands in the outer's buffer at the outer's offset, so
+  // its copied input goes past both written ones.
+  it('concatChannels with a copied input inside a nested concat', async () => {
+    const a = count(6);
+    const b = count(12, 100);
+    const c = count(6, 200);
+    const av = reshape(upload(root, a, [1, 6]), [1, 2, 3]);
+    const bv = reshape(upload(root, b, [2, 6]), [2, 2, 3]);
+    const got = await toArray(cat([av, cat([bv, upload(root, c, tensor3d(1, 2, 3))], 0)], 0), ex);
+    expectClose(got, [...a, ...b, ...c], EXACT);
+  });
+
   // An input that is also a target keeps its own buffer, so it is copied.
   it('concatChannels with an input that is also a target', async () => {
     const a = count(12);
