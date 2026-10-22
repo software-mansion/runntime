@@ -160,15 +160,16 @@ describe('rows kernels', () => {
   });
 
   // An input that is also a target keeps its own buffer, so it is copied.
+  // It goes second: at offset 0 an elided target would still read back right.
   it('concatChannels with an input that is also a target', async () => {
     const a = count(12);
     const b = count(6, 100);
     const av = reshape(upload(root, a, [2, 6]), [2, 2, 3]);
     const bv = reshape(upload(root, b, [1, 6]), [1, 2, 3]);
-    const both = cat([av, bv], 0);
+    const both = cat([bv, av], 0);
     evalValues([av, both], ex);
     expectClose(await toArray(av, ex), a, EXACT);
-    expectClose(await toArray(both, ex), [...a, ...b], EXACT);
+    expectClose(await toArray(both, ex), [...b, ...a], EXACT);
   });
 
   // writeRows: copies src into rows of a caller-owned dst and returns a view
