@@ -107,6 +107,19 @@ describe('matmulQuantW kernel', () => {
     expect(() => matmul(a, weight.w, call)).toThrow(err);
   });
 
+  // Known bug: the op checks scales' dtype and that scaleBase is >= 0, but not
+  // that scaleBase + (K / groupSize) · N fits in scales, so the kernel reads
+  // past its end. Turn into `it` with the fix.
+  it.fails.each([
+    { name: 'scales shorter than one expert', rows: 1, scaleBase: 0 },
+    { name: 'a scaleBase past the end of scales', rows: 4, scaleBase: 1000 },
+  ])('refuses $name', ({ rows, scaleBase }) => {
+    const weight = randomQuantWeight(root, fused, 2);
+    const a = upload(root, new Float32Array(2 * 8), [2, 8]);
+    const scales = upload(root, weight.scales.subarray(0, rows * 8), [rows, 8]);
+    expect(() => matmul(a, weight.w, { scales, scaleBase, bits: 8, groupSize: 4 })).toThrow();
+  });
+
   it('refuses int4 columns that are not a multiple of 8', () => {
     const weight = randomQuantWeight(root, { experts: 1, k: 8, n: 4, bits: 8, groupSize: 4 }, 2);
     const a = upload(root, new Float32Array(8), [1, 8]);
