@@ -234,9 +234,15 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
       return pool.acquire(shape);
     },
     releaseOutput: (buffer, shape) => pool.release(buffer, shape),
+    // Forgets every handle, dummy and scratch it destroys, so a later
+    // dispatch makes fresh ones instead of binding a destroyed buffer.
     dispose: () => {
       pool.dispose();
       for (const b of owned.splice(0)) b.destroy();
+      handleCache.clear();
+      scratches.clear();
+      dummyF32 = undefined;
+      dummyF16 = undefined;
     },
     /** Queues one node's kernel handles. Nothing runs until submit(). */
     dispatch: (node, inputs, out, extras) => {
