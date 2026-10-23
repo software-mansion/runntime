@@ -1,5 +1,6 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
+import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { type F32Buffer, type FloatBuffer, type KernelHandle, makeHandle } from '../common.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
@@ -163,8 +164,8 @@ export function argmaxDotPartialHandle(
   buffers: { w: FloatBuffer; x: FloatBuffer; partials: F32Buffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root.createBuffer(Dims, { rows }).$usage('uniform');
-  const bindGroup = root.createBindGroup(argmaxDotVariant(elem).layout, { ...buffers, dims });
+  const dims = cachedUniform(root, Dims, { rows });
+  const bindGroup = cachedBindGroup(root, argmaxDotVariant(elem).layout, { ...buffers, dims });
   return makeHandle(pipeline, 'argmaxDot', bindGroup, ARGMAX_SPLIT);
 }
 

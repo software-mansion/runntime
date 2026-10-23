@@ -1,5 +1,6 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
+import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
   type FloatBuffer,
   flatIndex,
@@ -66,7 +67,7 @@ export function swigluChunkHandle(
   buffers: { x: FloatBuffer; out: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root.createBuffer(Dims, { total: args.total, half: args.half }).$usage('uniform');
-  const bindGroup = root.createBindGroup(swigluChunkVariant(elem).layout, { ...buffers, dims });
+  const dims = cachedUniform(root, Dims, { total: args.total, half: args.half });
+  const bindGroup = cachedBindGroup(root, swigluChunkVariant(elem).layout, { ...buffers, dims });
   return makeHandle(pipeline, 'swigluChunk', bindGroup, Math.ceil(args.total / WORKGROUP_SIZE));
 }
