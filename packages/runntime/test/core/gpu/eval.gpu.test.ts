@@ -52,12 +52,8 @@ interface GraphCase {
   leftAfterCapture?: string[];
 }
 
-/** A 16 B dummy the executor binds for a missing optional input. */
-const DUMMY = '16 B, usage 140';
 /** A uniform buffer a kernel makes itself instead of through cachedUniform. */
 const uniform = (bytes: number) => `${bytes} B, usage 76`;
-/** The [ROWS, COLS] f32 result a captured frame holds. */
-const TARGET = '512 B, usage 140';
 /** The 3-row gatherRows index list. */
 const INDEX_LIST = '12 B, usage 140';
 
@@ -77,27 +73,21 @@ const GRAPHS: GraphCase[] = [
   {
     name: 'an elementwise chain',
     build: ({ x }) => tanh(add(mul(x, x), 1)),
-    // dispose() keeps the captured target, which never went back to the pool.
-    leftAfterCapture: [TARGET],
   },
   {
     name: 'layerNorm without a bias',
     build: ({ x, w }) => layerNorm(add(x, 1), w),
-    // dispose() keeps the dummy bias, the layerNorm uniform and a captured target.
-    leftOnDispose: [DUMMY, uniform(16)],
-    leftAfterCapture: [DUMMY, TARGET, uniform(16)],
+    // dispose() keeps the layerNorm uniform.
+    leftOnDispose: [uniform(16)],
+    leftAfterCapture: [uniform(16)],
   },
   {
     name: 'softmax',
     build: ({ x }) => softmax(add(x, 1)),
-    // dispose() keeps the dummy segments buffer and a captured target.
-    leftOnDispose: [DUMMY],
-    leftAfterCapture: [DUMMY, TARGET],
   },
   {
     name: 'matmul',
     build: ({ x, m }) => tanh(matmul(x, m)),
-    leftAfterCapture: [TARGET],
   },
   {
     name: 'gatherRows',
@@ -105,75 +95,65 @@ const GRAPHS: GraphCase[] = [
     // gatherRows uploads its index list on every dispatch and never destroys it.
     leftPerRun: [INDEX_LIST],
     leftOnDispose: [INDEX_LIST],
-    // The captured target is the 3 gathered rows.
-    leftAfterCapture: [INDEX_LIST, '192 B, usage 140'],
+    leftAfterCapture: [INDEX_LIST],
   },
   {
     name: 'flash attention',
     // flash: qLen > 1, subgroups, headDim % 16 == 0
     build: ({ x, m }) => sdpa(x, m, m, FULL_ATTENTION),
-    // dispose() keeps the dummy sinks and segments buffer and a captured target.
-    leftOnDispose: [DUMMY],
-    leftAfterCapture: [DUMMY, TARGET],
   },
   {
     name: 'rows split attention',
     // rowsSubgroupSplit: qLen > 1, f32, subgroups, headDim % 16 != 0
     build: ({ x, m }) => sdpa(x, m, m, TWO_HEAD_ATTENTION),
-    // dispose() keeps the dummy, the 640 B split scratch, the split and merge
-    // uniforms and a captured target.
-    leftOnDispose: [DUMMY, '640 B, usage 140', uniform(16), uniform(8)],
-    leftAfterCapture: [DUMMY, '640 B, usage 140', uniform(16), TARGET, uniform(8)],
+    // dispose() keeps the split and merge uniforms.
+    leftOnDispose: [uniform(16), uniform(8)],
+    leftAfterCapture: [uniform(16), uniform(8)],
   },
   {
     name: 'decode attention',
     // decode: qLen == 1, kvLen <= ATTN_DECODE_CHUNK
     build: ({ w, m }) => sdpa(w, m, m, FULL_ATTENTION),
-    // dispose() keeps the dummy, the attnDecode uniform and a captured target,
-    // the one query row.
-    leftOnDispose: [DUMMY, uniform(12)],
-    leftAfterCapture: [DUMMY, '64 B, usage 140', uniform(12)],
+    // dispose() keeps the attnDecode uniform.
+    leftOnDispose: [uniform(12)],
+    leftAfterCapture: [uniform(12)],
   },
   {
     name: 'conv1d',
     build: ({ x, m }) => conv1d(x, m, { kernelSize: 1, stride: 1 }),
-    // dispose() keeps the conv1d uniform and a captured target.
+    // dispose() keeps the conv1d uniform.
     leftOnDispose: [uniform(8)],
-    leftAfterCapture: [TARGET, uniform(8)],
+    leftAfterCapture: [uniform(8)],
   },
   {
     name: 'swigluChunk',
     build: ({ x }) => swigluChunk(add(x, 1)),
-    // dispose() keeps the swigluChunk uniform and a captured target, half as
-    // wide as x.
+    // dispose() keeps the swigluChunk uniform.
     leftOnDispose: [uniform(8)],
-    leftAfterCapture: ['256 B, usage 140', uniform(8)],
+    leftAfterCapture: [uniform(8)],
   },
   {
     name: 'argmaxDot',
     build: ({ w, m }) => argmaxDot(m, w),
-    // dispose() keeps the 1024 B partials scratch, the argmaxDot uniform and a
-    // captured target, the one index.
-    leftOnDispose: ['1024 B, usage 140', uniform(4)],
-    leftAfterCapture: ['1024 B, usage 140', uniform(4), '4 B, usage 140'],
+    // dispose() keeps the argmaxDot uniform.
+    leftOnDispose: [uniform(4)],
+    leftAfterCapture: [uniform(4)],
   },
   {
     name: 'gatherRowsFrom',
     build: ({ x, idx }) => gatherRowsFrom(add(x, 1), idx),
-    // dispose() keeps the gatherRowsFrom uniform and a captured target, the 3
-    // gathered rows.
+    // dispose() keeps the gatherRowsFrom uniform.
     leftOnDispose: [uniform(8)],
-    leftAfterCapture: ['192 B, usage 140', uniform(8)],
+    leftAfterCapture: [uniform(8)],
   },
   {
     name: 'writeRows',
     // Writes into x in place, as a KV-cache append does, then reads it: a
     // released writeRows result would hand x's buffer to the pool.
     build: ({ x, w }) => tanh(writeRows(x, add(w, 1), 2)),
-    // dispose() keeps the writeRows uniform and a captured target, the view of
-    // rows 0 to 3.
+    // dispose() keeps the writeRows uniform.
     leftOnDispose: [uniform(8)],
-    leftAfterCapture: [uniform(8), '192 B, usage 140'],
+    leftAfterCapture: [uniform(8)],
   },
 ];
 
@@ -221,6 +201,18 @@ describe.for(GRAPHS)('gpuExecutor with $name', (graph) => {
     await run(ex, graph.build(values));
     ex.dispose();
     expect(buffersSince(before)).toEqual(graph.leftOnDispose ?? []);
+  });
+
+  it('runs again after dispose', async () => {
+    const values = inputs();
+    const ex = gpuExecutor(root);
+    try {
+      await run(ex, graph.build(values));
+      ex.dispose();
+      await run(ex, graph.build(values));
+    } finally {
+      ex.dispose();
+    }
   });
 
   it('frees a captured frame on dispose', async () => {

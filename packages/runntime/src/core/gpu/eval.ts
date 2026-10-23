@@ -134,6 +134,9 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
   };
   /** Memo key to the handles a dispatch encoded. */
   const handleCache = new Map<string, KernelHandle[]>();
+  /** Dummies and scratches, destroyed with the executor. A replaced scratch
+   *  stays here: memoized handles may still bind it. */
+  const owned: { destroy(): void }[] = [];
 
   // Filler for bind slots a pipeline never reads. One per dtype, 4 elements,
   // since vec4 layouts need 16 bytes minimum.
@@ -144,10 +147,16 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
   function dummy(dtype: FloatDtype): FloatBuffer;
   function dummy(dtype: FloatDtype): FloatBuffer {
     if (dtype === 'f16') {
-      dummyF16 ??= root.createBuffer(d.arrayOf(d.f16, 4)).$usage('storage');
+      if (dummyF16 === undefined) {
+        dummyF16 = root.createBuffer(d.arrayOf(d.f16, 4)).$usage('storage');
+        owned.push(dummyF16);
+      }
       return dummyF16;
     }
-    dummyF32 ??= root.createBuffer(d.arrayOf(d.f32, 4)).$usage('storage');
+    if (dummyF32 === undefined) {
+      dummyF32 = root.createBuffer(d.arrayOf(d.f32, 4)).$usage('storage');
+      owned.push(dummyF32);
+    }
     return dummyF32;
   }
 
@@ -168,6 +177,7 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
         checkBindable(root, 4 * elems, `${key} scratch`);
         s = { buf: root.createBuffer(d.arrayOf(d.f32, elems)).$usage('storage'), elems };
         scratches.set(key, s);
+        owned.push(s.buf);
       }
       return s.buf;
     },
@@ -224,7 +234,16 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
       return pool.acquire(shape);
     },
     releaseOutput: (buffer, shape) => pool.release(buffer, shape),
-    dispose: () => pool.dispose(),
+    // Forgets every handle, dummy and scratch it destroys, so a later
+    // dispatch makes fresh ones instead of binding a destroyed buffer.
+    dispose: () => {
+      pool.dispose();
+      for (const b of owned.splice(0)) b.destroy();
+      handleCache.clear();
+      scratches.clear();
+      dummyF32 = undefined;
+      dummyF16 = undefined;
+    },
     /** Queues one node's kernel handles. Nothing runs until submit(). */
     dispatch: (node, inputs, out, extras) => {
       const spec = specFor(node.pending!.op);

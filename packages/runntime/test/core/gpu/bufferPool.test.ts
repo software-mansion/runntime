@@ -39,9 +39,7 @@ describe('BufferPool', () => {
     expect(made[0]!.destroy).toHaveBeenCalledOnce();
   });
 
-  // dispose() walks the free list only, so a buffer still out (a captured
-  // target, a result nobody released) is never destroyed.
-  it.fails('destroys the buffers still out on dispose', () => {
+  it('destroys the buffers still out on dispose', () => {
     const { p, made } = pool();
     p.acquire(F32_16);
     p.dispose();
