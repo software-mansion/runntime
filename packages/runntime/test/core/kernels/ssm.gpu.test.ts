@@ -180,10 +180,12 @@ describe('ssm kernels', () => {
   });
 
   // softplus switches form past ±20; the kernel takes exp(v) below −20 and v
-  // above 20, both within f32 of log(1 + e^v).
+  // above 20, both within f32 of log(1 + e^v). At 100, e^v overflows f32, so
+  // only the v branch gives a finite result. Below −20 the two forms differ by
+  // less than any tolerance, so that case checks the result, not the branch.
   it.each([
     { name: 'far below 0', bias: -30 },
-    { name: 'far above 0', bias: 30 },
+    { name: 'far above 0', bias: 100 },
   ])('ssmSelectiveScan with a delta $name', async ({ bias }) => {
     const s = { c: 2, h: 3, w: 3, rank: 1 };
     const p = 9;
