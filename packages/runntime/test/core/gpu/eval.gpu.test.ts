@@ -22,6 +22,7 @@ import {
   softmax,
   swigluChunk,
   tanh,
+  writeRows,
 } from '../../../src/core/graph/ops.ts';
 import { matrix, type Value } from '../../../src/core/graph/value.ts';
 import type { F32Buffer } from '../../../src/core/kernels/common.ts';
@@ -179,6 +180,16 @@ const GRAPHS: GraphCase[] = [
     // gathered rows.
     leftOnDispose: [uniform(8)],
     leftAfterCapture: ['192 B, usage 140', uniform(8)],
+  },
+  {
+    name: 'writeRows',
+    // Writes into x in place, as a KV-cache append does, then reads it: a
+    // released writeRows result would hand x's buffer to the pool.
+    build: ({ x, w }) => tanh(writeRows(x, add(w, 1), 2)),
+    // dispose() keeps the writeRows uniform and a captured target, the view of
+    // rows 0 to 3.
+    leftOnDispose: [uniform(8)],
+    leftAfterCapture: [uniform(8), '192 B, usage 140'],
   },
 ];
 
