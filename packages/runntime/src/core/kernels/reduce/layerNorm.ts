@@ -1,5 +1,6 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
+import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
   type FloatBuffer,
   flatWorkgroupId,
@@ -140,10 +141,13 @@ export function layerNormHandle(
   buffers: { x: FloatBuffer; weight: FloatBuffer; bias: FloatBuffer; out: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root
-    .createBuffer(Dims, { rows: args.rows, cols: args.cols, eps: args.eps, hasBias: args.hasBias })
-    .$usage('uniform');
-  const bindGroup = root.createBindGroup(layerNormVariant(elem).layout, { ...buffers, dims });
+  const dims = cachedUniform(root, Dims, {
+    rows: args.rows,
+    cols: args.cols,
+    eps: args.eps,
+    hasBias: args.hasBias,
+  });
+  const bindGroup = cachedBindGroup(root, layerNormVariant(elem).layout, { ...buffers, dims });
   // One workgroup per row — not one thread.
   return makeHandle(pipeline, 'layerNorm', bindGroup, args.rows);
 }

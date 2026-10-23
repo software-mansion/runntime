@@ -1,5 +1,6 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
+import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
   flatIndex,
   type F32Buffer,
@@ -209,12 +210,14 @@ export function attnHandle(
   },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root
-    .createBuffer(Dims, { qLen: args.qLen, kvLen: args.kvLen, qPosOffset: args.qPosOffset })
-    .$usage('uniform');
+  const dims = cachedUniform(root, Dims, {
+    qLen: args.qLen,
+    kvLen: args.kvLen,
+    qPosOffset: args.qPosOffset,
+  });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;
-  const bindGroup = root.createBindGroup(attnLayoutFor(elem), {
+  const bindGroup = cachedBindGroup(root, attnLayoutFor(elem), {
     ...bound,
     sinks: buffers.sinks ?? filler,
     segs: buffers.segs ?? filler,
@@ -700,12 +703,14 @@ export function attnRowsHandle(
   },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root
-    .createBuffer(Dims, { qLen: args.qLen, kvLen: args.kvLen, qPosOffset: args.qPosOffset })
-    .$usage('uniform');
+  const dims = cachedUniform(root, Dims, {
+    qLen: args.qLen,
+    kvLen: args.kvLen,
+    qPosOffset: args.qPosOffset,
+  });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;
-  const bindGroup = root.createBindGroup(attnLayoutFor(elem), {
+  const bindGroup = cachedBindGroup(root, attnLayoutFor(elem), {
     ...bound,
     sinks: buffers.sinks ?? filler,
     segs: buffers.segs ?? filler,
@@ -746,15 +751,13 @@ export function attnRowsSplitHandles(
   },
   elem: Elem = F32_ELEM,
 ): KernelHandle[] {
-  const splitDims = root
-    .createBuffer(SplitDims, {
-      qLen: args.qLen,
-      kvLen: args.kvLen,
-      qPosOffset: args.qPosOffset,
-      chunks: args.chunks,
-    })
-    .$usage('uniform');
-  const splitBind = root.createBindGroup(attnSplitLayoutFor(elem), {
+  const splitDims = cachedUniform(root, SplitDims, {
+    qLen: args.qLen,
+    kvLen: args.kvLen,
+    qPosOffset: args.qPosOffset,
+    chunks: args.chunks,
+  });
+  const splitBind = cachedBindGroup(root, attnSplitLayoutFor(elem), {
     q: buffers.q,
     k: buffers.k,
     v: buffers.v,
@@ -763,10 +766,8 @@ export function attnRowsSplitHandles(
     partials: buffers.partials,
     dims: splitDims,
   });
-  const mergeDims = root
-    .createBuffer(MergeDims, { qLen: args.qLen, chunks: args.chunks })
-    .$usage('uniform');
-  const mergeBind = root.createBindGroup(attnMergeLayoutFor(elem), {
+  const mergeDims = cachedUniform(root, MergeDims, { qLen: args.qLen, chunks: args.chunks });
+  const mergeBind = cachedBindGroup(root, attnMergeLayoutFor(elem), {
     partials: buffers.partials,
     out: buffers.out,
     dims: mergeDims,
