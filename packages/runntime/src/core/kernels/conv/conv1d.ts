@@ -1,5 +1,6 @@
 import tgpu, { d } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
+import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
   type FloatBuffer,
   flatIndex,
@@ -198,9 +199,9 @@ export function conv1dHandle(
   buffers: { x: FloatBuffer; w: FloatBuffer; out: FloatBuffer; bias?: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root.createBuffer(Dims, { tIn: args.tIn, tOut: args.tOut }).$usage('uniform');
+  const dims = cachedUniform(root, Dims, { tIn: args.tIn, tOut: args.tOut });
   // An absent bias aliases `x`; hasBias=0 pipelines never read it.
-  const bindGroup = root.createBindGroup(conv1dVariant(elem).layout, {
+  const bindGroup = cachedBindGroup(root, conv1dVariant(elem).layout, {
     ...buffers,
     bias: buffers.bias ?? buffers.x,
     dims,

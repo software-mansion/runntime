@@ -243,8 +243,8 @@ export function gatherRowsFromHandle(
   buffers: { x: FloatBuffer; idx: F32Buffer; out: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const meta = root.createBuffer(GatherFromMeta, args).$usage('uniform');
-  const bindGroup = root.createBindGroup(gatherRowsFromVariant(elem).layout, { ...buffers, meta });
+  const meta = cachedUniform(root, GatherFromMeta, args);
+  const bindGroup = cachedBindGroup(root, gatherRowsFromVariant(elem).layout, { ...buffers, meta });
   return makeHandle(pipeline, 'gatherRowsFrom', bindGroup, Math.ceil(args.total / WORKGROUP_SIZE));
 }
 
@@ -255,8 +255,8 @@ export function writeRowsHandle(
   buffers: { src: FloatBuffer; dst: FloatBuffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const meta = root.createBuffer(WriteMeta, args).$usage('uniform');
-  const bindGroup = root.createBindGroup(writeRowsVariant(elem).layout, { ...buffers, meta });
+  const meta = cachedUniform(root, WriteMeta, args);
+  const bindGroup = cachedBindGroup(root, writeRowsVariant(elem).layout, { ...buffers, meta });
   return makeHandle(pipeline, 'writeRows', bindGroup, Math.ceil(args.total / WORKGROUP_SIZE));
 }
 

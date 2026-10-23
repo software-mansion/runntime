@@ -1,5 +1,6 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
+import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
   type F32Buffer,
   f32Filler,
@@ -207,14 +208,17 @@ export function attnDecodeHandle(
   },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
-  const dims = root
-    .createBuffer(Dims, { qLen: args.qLen, kvLen: args.kvLen, qPosOffset: args.qPosOffset })
-    .$usage('uniform');
-  const filler = f32Filler(buffers, elem);
-  const { dummyF32: _dummy, ...bound } = buffers;
-  const bindGroup = root.createBindGroup(attnDecodeLayoutFor(elem), {
-    ...bound,
-    sinks: buffers.sinks ?? filler,
+  const dims = cachedUniform(root, Dims, {
+    qLen: args.qLen,
+    kvLen: args.kvLen,
+    qPosOffset: args.qPosOffset,
+  });
+  const bindGroup = cachedBindGroup(root, attnDecodeLayoutFor(elem), {
+    q: buffers.q,
+    k: buffers.k,
+    v: buffers.v,
+    out: buffers.out,
+    sinks: buffers.sinks ?? f32Filler(buffers, elem),
     dims,
   });
   // One workgroup per (q row, q head), not one thread.
@@ -451,14 +455,12 @@ export function attnDecodeSplitHandles(
   },
   elem: Elem = F32_ELEM,
 ): [KernelHandle, KernelHandle] {
-  const dims = root
-    .createBuffer(SplitDims, {
-      kvLen: args.kvLen,
-      qPosOffset: args.qPosOffset,
-      chunks: args.chunks,
-    })
-    .$usage('uniform');
-  const partialBind = root.createBindGroup(attnDecodeSplitLayoutFor(elem), {
+  const dims = cachedUniform(root, SplitDims, {
+    kvLen: args.kvLen,
+    qPosOffset: args.qPosOffset,
+    chunks: args.chunks,
+  });
+  const partialBind = cachedBindGroup(root, attnDecodeSplitLayoutFor(elem), {
     q: buffers.q,
     k: buffers.k,
     v: buffers.v,
@@ -466,8 +468,8 @@ export function attnDecodeSplitHandles(
     partials: buffers.partials,
     dims,
   });
-  const mergeDims = root.createBuffer(MergeDims, { chunks: args.chunks }).$usage('uniform');
-  const mergeBind = root.createBindGroup(attnDecodeMergeLayoutFor(elem), {
+  const mergeDims = cachedUniform(root, MergeDims, { chunks: args.chunks });
+  const mergeBind = cachedBindGroup(root, attnDecodeMergeLayoutFor(elem), {
     partials: buffers.partials,
     out: buffers.out,
     dims: mergeDims,
