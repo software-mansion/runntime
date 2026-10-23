@@ -73,4 +73,13 @@ describe('BufferPool', () => {
     pool.dispose();
     expect(made.map((m) => m.destroyed)).toEqual([1, 1]);
   });
+
+  // dispose() walks the free list only, so a buffer still out (a captured
+  // target, a result nobody released) is never destroyed.
+  it.fails('dispose destroys the buffers still out', () => {
+    const { pool, made } = stubPool();
+    pool.acquire(f32(16));
+    pool.dispose();
+    expect(made[0]!.destroyed).toBe(1);
+  });
 });
