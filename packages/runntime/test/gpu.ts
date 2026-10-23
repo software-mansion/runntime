@@ -1,5 +1,6 @@
 /** Shared setup for `*.gpu.test.ts`: one real WebGPU device per test file,
- *  plus the float comparison every kernel test uses. */
+ *  the float comparison every kernel test uses, and a count of live GPU
+ *  buffers for the leak checks. */
 import tgpu, { type TgpuRoot } from 'typegpu';
 import { expect, onTestFinished, type TestContext } from 'vitest';
 import { tensor } from '../src/core/gpu/buffers.ts';
@@ -10,6 +11,41 @@ import {
   type RunntimeExecutor,
 } from '../src/core/gpu/eval.ts';
 import type { Value, ValueMeta } from '../src/core/graph/value.ts';
+
+/** Every GPU buffer created on this page and not destroyed yet. Counting
+ *  starts when this module loads, so a leak check compares two snapshots,
+ *  never an absolute count. */
+const live = new Set<GPUBuffer>();
+// Node tests import this file for randomF32 and have no WebGPU to wrap.
+if (typeof GPUDevice !== 'undefined') {
+  const createBuffer = GPUDevice.prototype.createBuffer;
+  const destroyBuffer = GPUBuffer.prototype.destroy;
+  GPUDevice.prototype.createBuffer = function (desc) {
+    const buf = createBuffer.call(this, desc);
+    live.add(buf);
+    return buf;
+  };
+  GPUBuffer.prototype.destroy = function () {
+    live.delete(this);
+    destroyBuffer.call(this);
+  };
+}
+
+/** A snapshot of the buffers alive now. */
+export function liveBuffers(): ReadonlySet<GPUBuffer> {
+  return new Set(live);
+}
+
+/** Size and usage of each live buffer missing from `before`, so a failure
+ *  names what leaked. */
+export function buffersSince(before: ReadonlySet<GPUBuffer>): string[] {
+  return [...live].filter((b) => !before.has(b)).map((b) => `${b.size} B, usage ${b.usage}`);
+}
+
+/** What `buffersSince` lists after `times` runs that each leave `perRun`. */
+export function repeated(perRun: readonly string[], times: number): string[] {
+  return Array.from({ length: times }, () => perRun).flat();
+}
 
 let device: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
 
