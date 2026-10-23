@@ -487,6 +487,23 @@ describe('hwc4 kernels', () => {
         name: '1x1',
         c: { cIn: 8, cOut: 32, h: 32, w: 32, kH: 1, kW: 1, stride: 1, padding: 0, groups: 1 },
       },
+      // 1x1s: H·W % 4 != 0
+      {
+        name: '1x1s',
+        c: { cIn: 8, cOut: 8, h: 3, w: 5, kH: 1, kW: 1, stride: 1, padding: 0, groups: 1 },
+      },
+      {
+        name: 'direct',
+        c: { cIn: 4, cOut: 8, h: 8, w: 7, kH: 3, kW: 3, stride: 1, padding: 1, groups: 1 },
+      },
+      {
+        name: 'tiled',
+        c: { cIn: 16, cOut: 64, h: 48, w: 48, kH: 3, kW: 3, stride: 1, padding: 1, groups: 1 },
+      },
+      {
+        name: 'depthwise',
+        c: { cIn: 8, cOut: 8, h: 10, w: 10, kH: 3, kW: 3, stride: 1, padding: 1, groups: 8 },
+      },
       {
         name: 'winograd',
         c: {
@@ -509,6 +526,18 @@ describe('hwc4 kernels', () => {
       const xs = hwc4(x, c.cIn, c.h, c.w);
       const got = await read(cat([xs, conv.forward(xs)], 0));
       expectClose(got, [...x, ...conv2dRef(x, wt, c)], convTol(c));
+    });
+
+    // The residual add folds into the conv's epilogue, so it writes at the
+    // concat's offset too.
+    it('a conv with a residual into the second half of a concat (direct)', async (ctx) => {
+      needF16(ctx);
+      const c = { cIn: 8, cOut: 8, h: 8, w: 7, kH: 3, kW: 3, stride: 1, padding: 1, groups: 1 };
+      const x = image(c.cIn, c.h, c.w, 1);
+      const { conv, wt } = await makeConv2d(c, 2);
+      const xs = hwc4(x, c.cIn, c.h, c.w);
+      const got = await read(cat([xs, add(xs, conv.forward(xs))], 0));
+      expectClose(got, [...x, ...conv2dRef(x, wt, c, undefined, x)], convTol(c));
     });
 
     // Known bug: the 1x1s kernel reads its pixel block from workgroup_id.x
