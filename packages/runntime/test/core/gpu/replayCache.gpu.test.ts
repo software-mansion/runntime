@@ -23,13 +23,6 @@ function cache() {
   });
 }
 
-/** What dispose() leaves, a known leak: each bucket's executor keeps its
- *  recorded intermediate, dummy and target, for buckets 4 and 8. */
-const LEFT_ON_DISPOSE = [
-  ...['256 B, usage 140', '16 B, usage 140', '256 B, usage 140'],
-  ...['512 B, usage 140', '16 B, usage 140', '512 B, usage 140'],
-];
-
 const fill = (T: number, scratch: { x: Float32Array }) => scratch.x.set(randomF32(T * COLS, T));
 
 describe('createReplayCache', () => {
@@ -56,6 +49,6 @@ describe('createReplayCache', () => {
     const replays = cache();
     await replays.warmAll();
     replays.dispose();
-    expect(buffersSince(before)).toEqual(LEFT_ON_DISPOSE);
+    expect(buffersSince(before)).toEqual([]);
   });
 });

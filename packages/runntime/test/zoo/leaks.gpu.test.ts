@@ -98,13 +98,10 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    // replayCache.dispose() keeps the bucket executor: its intermediates,
-    // dummy and result, and the kernels' uniforms (usage 76).
+    // dispose() keeps the kernels' uniforms.
     leftOnDispose: [
-      ...['24576 B, usage 140', '8 B, usage 76', '24576 B, usage 140', '8 B, usage 76'],
-      ...['24576 B, usage 140', '16 B, usage 76', '73728 B, usage 140', '16 B, usage 140'],
-      ...['16 B, usage 76', '98304 B, usage 140', '16 B, usage 76', '16 B, usage 76'],
-      ...['16 B, usage 76', '1536 B, usage 140'],
+      ...Array<string>(2).fill('8 B, usage 76'),
+      ...Array<string>(5).fill('16 B, usage 76'),
     ],
   },
   {
@@ -151,9 +148,7 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    // executor.dispose() keeps its 8 B f16 dummy, and toArray keeps its
-    // 10-class result out of the pool.
-    leftOnDispose: ['8 B, usage 140', '40 B, usage 140'],
+    // toArray keeps its 10-class result out of the pool.
     leftPerCall: ['40 B, usage 140'],
   },
 ];
