@@ -1,7 +1,7 @@
 /** EmbeddingGemma 2 for createEmbedder: text, images, video and audio,
  *  task instructions, 768 values or fewer with `dims`. */
 
-import { createResourceScope, RunntimeError } from '../../core/index.ts';
+import { createResourceScope, defaultRoot, gpuExecutor, RunntimeError } from '../../core/index.ts';
 import type {
   EmbedInput,
   EmbedPart,
@@ -50,6 +50,10 @@ export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<Em
     const model = scope.track(new EmbeddingGemma2Model());
     const vision = load.vision && scope.track(new EmbeddingGemma2VisionModel());
     const audio = load.audio && scope.track(new EmbeddingGemma2AudioModel());
+    // Image and clip sizes vary, so each tower runs on its own executor and
+    // trims its pool after a call. An executor allocates nothing until used.
+    const visionEx = scope.track(gpuExecutor(defaultRoot()));
+    const audioEx = scope.track(gpuExecutor(defaultRoot()));
     if (load.dtype === 'f16') {
       model.half();
       vision?.half();
@@ -119,7 +123,7 @@ export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<Em
               `${where}: images and video need the vision tower, which this embedder did not load`,
             );
           }
-          return encodeImage(vision, image, budget);
+          return encodeImage(vision, image, budget, visionEx);
         });
       };
       for (const part of parts) {
@@ -136,7 +140,7 @@ export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<Em
                 `${where}: audio needs the audio tower, which this embedder did not load`,
               );
             }
-            return encodeAudio(audio, samples);
+            return encodeAudio(audio, samples, audioEx);
           });
         }
       }
@@ -170,13 +174,13 @@ export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<Em
         // paths.
         if (vision) {
           const dot = imageBuffer(new Uint8Array(4), 1, 1);
-          await encodeImage(vision, dot, imageTokens);
+          await encodeImage(vision, dot, imageTokens, visionEx);
           if (imageTokens !== VIDEO_FRAME_TOKENS) {
-            await encodeImage(vision, dot, VIDEO_FRAME_TOKENS);
+            await encodeImage(vision, dot, VIDEO_FRAME_TOKENS, visionEx);
           }
         }
         // A tenth of a second of silence runs every audio kernel.
-        if (audio) await encodeAudio(audio, new Float32Array(1600));
+        if (audio) await encodeAudio(audio, new Float32Array(1600), audioEx);
         return core.embedPooled(probe);
       },
       async pool(where, inputs, task) {

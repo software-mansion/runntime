@@ -11,7 +11,9 @@
 
 import {
   createReplayCache,
+  defaultRoot,
   gatherRowsFrom,
+  gpuExecutor,
   tensor,
   toArray,
   type Value,
@@ -95,6 +97,8 @@ export function createEmbeddingGemma2EmbedCore(
     return { cos: tensor(cos, [maxT, headDim]), sin: tensor(sin, [maxT, headDim]) };
   };
   const tables = { sliding: table('sliding'), full: table('full') };
+  // Eager forwards vary in length, so their pool is trimmed after each.
+  const eager = gpuExecutor(defaultRoot());
 
   const inputsOf = (
     planes: Record<keyof Planes, Value>,
@@ -146,9 +150,10 @@ export function createEmbeddingGemma2EmbedCore(
     };
     try {
       const longest = Math.max(...inputs.map(({ ids }) => ids.length));
-      return await toArray(model.forward(inputsOf(values, longest)));
+      return await toArray(model.forward(inputsOf(values, longest)), eager);
     } finally {
       for (const v of Object.values(values)) v.buffer.destroy();
+      eager.trim();
     }
   };
 
@@ -196,6 +201,7 @@ export function createEmbeddingGemma2EmbedCore(
     warmBuckets,
     dispose() {
       replays.dispose();
+      eager.dispose();
       for (const { cos, sin } of Object.values(tables)) {
         cos.buffer.destroy();
         sin.buffer.destroy();

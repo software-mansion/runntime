@@ -59,7 +59,21 @@ export interface FusedReadback {
   toArrayFused(value: Value): Promise<Float32Array>;
 }
 
-export type RunntimeExecutor = Executor & Readback & Releaser & CaptureExecutor & FusedReadback;
+/** Frees pooled buffers a model has stopped using. */
+export interface TrimExecutor {
+  /** Destroys the free pooled buffers of every size no eval has used since
+   *  the last trim. A model whose input length varies calls it after each
+   *  call, or its pool keeps a set of buffers for every length it has seen.
+   *  Does nothing once captured: the replay owns the pool's buffers. */
+  trim(): void;
+}
+
+export type RunntimeExecutor = Executor &
+  Readback &
+  Releaser &
+  CaptureExecutor &
+  FusedReadback &
+  TrimExecutor;
 
 /** Sets the device every model runs on and returns its executor. Call it
  *  once at startup, before the first create<Task>(). */
@@ -225,6 +239,10 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
     },
     releaseOutput: (buffer, shape) => pool.release(buffer, shape),
     dispose: () => pool.dispose(),
+    trim: () => {
+      // Memoized handles bind the destroyed buffers.
+      if (!frozen && pool.trim()) handleCache.clear();
+    },
     /** Queues one node's kernel handles. Nothing runs until submit(). */
     dispatch: (node, inputs, out, extras) => {
       const spec = specFor(node.pending!.op);

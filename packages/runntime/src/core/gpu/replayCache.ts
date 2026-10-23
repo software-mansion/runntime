@@ -43,7 +43,7 @@ export interface ReplayCache<K extends string> {
   /** Builds and validates every bucket. Call it from load-time warm-up so
    *  runtime replays never hit a first-use compile. */
   warmAll(): Promise<void>;
-  /** Destroys every bucket's input buffers. The cache is unusable after. */
+  /** Destroys every bucket's buffers. The cache is unusable after. */
   dispose(): void;
 }
 
@@ -150,6 +150,8 @@ export function createReplayCache<K extends string>(cfg: ReplayCacheConfig<K>): 
       disposed = true;
       for (const b of buckets.values()) {
         for (const k of Object.keys(b.buffers) as K[]) b.buffers[k].destroy();
+        b.ex.dispose();
+        if (b.target.state === 'materialized') b.target.buffer.destroy();
       }
       buckets.clear();
     },

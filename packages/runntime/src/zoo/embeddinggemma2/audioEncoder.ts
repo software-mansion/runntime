@@ -1,7 +1,7 @@
 /** EmbeddingGemma 2 audio encoding: 16 kHz samples in, their token rows for
  *  the text model out, one eager forward of the audio tower per clip. */
 
-import { RunntimeError, tensor, toArray } from '../../core/index.ts';
+import { RunntimeError, tensor, toArray, type RunntimeExecutor } from '../../core/index.ts';
 import type { EmbeddingGemma2AudioInputs, EmbeddingGemma2AudioModel } from './audioModel.ts';
 import { SPEECH_SAMPLE_RATE } from '../tasks/audio/audioInput.ts';
 
@@ -184,11 +184,13 @@ export function convTaps(rows: number, cols: number): Float32Array {
 }
 
 /** A clip, mono samples at 16 kHz in [-1, 1], to its token rows
- *  [tokens · text hidden]. Only the first 30 s count. Throws
- *  INVALID_ARGUMENT for a clip shorter than one frame. */
+ *  [tokens · text hidden]. Only the first 30 s count. Runs on `ex` and trims
+ *  its pool after. Throws INVALID_ARGUMENT for a clip shorter than one
+ *  frame. */
 export async function encodeAudio(
   model: EmbeddingGemma2AudioModel,
   samples: Float32Array,
+  ex: RunntimeExecutor,
 ): Promise<Float32Array> {
   const { mels } = model.cfg;
   const tokens = audioTokens(samples.length);
@@ -202,9 +204,10 @@ export async function encodeAudio(
     tokens,
   };
   try {
-    return await toArray(model.forward(inputs));
+    return await toArray(model.forward(inputs), ex);
   } finally {
     inputs.patches.buffer.destroy();
     inputs.taps.buffer.destroy();
+    ex.trim();
   }
 }
