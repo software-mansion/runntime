@@ -118,6 +118,21 @@ describe('conv1d kernel', () => {
       name: 'gemm shape with C_out % 4 != 0 (direct)',
       c: { tIn: 70, cIn: 16, cOut: 35, kernelSize: 4, stride: 2 },
     },
+    // direct: a gemm shape with one condition broken at a time. tIn 71 makes
+    // padRight add an output frame; stride 1 keeps the C_in 18 row stride off
+    // a multiple of 4.
+    {
+      name: 'gemm shape with padLeft (direct)',
+      c: { tIn: 70, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, padLeft: 1 },
+    },
+    {
+      name: 'gemm shape with padRight (direct)',
+      c: { tIn: 71, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, padRight: 1 },
+    },
+    {
+      name: 'gemm shape with C_in % 4 != 0 (direct)',
+      c: { tIn: 70, cIn: 18, cOut: 36, kernelSize: 4, stride: 1 },
+    },
   ];
   it.for((['f32', 'f16'] as const).flatMap((dtype) => SHAPES.map((s) => ({ dtype, ...s }))))(
     '$dtype $name',
