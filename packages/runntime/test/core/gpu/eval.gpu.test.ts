@@ -227,6 +227,18 @@ describe.for(GRAPHS)('gpuExecutor with $name', (graph) => {
     expect(buffersSince(before)).toEqual(graph.leftOnDispose ?? []);
   });
 
+  it('runs again after dispose', async () => {
+    const values = inputs();
+    const ex = gpuExecutor(root);
+    try {
+      await run(ex, graph.build(values));
+      ex.dispose();
+      await run(ex, graph.build(values));
+    } finally {
+      ex.dispose();
+    }
+  });
+
   it('frees a captured frame on dispose', async (ctx) => {
     if (graph.needs) requireFeature(ctx, root, graph.needs);
     const values = inputs();
