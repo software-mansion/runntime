@@ -101,11 +101,6 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    // dispose() keeps the kernels' uniforms.
-    leftOnDispose: [
-      ...Array<string>(2).fill('8 B, usage 76'),
-      ...Array<string>(5).fill('16 B, usage 76'),
-    ],
   },
   {
     name: 'MiniLM, a batch',
@@ -128,12 +123,7 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    // dispose() also keeps the kernels' uniforms.
-    leftOnDispose: [
-      ...MINILM_BATCH_UPLOADS,
-      ...Array<string>(5).fill('16 B, usage 76'),
-      MINILM_BATCH_RESULT,
-    ],
+    leftOnDispose: [...MINILM_BATCH_UPLOADS, MINILM_BATCH_RESULT],
     leftPerCall: [...MINILM_BATCH_UPLOADS, MINILM_BATCH_RESULT],
   },
   {

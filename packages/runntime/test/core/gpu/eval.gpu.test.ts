@@ -72,8 +72,6 @@ interface GraphCase {
   leftAfterCapture?: string[];
 }
 
-/** A uniform buffer a kernel makes itself instead of through cachedUniform. */
-const uniform = (bytes: number) => `${bytes} B, usage 76`;
 /** The 3-row gatherRows index list. */
 const INDEX_LIST = '12 B, usage 140';
 
@@ -97,9 +95,6 @@ const GRAPHS: GraphCase[] = [
   {
     name: 'layerNorm without a bias',
     build: ({ x, w }) => layerNorm(add(x, 1), w),
-    // dispose() keeps the layerNorm uniform.
-    leftOnDispose: [uniform(16)],
-    leftAfterCapture: [uniform(16)],
   },
   {
     name: 'softmax',
@@ -128,54 +123,33 @@ const GRAPHS: GraphCase[] = [
     needs: 'subgroups',
     // rowsSubgroupSplit: qLen > 1, f32, subgroups, headDim % 16 != 0
     build: ({ x, m }) => sdpa(x, m, m, TWO_HEAD_ATTENTION),
-    // dispose() keeps the split and merge uniforms.
-    leftOnDispose: [uniform(16), uniform(8)],
-    leftAfterCapture: [uniform(16), uniform(8)],
   },
   {
     name: 'decode attention',
     // decode: qLen == 1, kvLen <= ATTN_DECODE_CHUNK
     build: ({ w, m }) => sdpa(w, m, m, FULL_ATTENTION),
-    // dispose() keeps the attnDecode uniform.
-    leftOnDispose: [uniform(12)],
-    leftAfterCapture: [uniform(12)],
   },
   {
     name: 'conv1d',
     build: ({ x, m }) => conv1d(x, m, { kernelSize: 1, stride: 1 }),
-    // dispose() keeps the conv1d uniform.
-    leftOnDispose: [uniform(8)],
-    leftAfterCapture: [uniform(8)],
   },
   {
     name: 'swigluChunk',
     build: ({ x }) => swigluChunk(add(x, 1)),
-    // dispose() keeps the swigluChunk uniform.
-    leftOnDispose: [uniform(8)],
-    leftAfterCapture: [uniform(8)],
   },
   {
     name: 'argmaxDot',
     build: ({ w, m }) => argmaxDot(m, w),
-    // dispose() keeps the argmaxDot uniform.
-    leftOnDispose: [uniform(4)],
-    leftAfterCapture: [uniform(4)],
   },
   {
     name: 'gatherRowsFrom',
     build: ({ x, idx }) => gatherRowsFrom(add(x, 1), idx),
-    // dispose() keeps the gatherRowsFrom uniform.
-    leftOnDispose: [uniform(8)],
-    leftAfterCapture: [uniform(8)],
   },
   {
     name: 'writeRows',
     // Writes into x in place, as a KV-cache append does, then reads it: a
     // released writeRows result would hand x's buffer to the pool.
     build: ({ x, w }) => tanh(writeRows(x, add(w, 1), 2)),
-    // dispose() keeps the writeRows uniform.
-    leftOnDispose: [uniform(8)],
-    leftAfterCapture: [uniform(8)],
   },
 ];
 
