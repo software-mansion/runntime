@@ -13,7 +13,7 @@ import { MINILM_L6 } from '../../src/zoo/minilm/config.ts';
 import { createMinilmEmbedCore } from '../../src/zoo/minilm/embedCore.ts';
 import { MinilmModel } from '../../src/zoo/minilm/model.ts';
 import { MobileNetV4Model } from '../../src/zoo/mobilenetv4/model.ts';
-import { buffersSince, gpu, liveBuffers, randomF32, requireFeature } from '../gpu.ts';
+import { buffersSince, gpu, liveBuffers, randomF32, repeated, requireFeature } from '../gpu.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
  *  call per shape records replays and fills the pool. */
@@ -50,10 +50,10 @@ interface LeakCase {
   name: string;
   needs?: GPUFeatureName;
   build(root: TgpuRoot): Runner;
-  /** A known leak, not fixed yet, that fails the dispose check. */
-  disposeLeak?: string;
-  /** A known leak, not fixed yet, that fails the warm check. */
-  callLeak?: string;
+  /** Buffers a known leak, not fixed yet, leaves behind after dispose. */
+  leftOnDispose?: string[];
+  /** Buffers a known leak, not fixed yet, leaves behind on every warm call. */
+  leftPerCall?: string[];
 }
 
 /** all-MiniLM-L6-v2 at two layers and a small vocab: the replay path for one
@@ -74,27 +74,60 @@ const TINY_MNV4 = {
 
 const CASES: LeakCase[] = [
   {
-    name: 'MiniLM embed core',
+    name: 'MiniLM, one text',
     build(root) {
       const model = new MinilmModel(TINY_MINILM);
       loadRandomWeights(model, root);
       const core = createMinilmEmbedCore(model);
       return {
-        call: async () => {
-          await core.embedPooled([1, 2, 3, 4, 5]);
-          await core.embedPooledBatch([
-            [1, 2, 3],
-            [4, 5],
-          ]);
-        },
+        call: () => core.embedPooled([1, 2, 3, 4, 5]),
         dispose: () => {
           core.dispose();
           model.dispose();
         },
       };
     },
-    disposeLeak: 'replayCache.dispose() keeps each bucket executor and its recorded buffers',
-    callLeak: 'embedPooledBatch never destroys its uploads, and toArray keeps its result',
+    // replayCache.dispose() keeps the bucket executor: its intermediates,
+    // dummy and result, and the kernels' uniforms (usage 76).
+    leftOnDispose: [
+      ...['24576 B, usage 140', '8 B, usage 76', '24576 B, usage 140', '8 B, usage 76'],
+      ...['24576 B, usage 140', '16 B, usage 76', '73728 B, usage 140', '16 B, usage 140'],
+      ...['16 B, usage 76', '98304 B, usage 140', '16 B, usage 76', '16 B, usage 76'],
+      ...['16 B, usage 76', '1536 B, usage 140'],
+    ],
+  },
+  {
+    name: 'MiniLM, a batch',
+    build(root) {
+      const model = new MinilmModel(TINY_MINILM);
+      loadRandomWeights(model, root);
+      const core = createMinilmEmbedCore(model);
+      return {
+        call: () =>
+          core.embedPooledBatch([
+            [1, 2, 3],
+            [4, 5],
+          ]),
+        dispose: () => {
+          core.dispose();
+          model.dispose();
+        },
+      };
+    },
+    // embedPooledBatch never destroys its segment, selector, id and position
+    // uploads, toArray keeps its result, and dispose() keeps the uniforms.
+    leftOnDispose: [
+      ...['40 B, usage 140', '40 B, usage 140', '20 B, usage 140', '20 B, usage 140'],
+      ...Array<string>(5).fill('16 B, usage 76'),
+      '3072 B, usage 140',
+    ],
+    leftPerCall: [
+      '40 B, usage 140',
+      '40 B, usage 140',
+      '20 B, usage 140',
+      '20 B, usage 140',
+      '3072 B, usage 140',
+    ],
   },
   {
     name: 'MobileNetV4',
@@ -114,13 +147,15 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    disposeLeak: 'executor.dispose() keeps its dummy buffers, and toArray keeps its result',
-    callLeak: 'toArray keeps its result buffer out of the pool',
+    // executor.dispose() keeps its 8 B f16 dummy, and toArray keeps its
+    // 10-class result out of the pool.
+    leftOnDispose: ['8 B, usage 140', '40 B, usage 140'],
+    leftPerCall: ['40 B, usage 140'],
   },
 ];
 
-describe.for(CASES)('$name', ({ build, needs, disposeLeak, callLeak }) => {
-  (disposeLeak ? it.fails : it)('frees every buffer on dispose', async (ctx) => {
+describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = [] }) => {
+  it('frees every buffer on dispose', async (ctx) => {
     const { root } = await gpu();
     if (needs) requireFeature(ctx, root, needs);
     // A throwaway run first: pipelines and the readback staging buffer belong
@@ -133,10 +168,10 @@ describe.for(CASES)('$name', ({ build, needs, disposeLeak, callLeak }) => {
     const runner = build(root);
     await runner.call();
     runner.dispose();
-    expect(buffersSince(before)).toEqual([]);
+    expect(buffersSince(before)).toEqual(leftOnDispose);
   });
 
-  (callLeak ? it.fails : it)('stops allocating once warm', async (ctx) => {
+  it('stops allocating once warm', async (ctx) => {
     const { root } = await gpu();
     if (needs) requireFeature(ctx, root, needs);
     const runner = build(root);
@@ -144,7 +179,7 @@ describe.for(CASES)('$name', ({ build, needs, disposeLeak, callLeak }) => {
       for (let i = 0; i < WARM_CALLS; i++) await runner.call();
       const before = liveBuffers();
       for (let i = 0; i < STEADY_CALLS; i++) await runner.call();
-      expect(buffersSince(before)).toEqual([]);
+      expect(buffersSince(before)).toEqual(repeated(leftPerCall, STEADY_CALLS));
     } finally {
       runner.dispose();
     }

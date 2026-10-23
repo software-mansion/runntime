@@ -42,6 +42,11 @@ export function buffersSince(before: ReadonlySet<GPUBuffer>): string[] {
   return [...live].filter((b) => !before.has(b)).map((b) => `${b.size} B, usage ${b.usage}`);
 }
 
+/** What `buffersSince` lists after `times` runs that each leave `perRun`. */
+export function repeated(perRun: readonly string[], times: number): string[] {
+  return Array.from({ length: times }, () => perRun).flat();
+}
+
 let device: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
 
 /** The device the library asks for in production, with the same optional
