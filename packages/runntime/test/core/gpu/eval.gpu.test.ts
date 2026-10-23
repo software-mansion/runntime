@@ -4,11 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { evalValues, gpuExecutor, type RunntimeExecutor } from '../../../src/core/gpu/eval.ts';
 import {
   add,
+  argmaxDot,
+  conv1d,
   gatherRows,
+  gatherRowsFrom,
   layerNorm,
   matmul,
   mul,
+  sdpa,
   softmax,
+  swigluChunk,
   tanh,
 } from '../../../src/core/graph/ops.ts';
 import type { Value } from '../../../src/core/graph/value.ts';
@@ -30,6 +35,8 @@ interface Inputs {
   w: Value;
   /** [COLS, COLS], a matmul weight. */
   m: Value;
+  /** [3, 1] f32 row indices, as gatherRowsFrom takes them. */
+  idx: Value;
 }
 
 interface GraphCase {
@@ -46,12 +53,24 @@ interface GraphCase {
 
 /** A 16 B dummy the executor binds for a missing optional input. */
 const DUMMY = '16 B, usage 140';
-/** A kernel's uniform buffer, made by the kernel, not the executor. */
-const UNIFORM = '16 B, usage 76';
+/** A uniform buffer a kernel makes itself instead of through cachedUniform. */
+const uniform = (bytes: number) => `${bytes} B, usage 76`;
 /** The [ROWS, COLS] f32 result a captured frame holds. */
 const TARGET = '512 B, usage 140';
 /** The 3-row gatherRows index list. */
 const INDEX_LIST = '12 B, usage 140';
+
+/** Attention with every key visible, q [T, COLS] against k and v
+ *  [COLS, COLS]: one head over all COLS columns. */
+const FULL_ATTENTION = {
+  qHeads: 1,
+  kvHeads: 1,
+  headDim: COLS,
+  windowLeft: Infinity,
+  windowRight: Infinity,
+};
+/** The same over two heads of COLS / 2, a head size flash does not take. */
+const TWO_HEAD_ATTENTION = { ...FULL_ATTENTION, qHeads: 2, kvHeads: 2, headDim: COLS / 2 };
 
 const GRAPHS: GraphCase[] = [
   {
@@ -63,9 +82,9 @@ const GRAPHS: GraphCase[] = [
   {
     name: 'layerNorm without a bias',
     build: ({ x, w }) => layerNorm(add(x, 1), w),
-    // dispose() keeps the dummy bias, the layerNorm uniforms and a captured target.
-    leftOnDispose: [DUMMY, UNIFORM],
-    leftAfterCapture: [DUMMY, TARGET, UNIFORM],
+    // dispose() keeps the dummy bias, the layerNorm uniform and a captured target.
+    leftOnDispose: [DUMMY, uniform(16)],
+    leftAfterCapture: [DUMMY, TARGET, uniform(16)],
   },
   {
     name: 'softmax',
@@ -88,6 +107,63 @@ const GRAPHS: GraphCase[] = [
     // The captured target is the 3 gathered rows.
     leftAfterCapture: [INDEX_LIST, '192 B, usage 140'],
   },
+  {
+    name: 'flash attention',
+    // flash: qLen > 1, subgroups, headDim % 16 == 0
+    build: ({ x, m }) => sdpa(x, m, m, FULL_ATTENTION),
+    // dispose() keeps the dummy sinks and segments buffer and a captured target.
+    leftOnDispose: [DUMMY],
+    leftAfterCapture: [DUMMY, TARGET],
+  },
+  {
+    name: 'rows split attention',
+    // rowsSubgroupSplit: qLen > 1, f32, subgroups, headDim % 16 != 0
+    build: ({ x, m }) => sdpa(x, m, m, TWO_HEAD_ATTENTION),
+    // dispose() keeps the dummy, the 640 B split scratch, the split and merge
+    // uniforms and a captured target.
+    leftOnDispose: [DUMMY, '640 B, usage 140', uniform(16), uniform(8)],
+    leftAfterCapture: [DUMMY, '640 B, usage 140', uniform(16), TARGET, uniform(8)],
+  },
+  {
+    name: 'decode attention',
+    // decode: qLen == 1, kvLen <= ATTN_DECODE_CHUNK
+    build: ({ w, m }) => sdpa(w, m, m, FULL_ATTENTION),
+    // dispose() keeps the dummy, the attnDecode uniform and a captured target,
+    // the one query row.
+    leftOnDispose: [DUMMY, uniform(12)],
+    leftAfterCapture: [DUMMY, '64 B, usage 140', uniform(12)],
+  },
+  {
+    name: 'conv1d',
+    build: ({ x, m }) => conv1d(x, m, { kernelSize: 1, stride: 1 }),
+    // dispose() keeps the conv1d uniform and a captured target.
+    leftOnDispose: [uniform(8)],
+    leftAfterCapture: [TARGET, uniform(8)],
+  },
+  {
+    name: 'swigluChunk',
+    build: ({ x }) => swigluChunk(add(x, 1)),
+    // dispose() keeps the swigluChunk uniform and a captured target, half as
+    // wide as x.
+    leftOnDispose: [uniform(8)],
+    leftAfterCapture: ['256 B, usage 140', uniform(8)],
+  },
+  {
+    name: 'argmaxDot',
+    build: ({ w, m }) => argmaxDot(m, w),
+    // dispose() keeps the 1024 B partials scratch, the argmaxDot uniform and a
+    // captured target, the one index.
+    leftOnDispose: ['1024 B, usage 140', uniform(4)],
+    leftAfterCapture: ['1024 B, usage 140', uniform(4), '4 B, usage 140'],
+  },
+  {
+    name: 'gatherRowsFrom',
+    build: ({ x, idx }) => gatherRowsFrom(add(x, 1), idx),
+    // dispose() keeps the gatherRowsFrom uniform and a captured target, the 3
+    // gathered rows.
+    leftOnDispose: [uniform(8)],
+    leftAfterCapture: ['192 B, usage 140', uniform(8)],
+  },
 ];
 
 function inputs(): Inputs {
@@ -95,6 +171,7 @@ function inputs(): Inputs {
     x: upload(root, randomF32(ROWS * COLS, 1), [ROWS, COLS]),
     w: upload(root, randomF32(COLS, 2), [1, COLS]),
     m: upload(root, randomF32(COLS * COLS, 3), [COLS, COLS]),
+    idx: upload(root, new Float32Array([3, 0, 3]), [3, 1]),
   };
 }
 
