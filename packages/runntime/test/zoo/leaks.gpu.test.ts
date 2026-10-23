@@ -2,7 +2,7 @@
  *  must free every GPU buffer it made on dispose, and must stop allocating
  *  once warm. */
 import type { TgpuRoot } from 'typegpu';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { tensor3d, toArray } from '../../src/core/index.ts';
 import { tensor } from '../../src/core/gpu/buffers.ts';
 import { gpuExecutor } from '../../src/core/gpu/eval.ts';
@@ -13,41 +13,13 @@ import { MINILM_L6 } from '../../src/zoo/minilm/config.ts';
 import { createMinilmEmbedCore } from '../../src/zoo/minilm/embedCore.ts';
 import { MinilmModel } from '../../src/zoo/minilm/model.ts';
 import { MobileNetV4Model } from '../../src/zoo/mobilenetv4/model.ts';
-import { gpu, randomF32, requireFeature } from '../gpu.ts';
+import { buffersSince, gpu, liveBuffers, randomF32, requireFeature } from '../gpu.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
  *  call per shape records replays and fills the pool. */
 const WARM_CALLS = 3;
 /** Calls after warm-up that must not allocate a single buffer. */
 const STEADY_CALLS = 20;
-
-/** Every GPU buffer created on this page and not destroyed yet. */
-const live = new Set<GPUBuffer>();
-const createBuffer = GPUDevice.prototype.createBuffer;
-const destroyBuffer = GPUBuffer.prototype.destroy;
-
-beforeAll(() => {
-  GPUDevice.prototype.createBuffer = function (desc) {
-    const buf = createBuffer.call(this, desc);
-    live.add(buf);
-    return buf;
-  };
-  GPUBuffer.prototype.destroy = function () {
-    live.delete(this);
-    destroyBuffer.call(this);
-  };
-});
-
-afterAll(() => {
-  GPUDevice.prototype.createBuffer = createBuffer;
-  GPUBuffer.prototype.destroy = destroyBuffer;
-});
-
-/** Size and usage of each live buffer missing from `before`, so a failure
- *  names what leaked. */
-function leftover(before: ReadonlySet<GPUBuffer>): string[] {
-  return [...live].filter((b) => !before.has(b)).map((b) => `${b.size} B, usage ${b.usage}`);
-}
 
 /** Binds every parameter and buffer the way loadStateDict does, with random
  *  values. Skips the checkpoint transforms: the names and layouts they adapt
@@ -157,11 +129,11 @@ describe.for(CASES)('$name', ({ build, needs, disposeLeak, callLeak }) => {
     await first.call();
     first.dispose();
 
-    const before = new Set(live);
+    const before = liveBuffers();
     const runner = build(root);
     await runner.call();
     runner.dispose();
-    expect(leftover(before)).toEqual([]);
+    expect(buffersSince(before)).toEqual([]);
   });
 
   (callLeak ? it.fails : it)('stops allocating once warm', async (ctx) => {
@@ -170,9 +142,9 @@ describe.for(CASES)('$name', ({ build, needs, disposeLeak, callLeak }) => {
     const runner = build(root);
     try {
       for (let i = 0; i < WARM_CALLS; i++) await runner.call();
-      const before = new Set(live);
+      const before = liveBuffers();
       for (let i = 0; i < STEADY_CALLS; i++) await runner.call();
-      expect(leftover(before)).toEqual([]);
+      expect(buffersSince(before)).toEqual([]);
     } finally {
       runner.dispose();
     }
