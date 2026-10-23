@@ -72,6 +72,17 @@ const TINY_MNV4 = {
   inputSize: 32,
 } as const;
 
+/** The uploads one MiniLM batch call of 5 tokens never frees, in the order
+ *  they are made: the [5, 2] segments from MinilmModel.forward, the [2, 5]
+ *  selector from embedPooledBatch, and the id and position lists gatherRows
+ *  uploads for Embedding.forward. */
+const MINILM_BATCH_UPLOADS = [
+  ...['40 B, usage 140', '40 B, usage 140'],
+  ...['20 B, usage 140', '20 B, usage 140'],
+];
+/** The [2, 384] embeddings toArray keeps out of the pool. */
+const MINILM_BATCH_RESULT = '3072 B, usage 140';
+
 const CASES: LeakCase[] = [
   {
     name: 'MiniLM, one text',
@@ -114,20 +125,13 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    // embedPooledBatch never destroys its segment, selector, id and position
-    // uploads, toArray keeps its result, and dispose() keeps the uniforms.
+    // dispose() also keeps the kernels' uniforms.
     leftOnDispose: [
-      ...['40 B, usage 140', '40 B, usage 140', '20 B, usage 140', '20 B, usage 140'],
+      ...MINILM_BATCH_UPLOADS,
       ...Array<string>(5).fill('16 B, usage 76'),
-      '3072 B, usage 140',
+      MINILM_BATCH_RESULT,
     ],
-    leftPerCall: [
-      '40 B, usage 140',
-      '40 B, usage 140',
-      '20 B, usage 140',
-      '20 B, usage 140',
-      '3072 B, usage 140',
-    ],
+    leftPerCall: [...MINILM_BATCH_UPLOADS, MINILM_BATCH_RESULT],
   },
   {
     name: 'MobileNetV4',
