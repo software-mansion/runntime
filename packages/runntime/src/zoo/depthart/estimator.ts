@@ -33,6 +33,14 @@ export interface Estimator {
   readonly variant: DepthartVariant;
   readonly inputSize: number;
   run(pixels: Float32Array, h: number, w: number): Promise<Float32Array>;
+  /** Records one forward at the input size into `encoder`. `fill` records
+   *  what writes the `[3, size, size]` input, `read` what reads the
+   *  `[size, size]` depth map. Nothing is submitted. */
+  encode(
+    encoder: GPUCommandEncoder,
+    fill: (input: F32Buffer) => void,
+    read: (depth: F32Buffer) => void,
+  ): void;
   dispose(): void;
 }
 
@@ -55,6 +63,7 @@ interface Frame {
   buffer: F32Buffer;
   target: Value;
   replay: () => void;
+  encodeReplay: (encoder: GPUCommandEncoder) => void;
   ex: RunntimeExecutor;
 }
 
@@ -101,7 +110,13 @@ export async function createEstimator(
         evalValues([depth], ex);
         return depth;
       });
-      return { buffer, target: cap.targets, replay: cap.replay, ex };
+      return {
+        buffer,
+        target: cap.targets,
+        replay: cap.replay,
+        encodeReplay: cap.encodeReplay,
+        ex,
+      };
     };
     const frame = (h: number, w: number): Frame => {
       const key = `${h}x${w}`;
@@ -125,8 +140,15 @@ export async function createEstimator(
       queue = job.catch(() => undefined);
       return job;
     };
+    const encode: Estimator['encode'] = (encoder, fill, read) => {
+      const f = frame(size, size);
+      fill(f.buffer);
+      f.encodeReplay(encoder);
+      // forward() ends in toChw(..., 'f32'), so the map is f32.
+      read(f.target.buffer as F32Buffer);
+    };
     await warmUp(root.device, () => run(new Float32Array(3 * size * size), size, size));
-    return { variant, inputSize: size, run, dispose };
+    return { variant, inputSize: size, run, encode, dispose };
   } catch (err) {
     dispose();
     throw err;

@@ -2,7 +2,7 @@
  *  out. Resizes (stretch / letterbox / crop), converts the pixel format,
  *  moves channels first and normalizes, all in one pass over the output. */
 
-import { RunntimeError } from '../../../../core/index.ts';
+import { RunntimeError, type ImageToChwArgs } from '../../../../core/index.ts';
 import {
   checkImageBuffer,
   checkImageSize,
@@ -45,6 +45,9 @@ export interface ImagePreprocessor {
   process(input: ImageBuffer, out?: Float32Array): Float32Array;
   /** How to map results computed on the model input back onto `input`. */
   scaleOptions(input: Size): ScaleBoxOptions;
+  /** The same fit and normalization for a GPU texture input. The GPU path
+   *  always interpolates linearly. */
+  readonly gpuArgs: ImageToChwArgs;
 }
 
 /** Index of the R, G and B byte inside one pixel of each format. */
@@ -123,6 +126,12 @@ export function createImagePreprocessor(
   const alpha = perChannel(options.normalizeOpts?.alpha ?? 1 / 255, 'alpha');
   const beta = perChannel(options.normalizeOpts?.beta ?? 0, 'beta');
   const hw = width * height;
+  // Normalized RGB of letterbox padding.
+  const pad: [number, number, number] = [
+    padValue * alpha[0] + beta[0],
+    padValue * alpha[1] + beta[1],
+    padValue * alpha[2] + beta[2],
+  ];
 
   const scaleOptions = (input: Size): ScaleBoxOptions => ({
     from: { width, height },
@@ -157,9 +166,7 @@ export function createImagePreprocessor(
 
     const xs = buildAxis(width, input.width, t.scaleX, t.offsetX, interpolation);
     const ys = buildAxis(height, input.height, t.scaleY, t.offsetY, interpolation);
-    const padR = padValue * ar + br;
-    const padG = padValue * ag + bg;
-    const padB = padValue * ab + bb;
+    const [padR, padG, padB] = pad;
     const rowStride = input.width * ch;
     for (let y = 0; y < height; y++) {
       const rowIn = ys.inside[y]!;
@@ -204,5 +211,15 @@ export function createImagePreprocessor(
     return out;
   };
 
-  return { width, height, process, scaleOptions };
+  const gpuArgs: ImageToChwArgs = {
+    mode: resizeMode,
+    cropFraction,
+    outW: width,
+    outH: height,
+    alpha,
+    beta,
+    pad,
+  };
+
+  return { width, height, process, scaleOptions, gpuArgs };
 }

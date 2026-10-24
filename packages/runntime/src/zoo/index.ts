@@ -16,6 +16,13 @@ export {
 } from '../core/index.ts';
 
 export type { LoadOptions, ModelPath } from './load.ts';
+export type {
+  EncodeOptions,
+  GpuEncoder,
+  GpuImage,
+  GpuImageTarget,
+  GpuTensor,
+} from './tasks/gpu.ts';
 export { models } from './models.ts';
 
 export {
@@ -77,7 +84,10 @@ export {
   createDepthEstimator,
   type DepthEstimator,
   type DepthEstimatorModel,
+  type DepthInput,
   type DepthMap,
+  type DepthMapData,
+  type EncodeEstimateDepthOptions,
 } from './tasks/cv/depthEstimation.ts';
 export type { DepthartVariant } from './depthart/estimator.ts';
 

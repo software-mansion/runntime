@@ -87,7 +87,9 @@ function createDepthEstimator(
 
 interface DepthEstimator {
   readonly inputSize: number;
+  readonly schemas: { readonly input: DepthInput; readonly output: DepthMapData };
   estimateDepth(image: ImageBuffer): Promise<DepthMap>;
+  encodeEstimateDepth(options: EncodeEstimateDepthOptions): void;
   dispose(): void;
 }
 ```
@@ -97,8 +99,96 @@ interface DepthEstimator {
   `imageBufferFromImageData(imageData)` from a canvas, or
   `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
   `bgra`, `bgr` or `gray` bytes.
+- `encodeEstimateDepth(options)` reads an image already on the GPU and
+  writes the map to the GPU, see [GPU in, GPU out](#gpu-in-gpu-out).
 - `inputSize` is the width and height of every returned map, 448.
+- `schemas` are the TypeGPU layouts of the model input and the depth map,
+  for buffers passed to `encodeEstimateDepth`.
 - `dispose()` frees the GPU memory.
+
+## GPU in, GPU out
+
+When the image is already on the GPU, a video frame or the output of your
+own shader, `encodeEstimateDepth` skips the CPU: no pixels are read back,
+and the map goes straight into a texture or a buffer you own.
+
+```ts twoslash
+declare const video: HTMLVideoElement;
+declare const canvas: HTMLCanvasElement;
+// ---cut---
+import { createDepthEstimator, initRunntime, models } from 'runntime/zoo';
+import tgpu from 'typegpu';
+
+// 1. Set up the engine and load the model once.
+const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
+initRunntime(root);
+const estimator = await createDepthEstimator(models.depthEstimation.DEPTHART.DEFAULT);
+
+// 2. Draw into a canvas on the same device.
+const context = canvas.getContext('webgpu')!;
+context.configure({ device: root.device, format: navigator.gpu.getPreferredCanvasFormat() });
+
+// 3. Each frame: video in, depth in the canvas, nearest black, farthest white.
+function frame() {
+  estimator.encodeEstimateDepth({
+    source: root.device.importExternalTexture({ source: video }),
+    target: context.getCurrentTexture(),
+    normalize: 'minmax',
+  });
+  video.requestVideoFrameCallback(frame);
+}
+video.requestVideoFrameCallback(frame);
+```
+
+The call records the work and submits it before it returns, so it does not
+wait for the GPU. Work you submit after it sees the map.
+
+**Source** - one of:
+
+- a texture: a `GPUTexture`, a TypeGPU texture with `sampled` usage, or a
+  `GPUExternalTexture` from a video. It is fitted like an `ImageBuffer`,
+  with the estimator's `resizeMode`, and each value 0-1 counts as a byte
+  0-255. Formats: `rgba8unorm`, `bgra8unorm`, `rgb10a2unorm`,
+  `rgba16float`, `rgba32float`. sRGB formats are rejected: the GPU would
+  turn their values linear, which the model was not trained on.
+- a buffer holding the model input as is: 3×448×448 f32, normalized RGB,
+  one plane per channel. A raw `GPUBuffer` needs `COPY_SRC` usage.
+
+**Target** - one of:
+
+- a texture: a `GPUTexture` or a TypeGPU texture with `render` usage, of
+  any size and any float-renderable format. The map is stretched over it,
+  the same value in every color channel. `normalize: 'minmax'` maps each
+  map to 0-1, nearest = 0. The default `'none'` writes the raw values,
+  which an unorm format clamps to 0-1.
+- a buffer: the 448×448 f32 map, row by row, the same values as
+  `DepthMap.data`. A raw `GPUBuffer` needs `COPY_DST` usage.
+
+With TypeGPU, `schemas` gives the buffer its type and size:
+
+```ts twoslash
+import { createDepthEstimator, models } from 'runntime/zoo';
+import tgpu from 'typegpu';
+declare const root: Awaited<ReturnType<typeof tgpu.init>>;
+declare const cameraTexture: GPUTexture;
+const estimator = await createDepthEstimator(models.depthEstimation.DEPTHART.DEFAULT);
+// ---cut---
+// [row][column] f32, 448 × 448.
+const depth = root.createBuffer(estimator.schemas.output).$usage('storage');
+
+const encoder = root['~unstable'].createCommandEncoder();
+estimator.encodeEstimateDepth({ source: cameraTexture, target: depth, encoder });
+// ...record your own passes that read `depth` here...
+encoder.submit();
+```
+
+**encoder** - optional. Pass a `GPUCommandEncoder` or a TypeGPU command
+encoder to record the estimate together with your own passes, or several
+estimates, into one command buffer. You then finish and submit it
+yourself, before `dispose()`.
+
+Every resource must come from the device passed to `initRunntime()`. A
+wrong format, usage or size throws `INVALID_ARGUMENT`.
 
 ## Options
 

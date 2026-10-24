@@ -183,6 +183,27 @@ describe('createImagePreprocessor', () => {
     });
   });
 
+  it('gpuArgs carries the same fit, normalization and padding', () => {
+    const pre = createImagePreprocessor(
+      {
+        resizeMode: 'letterbox',
+        padValue: 10,
+        normalizeOpts: { alpha: [2, 3, 4], beta: [1, 0, -1] },
+      },
+      { width: 4, height: 3 },
+    );
+    expect(pre.gpuArgs).toEqual({
+      mode: 'letterbox',
+      cropFraction: 1,
+      outW: 4,
+      outH: 3,
+      alpha: [2, 3, 4],
+      beta: [1, 0, -1],
+      // 10 * alpha + beta, per channel
+      pad: [21, 30, 39],
+    });
+  });
+
   describe('rejects', () => {
     it.each([
       { name: 'a zero model size', options: {}, size: { width: 0, height: 2 } },
