@@ -98,13 +98,11 @@ const CASES: LeakCase[] = [
         },
       };
     },
-    // replayCache.dispose() keeps the bucket executor: its intermediates,
-    // dummy and result, and the kernels' uniforms (usage 76).
+    // The bucket executor's dispose() keeps its dummy and the kernels'
+    // uniforms (usage 76).
     leftOnDispose: [
-      ...['24576 B, usage 140', '8 B, usage 76', '24576 B, usage 140', '8 B, usage 76'],
-      ...['24576 B, usage 140', '16 B, usage 76', '73728 B, usage 140', '16 B, usage 140'],
-      ...['16 B, usage 76', '98304 B, usage 140', '16 B, usage 76', '16 B, usage 76'],
-      ...['16 B, usage 76', '1536 B, usage 140'],
+      ...['8 B, usage 76', '8 B, usage 76', '16 B, usage 76', '16 B, usage 140'],
+      ...Array<string>(4).fill('16 B, usage 76'),
     ],
   },
   {
