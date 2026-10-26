@@ -4,11 +4,16 @@
 import { pending, Value } from '../value.ts';
 import { cat } from './shape.ts';
 import { MOE_SLOTS } from '../../kernels/matmul/moeQuantW.ts';
+import {
+  MATMUL_QUANT_TILED_BK,
+  matmulQuantTiledEligible,
+} from '../../kernels/matmul/matmulQuantTiled.ts';
 import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from './shared.ts';
 
-/** Options for matmul. `bias` and `addend` are fused epilogue adds, not
- *  available for quantW. `baseRow` views into a taller weight without copying,
- *  so MoE experts stay views into one fused tensor. */
+/** Options for matmul. `bias` and `addend` are fused epilogue adds; on a
+ *  quantW weight they need the whole weight, no baseRow or scaleBase view.
+ *  `baseRow` views into a taller weight without copying, so MoE experts stay
+ *  views into one fused tensor. */
 export interface MatmulOpts {
   bias?: Value;
   addend?: Value;
@@ -21,19 +26,14 @@ export interface MatmulOpts {
   groupSize?: number;
 }
 
-/** Activation codes shared by the matmul and conv kernels. */
 /** 2D matrix multiply, a [M,K] × b [K,N] to [M,N]. One name for every weight
  *  storage; b's dtype picks the kernel.
  *
- *  Float b supports the fused bias and addend epilogue. quantW b is
- *  dequantized with `scales`, needs bits and groupSize, and has no epilogue. */
+ *  b takes the fused bias, activation and addend epilogue. quantW b is
+ *  dequantized with `scales`, needs bits and groupSize, and takes the
+ *  epilogue only as a whole weight. */
 export function matmul(a: Value, b: Value, opts: MatmulOpts = {}): Value {
   if (b.shape.dtype === 'quantW') {
-    if (opts.bias || opts.addend || opts.activation) {
-      throw new Error(
-        'matmul: bias/addend/activation epilogue is not supported for quantW weights',
-      );
-    }
     const { scales, bits, groupSize } = opts;
     if (!scales || !bits || !groupSize) {
       throw new Error('matmul: quantW weights need scales, bits and groupSize');
@@ -43,6 +43,9 @@ export function matmul(a: Value, b: Value, opts: MatmulOpts = {}): Value {
       scaleBase: opts.scaleBase ?? 0,
       bits,
       groupSize,
+      bias: opts.bias,
+      addend: opts.addend,
+      activation: opts.activation,
     });
   }
   if (opts.scales || opts.bits || opts.groupSize) {
@@ -93,15 +96,24 @@ export function matmul(a: Value, b: Value, opts: MatmulOpts = {}): Value {
   ]);
 }
 
-/** matmul's quantW path. bits and groupSize travel as attrs, so one pipeline
- *  serves every quant format. */
+/** matmul's quantW path. The result takes a's dtype. An f16 a, a bias, an
+ *  addend or an activation need the tiled kernel: the whole weight (baseRow
+ *  and scaleBase 0) and a shape it supports. */
 function matmulQuantW(
   a: Value,
   w: Value,
   scales: Value,
-  opts: { baseRow: number; scaleBase: number; bits: 8 | 4; groupSize: number },
+  opts: {
+    baseRow: number;
+    scaleBase: number;
+    bits: 8 | 4;
+    groupSize: number;
+    bias?: Value;
+    addend?: Value;
+    activation?: SlotAct;
+  },
 ): Value {
-  const [m, k] = want2d('matmul', a, ['f32']);
+  const [m, k, dtype] = want2d('matmul', a, FLOAT_DTYPES);
   const wd = w.shape.dims;
   if (!wd || wd.length !== 2) {
     throw new Error('matmul: quantW weight must be 2D');
@@ -135,12 +147,43 @@ function matmulQuantW(
   }
   if (!Number.isInteger(scaleBase) || scaleBase < 0)
     throw new Error(`matmul: bad scaleBase ${scaleBase}`);
+  const { bias, addend, activation } = opts;
+  const whole = baseRow === 0 && scaleBase === 0 && r === k;
+  if (whole && scales.shape.elems !== (k / groupSize) * n) {
+    throw new Error(`matmul: scales must be f32 [K/groupSize, N] = [${k / groupSize}, ${n}]`);
+  }
+  if (dtype === 'f16' || bias || addend || activation) {
+    if (!whole) {
+      throw new Error(
+        'matmul: an f16 input or an epilogue on a quantW weight needs the whole weight',
+      );
+    }
+    if (!matmulQuantTiledEligible(k, n, groupSize)) {
+      throw new Error(
+        `matmul: an f16 input or an epilogue on a quantW weight needs K a multiple of ${MATMUL_QUANT_TILED_BK} and N and groupSize multiples of 4, got K ${k}, N ${n}, groupSize ${groupSize}`,
+      );
+    }
+  }
+  if (bias && (bias.shape.dtype !== dtype || bias.shape.elems !== n)) {
+    throw new Error(`matmul: bias must be ${dtype} [N] = ${n} elems`);
+  }
+  if (addend && (addend.shape.dtype !== dtype || addend.shape.elems !== m * n)) {
+    throw new Error(`matmul: addend must be ${dtype} [M,N] = ${m * n} elems`);
+  }
   return pending(
-    { elems: m * n, dtype: 'f32', dims: [m, n] },
+    { elems: m * n, dtype, dims: [m, n] },
     'matmulQuantW',
-    [a, w, scales],
+    [a, w, scales, ...(bias ? [bias] : []), ...(addend ? [addend] : [])],
     undefined,
-    [baseRow, scaleBase, bits, groupSize],
+    [
+      baseRow,
+      scaleBase,
+      bits,
+      groupSize,
+      bias ? 1 : 0,
+      addend ? 1 : 0,
+      activation ? ACT_CODE[activation] : 0,
+    ],
   );
 }
 

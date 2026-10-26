@@ -78,7 +78,11 @@ describe('matmulQuantW kernel', () => {
 
   const fused = { experts: 2, k: 8, n: 8, bits: 8 as const, groupSize: 4 };
   it.each([
-    { name: 'a bias', opts: { bias: true }, err: /epilogue is not supported for quantW/ },
+    {
+      name: 'a bias on one expert',
+      opts: { bias: true },
+      err: /an epilogue on a quantW weight needs the whole weight/,
+    },
     {
       name: 'no scales',
       opts: { scales: false },
@@ -132,13 +136,13 @@ describe('matmulQuantW kernel', () => {
     );
   });
 
-  it('refuses an f16 input', (ctx) => {
+  it('refuses an f16 input on one expert', (ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const weight = randomQuantWeight(root, fused, 2);
     const a = upload(root, new Float32Array(16), { ...matrix(2, 8), dtype: 'f16' });
     const scales = upload(root, weight.scales, [4, 8]);
     expect(() => matmul(a, weight.w, { scales, bits: 8, groupSize: 4 })).toThrow(
-      /expected a 2D f32 tensor/,
+      /an f16 input or an epilogue on a quantW weight needs the whole weight/,
     );
   });
 });

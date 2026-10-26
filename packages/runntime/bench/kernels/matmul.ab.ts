@@ -49,6 +49,25 @@ function quant(name: string, t: number, e: number, k: number, o: number, bits: 8
   };
 }
 
+/** [m, k] × a whole quantW weight [k, n]. */
+function quantWhole(
+  name: string,
+  m: number,
+  k: number,
+  n: number,
+  bits: 8 | 4,
+  groupSize: number,
+): AbCase {
+  return {
+    name,
+    build: (version) => {
+      const a = randMat(version, m, k);
+      const { w, scales } = quantWeight(version, 1, k, n, bits, groupSize);
+      return () => version.lib.matmul(a, w, { scales, bits, groupSize });
+    },
+  };
+}
+
 function gather(name: string, t: number, e: number, k: number, n: number): AbCase {
   return {
     name,
@@ -157,6 +176,11 @@ abSuite('matmul', [
   quant('quantW int8, privacy-filter expert [32,640]×[640,640]', 32, 16, 640, 640, 8),
   quant('quantW int4, privacy-filter expert [32,640]×[640,640]', 32, 16, 640, 640, 4),
   quant('quantW int8, decode [1,640]×[640,640]', 1, 16, 640, 640, 8),
+
+  // Quantized weights, whole: the tiled route from 8 rows, plain below.
+  quantWhole('quantW int4 whole, q|k projection [256,1024]×[1024,2304]', 256, 1024, 2304, 4, 32),
+  quantWhole('quantW int8 whole, per channel [256,2048]×[2048,1024]', 256, 2048, 1024, 8, 2048),
+  quantWhole('quantW int4 whole, decode [1,1024]×[1024,2304]', 1, 1024, 2304, 4, 32),
 
   // matmulGather: one expert per row.
   gather('matmulGather f32, privacy-filter [64,640], 16 experts', 64, 16, 640, 640),

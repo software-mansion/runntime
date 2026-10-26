@@ -41,6 +41,11 @@ import {
   matmulQuantWHandle,
 } from '../../kernels/matmul/matmulQuantW.ts';
 import {
+  createMatmulQuantTiledPipeline,
+  matmulQuantTiledEligible,
+  matmulQuantTiledHandle,
+} from '../../kernels/matmul/matmulQuantTiled.ts';
+import {
   createMatmulTiledVec4Pipeline,
   matmulTiledVec4Eligible,
   matmulTiledVec4Handle,
@@ -144,34 +149,83 @@ export const matmulSpec = defineSpec({
 
 export const matmulQuantWSpec = defineSpec({
   attrs: (p) => {
-    const [baseRow, scaleBase, bits, groupSize] = p.attrs as [number, number, number, number];
-    return { baseRow, scaleBase, bits, groupSize };
+    const [baseRow, scaleBase, bits, groupSize, hasBias, hasAdd, act] = p.attrs as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    return { baseRow, scaleBase, bits, groupSize, hasBias, hasAdd, act };
   },
-  cfg: (node, attrs) => ({
-    k: node.pending!.inputs[0]!.shape.dims![1]!,
-    n: node.shape.dims![1]!,
-    bits: attrs.bits,
-    groupSize: attrs.groupSize,
-  }),
-  pipeline: (root, _dtype, cfg) => createMatmulQuantWPipeline(root, cfg),
-  encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => [
-    matmulQuantWHandle(
-      ctx.root,
-      pipeline,
-      {
-        m: node.pending!.inputs[0]!.shape.dims![0]!,
-        n: cfg.n,
-        baseRow: attrs.baseRow,
-        scaleBase: attrs.scaleBase,
-      },
-      {
-        a: narrow(inputs[0]!, 'f32'),
-        w: narrow(inputs[1]!, 'u32'),
-        scales: narrow(inputs[2]!, 'f32'),
-        out: narrow(out, 'f32'),
-      },
-    ),
-  ],
+  cfg: (node, attrs) => {
+    const [m, k] = node.pending!.inputs[0]!.shape.dims as [number, number];
+    const n = node.shape.dims![1]!;
+    const rows = node.pending!.inputs[1]!.shape.dims![0]!;
+    const epilogue = attrs.hasBias + attrs.hasAdd + attrs.act > 0;
+    // A whole weight goes to the tiled kernel from 8 rows, and always for an
+    // f16 input or an epilogue, which the plain kernel lacks. Expert views
+    // stay on the plain kernel.
+    const tiled =
+      attrs.baseRow === 0 &&
+      attrs.scaleBase === 0 &&
+      rows === k &&
+      matmulQuantTiledEligible(k, n, attrs.groupSize) &&
+      (node.shape.dtype === 'f16' || epilogue || m >= MATMUL_TILED_MIN_M);
+    return {
+      k,
+      n,
+      bits: attrs.bits,
+      groupSize: attrs.groupSize,
+      hasBias: attrs.hasBias,
+      hasAdd: attrs.hasAdd,
+      act: attrs.act,
+      tiled: tiled ? 1 : 0,
+    };
+  },
+  pipeline: (root, dtype, cfg) =>
+    cfg.tiled
+      ? createMatmulQuantTiledPipeline(root, cfg, elemFor(dtype))
+      : createMatmulQuantWPipeline(root, cfg),
+  encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
+    const m = node.pending!.inputs[0]!.shape.dims![0]!;
+    const dtype = node.shape.dtype;
+    if (cfg.tiled) {
+      const addendAt = attrs.hasBias === 1 ? 4 : 3;
+      return [
+        matmulQuantTiledHandle(
+          ctx.root,
+          pipeline,
+          m,
+          cfg.n,
+          {
+            a: narrowFloat(inputs[0]!, dtype),
+            w: narrow(inputs[1]!, 'u32'),
+            scales: narrow(inputs[2]!, 'f32'),
+            bias: attrs.hasBias === 1 ? narrowFloat(inputs[3]!, dtype) : undefined,
+            addend: attrs.hasAdd === 1 ? narrowFloat(inputs[addendAt]!, dtype) : undefined,
+            out: narrowFloat(out, dtype),
+          },
+          elemFor(dtype),
+        ),
+      ];
+    }
+    return [
+      matmulQuantWHandle(
+        ctx.root,
+        pipeline,
+        { m, n: cfg.n, baseRow: attrs.baseRow, scaleBase: attrs.scaleBase },
+        {
+          a: narrow(inputs[0]!, 'f32'),
+          w: narrow(inputs[1]!, 'u32'),
+          scales: narrow(inputs[2]!, 'f32'),
+          out: narrow(out, 'f32'),
+        },
+      ),
+    ];
+  },
 });
 
 export const moeUpSpec = defineSpec({

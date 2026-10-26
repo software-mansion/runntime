@@ -219,11 +219,18 @@ describe('half() and float()', () => {
     expect(m.half().table.shape.dtype).toBe('f16');
   });
 
-  it('refuses a model with quantized weights', () => {
+  it('keeps quantized weights and pinned scales as they are', () => {
     class Quant extends Module {
       w = new Parameter({ elems: 4, dtype: 'quantW', dims: [4, 4] });
+      scales = new Parameter(meta([4]), undefined, true);
+      bias = param();
     }
-    expect(() => new Quant().half()).toThrow(/'w' is a quantized \(quantW\) weight/);
+    const m = new Quant().half();
+    expect([m.w.shape.dtype, m.scales.shape.dtype, m.bias.shape.dtype]).toEqual([
+      'quantW',
+      'f32',
+      'f16',
+    ]);
   });
 
   it('refuses a device without shader-f16', () => {

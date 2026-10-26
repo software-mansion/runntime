@@ -190,11 +190,11 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
   }
 
   /** Stores every float parameter and buffer as f16; reducing kernels still
-   *  accumulate in f32.
+   *  accumulate in f32. quantW weights and their pinned f32 scales keep their
+   *  storage.
    *
    *  Call it before loadStateDict — afterwards the dtype is baked into every
-   *  pipeline that read the buffer, so it throws. Also throws on quantW
-   *  weights, whose kernels need f32. */
+   *  pipeline that read the buffer, so it throws. */
   half(root?: TgpuRoot): this {
     // Graph-only contexts have no device and never compile a shader; let the
     // first real dispatch fail there instead.
@@ -204,13 +204,6 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
         'UNSUPPORTED_DEVICE',
         "half(): this device has no shader-f16 — check supportsF16() first, and request it with tgpu.init({ device: { optionalFeatures: ['shader-f16'] } })",
       );
-    }
-    for (const [name, p] of this.namedParameters()) {
-      if (p.shape.dtype === 'quantW') {
-        throw new Error(
-          `half(): '${name}' is a quantized (quantW) weight — quantized models don't support f16 activations, leave this model at f32`,
-        );
-      }
     }
     retypeFloats(this, 'f32', 'f16');
     return this;

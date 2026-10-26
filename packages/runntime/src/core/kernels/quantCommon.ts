@@ -14,7 +14,7 @@ import { d, std } from 'typegpu';
 
 export const deqVec4 = (word: number, off: number, bits: number) => {
   'use gpu';
-  const w = std.bitcastU32toI32(word);
+  const w = std.bitcast(d.u32, d.i32)(word);
   return d.vec4f(
     d.f32(std.extractBits(w, off, bits)),
     d.f32(std.extractBits(w, off + bits, bits)),

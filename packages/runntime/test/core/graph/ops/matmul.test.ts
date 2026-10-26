@@ -108,14 +108,28 @@ describe('matmul', () => {
 
   describe('quantized weights', () => {
     const a = input([2, 8]);
-    const q = { scales: input([16]), bits: 8 as const, groupSize: 4 };
+    // K 8 in groups of 4: two scale rows of 16 columns.
+    const q = { scales: input([2, 16]), bits: 8 as const, groupSize: 4 };
 
     it.each([8, 4] as const)('int%i gives f32 [M, N]', (bits) => {
       const c = matmul(a, quantWeight(8, 16, bits), { ...q, bits });
       expect(c.shape).toEqual(meta([2, 16]));
       expect(c.pending?.op).toBe('matmulQuantW');
-      // attrs: baseRow, scaleBase, bits, groupSize
-      expect(c.pending?.attrs).toEqual([0, 0, bits, 4]);
+      // attrs: baseRow, scaleBase, bits, groupSize, hasBias, hasAdd, act
+      expect(c.pending?.attrs).toEqual([0, 0, bits, 4, 0, 0, 0]);
+    });
+
+    it('gives f16 [M, N] for f16 activations', () => {
+      const c = matmul(input([2, 8], 'f16'), quantWeight(8, 16, 8), q);
+      expect(c.shape).toEqual(meta([2, 16], 'f16'));
+    });
+
+    it('takes a bias, an addend and an activation on the whole weight', () => {
+      const bias = input([16]);
+      const addend = input([2, 16]);
+      const c = matmul(a, quantWeight(8, 16, 8), { ...q, bias, addend, activation: 'silu' });
+      expect(c.pending?.inputs.slice(3)).toEqual([bias, addend]);
+      expect(c.pending?.attrs?.slice(4)).toEqual([1, 1, ACT_CODE.silu]);
     });
 
     it('reads one expert of a fused weight with a K-aligned baseRow', () => {
@@ -124,10 +138,16 @@ describe('matmul', () => {
 
     it.each([
       {
-        name: 'an epilogue',
+        name: 'an epilogue on one expert',
+        w: quantWeight(24, 16, 8),
+        opts: { ...q, baseRow: 16, bias: input([16]) },
+        error: /an epilogue on a quantW weight needs the whole weight/,
+      },
+      {
+        name: 'a bias of the wrong width',
         w: quantWeight(8, 16, 8),
-        opts: { ...q, bias: input([16]) },
-        error: /not supported for quantW/,
+        opts: { ...q, bias: input([8]) },
+        error: /bias must be f32 \[N\] = 16 elems/,
       },
       {
         name: 'missing scales',
@@ -174,10 +194,36 @@ describe('matmul', () => {
       expect(() => matmul(a, w, q)).toThrow(/elems 16 != rows\*cols\/4 = 32/);
     });
 
-    it('needs f32 activations', () => {
-      expect(() => matmul(input([2, 8], 'f16'), quantWeight(8, 16, 8), q)).toThrow(
-        /expected a 2D f32 tensor/,
+    it('needs the whole weight for f16 activations', () => {
+      expect(() =>
+        matmul(input([2, 8], 'f16'), quantWeight(24, 16, 8), { ...q, baseRow: 16 }),
+      ).toThrow(/an f16 input or an epilogue on a quantW weight needs the whole weight/);
+    });
+
+    it('rejects scales that do not match the whole weight', () => {
+      expect(() => matmul(a, quantWeight(8, 16, 8), { ...q, scales: input([16]) })).toThrow(
+        /scales must be f32 \[K\/groupSize, N\] = \[2, 16\]/,
       );
+    });
+
+    describe('with K not a multiple of the tiled K step', () => {
+      // K 12 in groups of 4: three scale rows of 16 columns.
+      const q12 = { scales: input([3, 16]), bits: 8 as const, groupSize: 4 };
+      const w = quantWeight(12, 16, 8);
+
+      it('runs f32 with no epilogue', () => {
+        expect(matmul(input([2, 12]), w, q12).shape).toEqual(meta([2, 16]));
+      });
+
+      it.each([
+        { name: 'an f16 input', a: input([2, 12], 'f16'), opts: q12 },
+        { name: 'a bias', a: input([2, 12]), opts: { ...q12, bias: input([16]) } },
+        { name: 'an activation', a: input([2, 12]), opts: { ...q12, activation: 'gelu' as const } },
+      ])('rejects $name', ({ a, opts }) => {
+        expect(() => matmul(a, w, opts)).toThrow(
+          /needs K a multiple of 8 and N and groupSize multiples of 4, got K 12, N 16, groupSize 4/,
+        );
+      });
     });
   });
 });
