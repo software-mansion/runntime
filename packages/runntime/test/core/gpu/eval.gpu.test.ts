@@ -239,6 +239,24 @@ describe.for(GRAPHS)('gpuExecutor with $name', (graph) => {
     }
   });
 
+  it('runs again after a captured frame is disposed', async () => {
+    const values = inputs();
+    const ex = gpuExecutor(root);
+    try {
+      const { replay } = ex.captureFrame(() => {
+        const out = graph.build(values);
+        evalValues([out], ex);
+        return out;
+      });
+      replay();
+      ex.dispose();
+      expect(replay).toThrow('replay after dispose()');
+      await run(ex, graph.build(values));
+    } finally {
+      ex.dispose();
+    }
+  });
+
   it('frees a captured frame on dispose', async (ctx) => {
     if (graph.needs) requireFeature(ctx, root, graph.needs);
     const values = inputs();

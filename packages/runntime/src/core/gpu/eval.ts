@@ -105,7 +105,7 @@ export type { KernelTiming };
  *  without walking the graph again. Fixed-shape forwards only. */
 export interface CaptureExecutor {
   /** Runs `fn` once, recording every dispatch. The executor is replay-only
-   *  afterwards. Keep `targets` — their buffers stay valid across replays — and
+   *  afterwards, until dispose(), which also ends the replays. Keep `targets` — their buffers stay valid across replays — and
    *  overwrite inputs in place before each replay. */
   captureFrame<T>(fn: () => T): {
     targets: T;
@@ -181,6 +181,9 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
   // aliasing the captured frame's intermediates.
   let capturing: KernelHandle[] | undefined;
   let frozen = false;
+  /** Bumped by dispose(), so a replay recorded before it throws instead of
+   *  binding destroyed buffers. */
+  let disposals = 0;
 
   const readbacks = new ReadbackQueue(root);
   const scratches = new Map<string, { buf: F32Buffer; elems: number }>();
@@ -236,11 +239,24 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
       capturing = undefined;
       frozen = true;
       if (recorded.length === 0) throw new Error('captureFrame: fn() submitted no GPU work');
+      const recordedAt = disposals;
+      const live = () => {
+        if (disposals !== recordedAt) throw new Error('captureFrame: replay after dispose()');
+      };
       return {
         targets,
-        replay: () => readbacks.submit((encoder) => encodePass(encoder, recorded)),
-        encodeReplay: (encoder) => encodePass(encoder, recorded),
-        profileReplay: () => profileHandles(root.device, recorded),
+        replay: () => {
+          live();
+          readbacks.submit((encoder) => encodePass(encoder, recorded));
+        },
+        encodeReplay: (encoder) => {
+          live();
+          encodePass(encoder, recorded);
+        },
+        profileReplay: () => {
+          live();
+          return profileHandles(root.device, recorded);
+        },
       };
     },
     acquireOutput: (shape) => {
@@ -253,8 +269,11 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
     },
     releaseOutput: (buffer, shape) => pool.release(buffer, shape),
     // Forgets every handle, dummy and scratch it destroys, so a later
-    // dispatch makes fresh ones instead of binding a destroyed buffer.
+    // dispatch makes fresh ones instead of binding a destroyed buffer. A
+    // captured executor can eval and capture again; its old replays throw.
     dispose: () => {
+      frozen = false;
+      disposals++;
       pool.dispose();
       for (const b of owned.splice(0)) b.destroy();
       handleCache.clear();
