@@ -12,9 +12,9 @@ export class BufferPool {
   private free = new Map<string, GpuBufferRef[]>();
   /** Bucket keys acquired since the last trim(). */
   private used = new Set<string>();
-  /** Every buffer this pool made and has not destroyed, free or in use, so
-   *  dispose() frees the ones a captured frame or a caller still holds. */
-  private made = new Set<GpuBufferRef>();
+  /** Buffers acquired and not released yet, so dispose() frees the ones a
+   *  captured frame or a caller still holds. */
+  private inUse = new Set<GpuBufferRef>();
 
   constructor(private readonly createBuffer: (shape: ValueMeta) => GpuBufferRef) {}
 
@@ -25,14 +25,13 @@ export class BufferPool {
   acquire(shape: ValueMeta): GpuBufferRef {
     const k = this.key(shape);
     this.used.add(k);
-    const reused = this.free.get(k)?.pop();
-    if (reused !== undefined) return reused;
-    const made = this.createBuffer(shape);
-    this.made.add(made);
-    return made;
+    const buffer = this.free.get(k)?.pop() ?? this.createBuffer(shape);
+    this.inUse.add(buffer);
+    return buffer;
   }
 
   release(buffer: GpuBufferRef, shape: ValueMeta): void {
+    this.inUse.delete(buffer);
     const k = this.key(shape);
     const bucket = this.free.get(k);
     if (bucket) bucket.push(buffer);
@@ -45,10 +44,7 @@ export class BufferPool {
     let destroyed = false;
     for (const [k, bucket] of this.free) {
       if (this.used.has(k)) continue;
-      for (const buf of bucket) {
-        buf.destroy();
-        this.made.delete(buf);
-      }
+      for (const buf of bucket) buf.destroy();
       this.free.delete(k);
       destroyed ||= bucket.length > 0;
     }
@@ -56,11 +52,12 @@ export class BufferPool {
     return destroyed;
   }
 
-  /** Destroys every buffer the pool made, including those still in use. */
+  /** Destroys every free buffer and every buffer still in use. */
   dispose(): void {
-    for (const buf of this.made) buf.destroy();
-    this.made.clear();
+    for (const bucket of this.free.values()) for (const buf of bucket) buf.destroy();
+    for (const buf of this.inUse) buf.destroy();
     this.free.clear();
+    this.inUse.clear();
     this.used.clear();
   }
 }

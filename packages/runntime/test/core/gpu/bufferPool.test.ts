@@ -74,6 +74,20 @@ describe('BufferPool', () => {
     expect(made.map((m) => m.destroyed)).toEqual([1, 1]);
   });
 
+  it('trim then dispose destroys each buffer once', () => {
+    const { pool, made } = stubPool();
+    const a = pool.acquire(f32(16));
+    const b = pool.acquire(f32(32));
+    pool.release(a, f32(16));
+    pool.release(b, f32(32));
+    pool.trim();
+    // 32 goes unused, so the next trim destroys it; 16 is taken and held.
+    pool.acquire(f32(16));
+    pool.trim();
+    pool.dispose();
+    expect(made.map((m) => m.destroyed)).toEqual([1, 1]);
+  });
+
   it('dispose destroys the buffers still out', () => {
     const { pool, made } = stubPool();
     pool.acquire(f32(16));
