@@ -86,6 +86,9 @@ const MINILM_BATCH_RESULT = '3072 B, usage 140';
 const CASES: LeakCase[] = [
   {
     name: 'MiniLM, one text',
+    // Without subgroups attention takes the rows route, which leaves other
+    // buffers.
+    needs: 'subgroups',
     build(root) {
       const model = new MinilmModel(TINY_MINILM);
       loadRandomWeights(model, root);
@@ -107,6 +110,9 @@ const CASES: LeakCase[] = [
   },
   {
     name: 'MiniLM, a batch',
+    // Without subgroups attention takes the rows route, which leaves other
+    // buffers.
+    needs: 'subgroups',
     build(root) {
       const model = new MinilmModel(TINY_MINILM);
       loadRandomWeights(model, root);

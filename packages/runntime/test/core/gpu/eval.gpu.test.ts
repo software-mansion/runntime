@@ -33,6 +33,7 @@ import {
   liveBuffers,
   randomF32,
   repeated,
+  requireFeature,
   upload,
 } from '../../gpu.ts';
 
@@ -58,6 +59,9 @@ interface Inputs {
 
 interface GraphCase {
   name: string;
+  /** The lists below are for this feature's route. Without it, the case
+   *  takes another route and leaves other buffers. */
+  needs?: GPUFeatureName;
   build(inputs: Inputs): Value;
   /** Buffers a known leak, not fixed yet, leaves behind on every warm run. */
   leftPerRun?: string[];
@@ -126,6 +130,7 @@ const GRAPHS: GraphCase[] = [
   },
   {
     name: 'flash attention',
+    needs: 'subgroups',
     // flash: qLen > 1, subgroups, headDim % 16 == 0
     build: ({ x, m }) => sdpa(x, m, m, FULL_ATTENTION),
     // dispose() keeps the dummy sinks and segments buffer and a captured target.
@@ -134,6 +139,7 @@ const GRAPHS: GraphCase[] = [
   },
   {
     name: 'rows split attention',
+    needs: 'subgroups',
     // rowsSubgroupSplit: qLen > 1, f32, subgroups, headDim % 16 != 0
     build: ({ x, m }) => sdpa(x, m, m, TWO_HEAD_ATTENTION),
     // dispose() keeps the dummy, the 640 B split scratch, the split and merge
@@ -211,7 +217,8 @@ async function run(ex: RunntimeExecutor, out: Value): Promise<void> {
 }
 
 describe.for(GRAPHS)('gpuExecutor with $name', (graph) => {
-  it('allocates nothing once warm', async () => {
+  it('allocates nothing once warm', async (ctx) => {
+    if (graph.needs) requireFeature(ctx, root, graph.needs);
     const values = inputs();
     const ex = gpuExecutor(root);
     try {
@@ -224,7 +231,8 @@ describe.for(GRAPHS)('gpuExecutor with $name', (graph) => {
     }
   });
 
-  it('frees every buffer it made on dispose', async () => {
+  it('frees every buffer it made on dispose', async (ctx) => {
+    if (graph.needs) requireFeature(ctx, root, graph.needs);
     const values = inputs();
     // A throwaway executor first: pipelines and the readback staging buffer
     // belong to the root and outlive every executor.
@@ -239,7 +247,8 @@ describe.for(GRAPHS)('gpuExecutor with $name', (graph) => {
     expect(buffersSince(before)).toEqual(graph.leftOnDispose ?? []);
   });
 
-  it('frees a captured frame on dispose', async () => {
+  it('frees a captured frame on dispose', async (ctx) => {
+    if (graph.needs) requireFeature(ctx, root, graph.needs);
     const values = inputs();
     const first = gpuExecutor(root);
     await run(first, graph.build(values));
