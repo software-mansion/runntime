@@ -308,7 +308,7 @@ export interface FileTensor extends LazyTensorBase {
 
 /** A tensor a transform computes. `dtype` is nominal — the loader must not
  *  branch on it; `data()` returns whatever compute() produced, and its
- *  runtime type says what it holds. */
+ *  runtime type says what it holds. A Uint16Array holds f16 halfwords. */
 export interface DerivedTensor extends LazyTensorBase {
   kind: 'derived';
   dtype: 'F32';
@@ -418,10 +418,13 @@ export function derivedTensor(
     shape,
     byteLength,
     data: get,
+    /** Halfwords decode, so an f16 transform still loads into an f32
+     *  parameter or a hook that reads f32. */
     async f32() {
       const data = await get();
+      if (data instanceof Uint16Array) return f16ToF32(data);
       if (!(data instanceof Float32Array))
-        throw new Error('derived tensor holds raw bits, not f32');
+        throw new Error('derived tensor holds packed words, not f32');
       return data;
     },
     halfWords: asWords,

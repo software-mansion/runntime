@@ -651,6 +651,12 @@ describe('derivedTensor', () => {
     expect(compute).toHaveBeenCalledOnce();
   });
 
+  it('decodes f16 halfwords for f32()', async () => {
+    // 0x3c00 = 1, 0xc000 = -2, 0x3800 = 0.5 in f16.
+    const t = derivedTensor([3], async () => new Uint16Array([0x3c00, 0xc000, 0x3800]));
+    expect(await t.f32()).toEqual(new Float32Array([1, -2, 0.5]));
+  });
+
   it('rejects an accessor that does not match what compute made', async () => {
     const words = derivedTensor([1], async () => new Uint32Array([1]));
     const floats = derivedTensor([1], async () => new Float32Array([1]));
