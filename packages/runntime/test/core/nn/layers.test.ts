@@ -237,6 +237,84 @@ describe('Conv1d', () => {
     );
   });
 
+  // torch [out 2, in 3, k 2] holding elements 0..11 loads tap-major as
+  // 0 6 2 8 4 10 1 7 3 9 5 11 (row tap·in + i, column out), as in the f32
+  // case above.
+  const TAP_MAJOR = [0, 6, 2, 8, 4, 10, 1, 7, 3, 9, 5, 11];
+  // EDGE_BITS, then each with its sign flipped.
+  const halves = [...EDGE_BITS, ...EDGE_BITS.map((b) => b ^ 0x8000)];
+  const reordered = new Uint16Array(TAP_MAJOR.map((i) => halves[i]!));
+  const f32Values = Array.from({ length: 12 }, (_, i) => i + 1);
+  it.each([
+    {
+      name: 'F16 into an f16 layer uploads the halfwords reordered',
+      checkpoint: () => f16Checkpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: true,
+      want: bitsOf(reordered),
+    },
+    {
+      name: 'F16 into an f32 layer decodes the reordered halfwords',
+      checkpoint: () => f16Checkpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: false,
+      want: bitsOf(f16ToF32(reordered)),
+    },
+    {
+      name: 'F32 into an f32 layer uploads f32 reordered',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array(f32Values), shape: [2, 3, 2] } }),
+      half: false,
+      want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
+    },
+    {
+      name: 'BF16 into an f32 layer decodes, then reorders',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16(f32Values), shape: [2, 3, 2] } }),
+      half: false,
+      want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
+    },
+  ])('$name', async ({ checkpoint, half, want }) => {
+    const layer = new Conv1d(3, 2, 2, { bias: false });
+    if (half) layer.half();
+    expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('reorders F16 halfwords without decoding them to f32', async () => {
+    const sd = await f16Checkpoint(new Uint16Array(halves), [2, 3, 2]);
+    const f32 = vi.spyOn(sd.tensors.get('weight')!, 'f32');
+    new Conv1d(3, 2, 2, { bias: false }).transformStateDict(sd, '');
+    const w = sd.tensors.get('weight')!;
+    if (w.kind !== 'derived') throw new Error('expected a derived tensor');
+    expect(await w.data()).toBeInstanceOf(Uint16Array);
+    expect(w.byteLength).toBe(24);
+    expect(f32).not.toHaveBeenCalled();
+  });
+
+  // The reference is the f32 round trip: decode, reorder in f32, then narrow
+  // for an f16 layer.
+  it.each([
+    { name: 'an f16 layer', half: true },
+    { name: 'an f32 layer', half: false },
+  ])(
+    'loads every F16 value into $name with the same bits as the f32 round trip',
+    async ({ half }) => {
+      // 63490 values as out 10, in 907, k 7.
+      const [cOut, cIn, k] = [10, 907, 7];
+      const values = f16ToF32(ALL_F16);
+      const tapMajor = new Float32Array(values.length);
+      for (let o = 0; o < cOut; o++) {
+        for (let i = 0; i < cIn; i++) {
+          for (let t = 0; t < k; t++)
+            tapMajor[(t * cIn + i) * cOut + o] = values[(o * cIn + i) * k + t]!;
+        }
+      }
+      const want = half ? f32ArrayToF16Bits(tapMajor).data : tapMajor;
+      const layer = new Conv1d(cIn, cOut, k, { bias: false });
+      if (half) layer.half();
+      const got = await uploadedWeight(layer, await f16Checkpoint(ALL_F16, [cOut, cIn, k]));
+      expect(bitsOf(got)).toEqual(bitsOf(want));
+    },
+  );
+
   it('widens the window by the dilation', () => {
     const conv = (padding?: 'same') =>
       fakeLoad(new Conv1d(4, 6, 3, { dilation: 2, padding })).forward(input([10, 4])).shape;

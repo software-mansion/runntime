@@ -29,7 +29,7 @@ import {
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
 import { derivedTensor, type LazyStateDict } from '../weights/safetensors.ts';
-import { transposeWeight } from '../weights/transforms.ts';
+import { readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -209,7 +209,12 @@ export class Conv1d extends Module {
       derivedTensor(
         [this.kernelSize * this.inChannels, this.outChannels],
         async () =>
-          convToTapMajor(await tensor.f32(), this.outChannels, this.inChannels, this.kernelSize),
+          convToTapMajor(
+            await readFloats('Conv1d', tensor),
+            this.outChannels,
+            this.inChannels,
+            this.kernelSize,
+          ),
         tensor.byteLength,
       ),
     );

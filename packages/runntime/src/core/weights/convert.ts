@@ -1,13 +1,28 @@
+/** A torch [cOut, cIn, k] conv1d weight as tap-major [k·cIn, cOut]. A pure
+ *  permutation, so f16 halfwords move as they are. */
 export function convToTapMajor(
   src: Float32Array,
   cOut: number,
   cIn: number,
   k: number,
-): Float32Array {
+): Float32Array;
+export function convToTapMajor(
+  src: Float32Array | Uint16Array,
+  cOut: number,
+  cIn: number,
+  k: number,
+): Float32Array | Uint16Array;
+export function convToTapMajor(
+  src: Float32Array | Uint16Array,
+  cOut: number,
+  cIn: number,
+  k: number,
+): Float32Array | Uint16Array {
   if (src.length !== cOut * cIn * k) {
     throw new Error(`convToTapMajor: length ${src.length} != ${cOut}×${cIn}×${k}`);
   }
-  const out = new Float32Array(src.length);
+  const out =
+    src instanceof Uint16Array ? new Uint16Array(src.length) : new Float32Array(src.length);
   for (let cout = 0; cout < cOut; cout++) {
     for (let cin = 0; cin < cIn; cin++) {
       for (let tap = 0; tap < k; tap++) {

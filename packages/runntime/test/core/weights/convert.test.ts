@@ -202,6 +202,14 @@ describe('convToTapMajor', () => {
     expect(convToTapMajor(new Float32Array(src), cOut, cIn, k)).toEqual(new Float32Array(want));
   });
 
+  it('moves f16 halfwords as they are', () => {
+    // 2 out, 1 in, 2 taps, as above: 1 2 3 4 -> 1 3 2 4.
+    const [one, two, three, four] = [0x3c00, 0x4000, 0x4200, 0x4400];
+    expect(convToTapMajor(new Uint16Array([one, two, three, four]), 2, 1, 2)).toEqual(
+      new Uint16Array([one, three, two, four]),
+    );
+  });
+
   it('rejects a wrong length', () => {
     expect(() => convToTapMajor(new Float32Array(3), 2, 1, 2)).toThrow(/length 3/);
   });
