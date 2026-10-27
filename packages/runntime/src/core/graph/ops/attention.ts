@@ -1,6 +1,7 @@
 /** Attention ops: banded, causal and cross sdpa with GQA and sinks, local
  *  attention with a distance bias, and the fused rotary embedding. */
 
+import type { KeyBias } from '../../kernels/attention/attn.ts';
 import { ATTN_LOCAL_MAX_WINDOW } from '../../kernels/attention/attnLocal.ts';
 import { pending, Value } from '../value.ts';
 import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
@@ -20,7 +21,10 @@ const MAX_DECODE_HEAD_DIM = 128;
  *  Optional `segments` clips each row to its own key range, which is how
  *  sequences packed into one tensor avoid attending across each other.
  *  `maxSegment` lets the evaluator size its key split from the longest segment
- *  rather than the whole pack. */
+ *  rather than the whole pack.
+ *
+ *  Optional `keyBias` adds `value` to the scores of keys [start, end) in every
+ *  row and head. */
 export function sdpa(
   q: Value,
   k: Value,
@@ -35,9 +39,10 @@ export function sdpa(
     sinks?: Value;
     segments?: Value;
     maxSegment?: number;
+    keyBias?: KeyBias;
   },
 ): Value {
-  const { qHeads, kvHeads, headDim, sinks, segments } = opts;
+  const { qHeads, kvHeads, headDim, sinks, segments, keyBias } = opts;
   const qPosOffset = opts.qPosOffset ?? 0;
   const [qLen, qw, dtype] = want2d('sdpa', q, FLOAT_DTYPES);
   if (qw !== qHeads * headDim)
@@ -99,12 +104,39 @@ export function sdpa(
       throw new Error(`sdpa: maxSegment ${maxSegment} must be a positive integer`);
     }
   }
+  if (keyBias) {
+    const { start, end, value } = keyBias;
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < 0 ||
+      start > end ||
+      end > kvLen
+    ) {
+      throw new Error(`sdpa: keyBias keys [${start}, ${end}) must lie within the ${kvLen} keys`);
+    }
+    if (!Number.isFinite(value)) throw new Error(`sdpa: keyBias value ${value} must be finite`);
+    // The qLen = 1 decode kernels have no key bias, as with segments.
+    if (qLen === 1) throw new Error('sdpa: keyBias needs qLen > 1 (decode has no key bias route)');
+  }
   return pending(
     { elems: qLen * qw, dtype, dims: [qLen, qw] },
     'attn',
     [q, k, v, ...(sinks ? [sinks] : []), ...(segments ? [segments] : [])],
     undefined,
-    [qHeads, kvHeads, headDim, wl, wr, qPosOffset, sinks ? 1 : 0, segments ? 1 : 0, maxSegment],
+    [
+      qHeads,
+      kvHeads,
+      headDim,
+      wl,
+      wr,
+      qPosOffset,
+      sinks ? 1 : 0,
+      segments ? 1 : 0,
+      maxSegment,
+      0, // q, k and v are separate tensors
+      ...(keyBias ? [1, keyBias.start, keyBias.end, keyBias.value] : []),
+    ],
   );
 }
 

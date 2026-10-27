@@ -25,6 +25,8 @@ export interface SdpaCase {
   /** q, k and v as column blocks of one [T, (qHeads + 2·kvHeads)·headDim]
    *  tensor, through sdpaPacked. */
   packed?: boolean;
+  /** Adds 2 to the scores of the keys in [kvLen / 4, kvLen / 2). */
+  keyBias?: boolean;
 }
 
 /** Every mask and input form, for a square self-attention shape with 4
@@ -39,14 +41,16 @@ export const SDPA_OPTIONS: readonly { name: string; opts: Partial<SdpaCase> }[] 
   { name: 'segments and causal', opts: { segments: true, windowRight: 0 } },
   { name: 'packed qkv', opts: { packed: true, windowRight: 0 } },
   { name: 'packed qkv, sinks and segments', opts: { packed: true, sinks: true, segments: true } },
+  { name: 'a key bias', opts: { keyBias: true, windowRight: 0 } },
+  { name: 'a key bias, sinks and segments', opts: { keyBias: true, sinks: true, segments: true } },
   { name: 'every query head on one kv head', opts: { kvHeads: 1, windowRight: 0 } },
   { name: 'as many kv heads as query heads', opts: { kvHeads: 4 } },
 ];
 
 /** softmax(q·kᵀ) v per query row and head, in f64, over the keys the window
  *  and the row's segment leave visible. q and k arrive pre-scaled. A sink
- *  adds exp(sink · ln 2) to the denominator alone. A row that sees no key
- *  comes out 0. */
+ *  adds exp(sink · ln 2) to the denominator alone. The key bias adds its
+ *  value to the scores of its keys. A row that sees no key comes out 0. */
 export function sdpaRef(
   q: Float32Array,
   k: Float32Array,
@@ -57,6 +61,7 @@ export function sdpaRef(
     qPosOffset: number;
     sinks?: Float32Array;
     segs?: Float32Array;
+    keyBias?: { start: number; end: number; value: number };
   },
 ): Float64Array {
   const { qLen, kvLen, qHeads, kvHeads, headDim: hd } = c;
@@ -78,6 +83,7 @@ export function sdpaRef(
         for (let x = 0; x < hd; x++) {
           s += q[(i * qHeads + h) * hd + x]! * k[(j * kvHeads + kvh) * hd + x]!;
         }
+        if (c.keyBias && j >= c.keyBias.start && j < c.keyBias.end) s += c.keyBias.value;
         scores.push(s);
       }
       const sink = c.sinks ? c.sinks[h]! * Math.LN2 : -Infinity;
@@ -146,6 +152,9 @@ export async function checkSdpa(
       segs[2 * r + 1] = r < qHalf ? kvHalf : kvLen;
     }
   }
+  const keyBias = c.keyBias
+    ? { start: Math.floor(kvLen / 4), end: Math.floor(kvLen / 2), value: 2 }
+    : undefined;
   const meta = (rows: number, cols: number) => ({ ...matrix(rows, cols), dtype });
   const opts = {
     qHeads,
@@ -172,7 +181,7 @@ export async function checkSdpa(
       upload(root, q, meta(qLen, qHeads * headDim)),
       upload(root, k, meta(kvLen, kvHeads * headDim)),
       upload(root, v, meta(kvLen, kvHeads * headDim)),
-      opts,
+      { ...opts, keyBias },
     );
   }
   const got = await toArray(out, ex);
@@ -187,6 +196,7 @@ export async function checkSdpa(
     qPosOffset,
     sinks,
     segs,
+    keyBias,
   });
   expectClose(got, want, TOLERANCE[dtype]);
 }

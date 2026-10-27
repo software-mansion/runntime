@@ -16,6 +16,7 @@ interface Attn {
   causal?: boolean;
   window?: number;
   sinks?: boolean;
+  keyBias?: { start: number; end: number; value: number };
   noSubgroups?: boolean;
 }
 
@@ -34,7 +35,7 @@ function sdpa(name: string, o: Attn): AbCase {
       const windowRight = o.causal ? 0 : (o.window ?? Infinity);
       // A causal query block sits at the end of the keys, like a decoder step.
       const qPosOffset = o.causal ? kvLen - qLen : undefined;
-      return () =>
+      const call = () =>
         version.lib.sdpa(q, k, v, {
           qHeads,
           kvHeads,
@@ -43,7 +44,11 @@ function sdpa(name: string, o: Attn): AbCase {
           windowRight,
           qPosOffset,
           sinks,
+          keyBias: o.keyBias,
         });
+      // A base without keyBias ignores it, so the case skips there.
+      if (o.keyBias && call().pending?.attrs?.[10] !== 1) throw new Error('sdpa takes no keyBias');
+      return call;
     },
   };
 }
@@ -189,6 +194,15 @@ abSuite('attention', [
     kvHeads: 6,
     headDim: 48,
   }),
+  sdpa('flash f16 + key bias, Echo 12/6 heads hd 128, 335 rows over 640 keys', {
+    qLen: 335,
+    kvLen: 640,
+    qHeads: 12,
+    kvHeads: 6,
+    headDim: 128,
+    dtype: 'f16',
+    keyBias: { start: 55, end: 305, value: 1 },
+  }),
   packed('flash packed + segments, MiniLM bucket 128, hd 32', 128, 12, 32, 'f32'),
   packed('flash packed f16 + segments, MiniLM bucket 512, hd 32', 512, 12, 32, 'f16'),
 
@@ -233,6 +247,15 @@ abSuite('attention', [
     qHeads: 12,
     kvHeads: 12,
     headDim: 32,
+    noSubgroups: true,
+  }),
+  sdpa('rowsSplit + key bias, Echo 12/6 heads hd 128, 335 rows over 640 keys', {
+    qLen: 335,
+    kvLen: 640,
+    qHeads: 12,
+    kvHeads: 6,
+    headDim: 128,
+    keyBias: { start: 55, end: 305, value: 1 },
     noSubgroups: true,
   }),
 

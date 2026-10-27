@@ -4,7 +4,7 @@
  *  A workgroup handles 16 rows of one head. It loads a block of keys and
  *  values into workgroup memory once, and all 16 rows use it. Each row is
  *  split across 4 or 8 lanes, which add up q·k with subgroup shuffles.
- *  Windows, segments and sinks work as in the rows kernel.
+ *  Windows, segments, sinks and the key bias work as in the rows kernel.
  *
  *  Based on webgpu-kernels/com.microsoft.MultiHeadAttention (attn-flash-prefill-cluster). */
 
@@ -18,7 +18,7 @@ import {
   makeHandle,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
-import type { AttnGeoCfg } from './attn.ts';
+import { type AttnGeoCfg, type KeyBias, keyBiasFields } from './attn.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
 const LN2 = Math.LN2;
@@ -29,7 +29,14 @@ const MASKED = -3e38;
 /** Rows per workgroup. */
 const TILE_Q = 16;
 
-const Dims = d.struct({ qLen: d.u32, kvLen: d.u32, qPosOffset: d.u32 });
+const Dims = d.struct({
+  qLen: d.u32,
+  kvLen: d.u32,
+  qPosOffset: d.u32,
+  biasStart: d.u32,
+  biasEnd: d.u32,
+  bias: d.f32,
+});
 
 const makeLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
@@ -69,6 +76,7 @@ function tileKeys(headDim: number, f16: boolean): number {
 
 function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
   const { qHeads, kvHeads, headDim: hd, windowLeft, windowRight, hasSinks, hasSegs } = cfg;
+  const hasKeyBias = cfg.hasKeyBias ?? 0;
   const L = layoutFor(elem);
   const f16 = elem.key === 'f16';
   const lpq = attnFlashLanes(hd);
@@ -180,6 +188,9 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
           part += std.subgroupShuffleXor(part, 4);
         }
         const kj = t0 + kk;
+        if (hasKeyBias > 0) {
+          part += std.select(d.f32(0), D.bias, kj >= D.biasStart && kj < D.biasEnd);
+        }
         s[kk] = std.select(d.f32(MASKED), part, kj >= band.x && kj < band.y);
         tileMax = std.max(tileMax, s[kk]!);
       }
@@ -225,7 +236,7 @@ export function createAttnFlashPipeline(root: TgpuRoot, cfg: AttnGeoCfg, elem: E
 export function attnFlashHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnFlashPipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number },
+  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; keyBias?: KeyBias },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -241,6 +252,7 @@ export function attnFlashHandle(
     qLen: args.qLen,
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
+    ...keyBiasFields(args.keyBias),
   });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;

@@ -22,7 +22,28 @@ const LN2 = Math.LN2;
 const MAX_HEAD_DIM = 128;
 const NEG_SEED = -1e30;
 
-const Dims = d.struct({ qLen: d.u32, kvLen: d.u32, qPosOffset: d.u32 });
+/** Added to the scores of keys [start, end), in every row and head. */
+export interface KeyBias {
+  start: number;
+  end: number;
+  value: number;
+}
+
+/** Uniform fields for a key bias; an empty range when there is none. */
+export const keyBiasFields = (b?: KeyBias) => ({
+  biasStart: b?.start ?? 0,
+  biasEnd: b?.end ?? 0,
+  bias: b?.value ?? 0,
+});
+
+const Dims = d.struct({
+  qLen: d.u32,
+  kvLen: d.u32,
+  qPosOffset: d.u32,
+  biasStart: d.u32,
+  biasEnd: d.u32,
+  bias: d.f32,
+});
 
 const Config = d.struct({
   qHeads: d.u32,
@@ -36,6 +57,7 @@ const Config = d.struct({
   // [T, (qHeads+2·kvHeads)·headDim] tensor whose columns are the q|k|v
   // blocks — the kernel reads them by column offset, no slice copies.
   qkvPacked: d.u32,
+  hasKeyBias: d.u32,
 });
 const config = tgpu.accessor(Config, {
   qHeads: 1,
@@ -46,6 +68,7 @@ const config = tgpu.accessor(Config, {
   hasSinks: 0,
   hasSegs: 0,
   qkvPacked: 0,
+  hasKeyBias: 0,
 });
 
 const makeAttnLayout = (elem: Elem) =>
@@ -136,6 +159,9 @@ function makeAttnKernel(elem: Elem = F32_ELEM) {
           score += A.$.q[qBase + kk]! * A.$.k[kBase + kk]!;
         }
       }
+      if (C.hasKeyBias > 0) {
+        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+      }
 
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
@@ -187,18 +213,19 @@ export function createAttnPipeline(
     hasSinks: number; // 0 | 1 — comptime; selects the softmax seed
     hasSegs: number; // 0 | 1 — comptime; clips each row's keys to its segment
     qkvPacked?: number; // 0 | 1 — comptime; q/k/v as column blocks of one tensor
+    hasKeyBias?: number; // 0 | 1 — comptime; adds the key bias to the scores
   },
   elem: Elem = F32_ELEM,
 ) {
   return root
-    .with(config, { ...cfg, qkvPacked: cfg.qkvPacked ?? 0 })
+    .with(config, { ...cfg, qkvPacked: cfg.qkvPacked ?? 0, hasKeyBias: cfg.hasKeyBias ?? 0 })
     .createComputePipeline({ compute: attnKernelFor(elem) });
 }
 
 export function attnHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnPipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number },
+  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; keyBias?: KeyBias },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -214,6 +241,7 @@ export function attnHandle(
     qLen: args.qLen,
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
+    ...keyBiasFields(args.keyBias),
   });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;
@@ -244,7 +272,15 @@ export function attnHandle(
 export const ATTN_ROWS_CHUNK = 96;
 export const ATTN_ROWS_MAX_CHUNKS = 16;
 
-const SplitDims = d.struct({ qLen: d.u32, kvLen: d.u32, qPosOffset: d.u32, chunks: d.u32 });
+const SplitDims = d.struct({
+  qLen: d.u32,
+  kvLen: d.u32,
+  qPosOffset: d.u32,
+  chunks: d.u32,
+  biasStart: d.u32,
+  biasEnd: d.u32,
+  bias: d.f32,
+});
 
 const makeAttnSplitLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
@@ -279,10 +315,12 @@ export interface AttnGeoCfg {
   hasSinks: number; // 0 | 1 — selects the softmax seed
   hasSegs: number; // 0 | 1 — clips each row's keys to its own segment range
   qkvPacked?: number; // 0 | 1 — q/k/v as column blocks of one tensor
+  hasKeyBias?: number; // 0 | 1 — adds the key bias to the scores
 }
 
 function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
   const { qHeads, kvHeads, headDim: hd, windowLeft, windowRight, hasSinks, hasSegs } = cfg;
+  const hasKeyBias = cfg.hasKeyBias ?? 0;
   const f16 = elem.key === 'f16';
   const L = attnLayoutFor(elem);
   const group = Math.floor(qHeads / kvHeads);
@@ -344,6 +382,9 @@ function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
           score += qReg.$[kk]! * L.$.k[kBase + kk]!;
         }
       }
+      if (hasKeyBias > 0) {
+        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+      }
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
       const p = std.exp(score - mNew);
@@ -374,6 +415,7 @@ function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
 
 function makeAttnRowsSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
   const { qHeads, kvHeads, headDim: hd, windowLeft, windowRight, hasSinks, hasSegs } = cfg;
+  const hasKeyBias = cfg.hasKeyBias ?? 0;
   const f16 = elem.key === 'f16';
   const S = attnSplitLayoutFor(elem);
   const group = Math.floor(qHeads / kvHeads);
@@ -451,6 +493,9 @@ function makeAttnRowsSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
           score += qReg.$[kk]! * S.$.k[kBase + kk]!;
         }
       }
+      if (hasKeyBias > 0) {
+        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+      }
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
       const p = std.exp(score - mNew);
@@ -476,6 +521,7 @@ function makeAttnRowsSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
 
 function makeAttnRowsSubgroupSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
   const { qHeads, kvHeads, headDim: hd, windowLeft, windowRight, hasSinks, hasSegs } = cfg;
+  const hasKeyBias = cfg.hasKeyBias ?? 0;
   const f16 = elem.key === 'f16';
   const S = attnSplitLayoutFor(elem);
   const group = Math.floor(qHeads / kvHeads);
@@ -563,7 +609,10 @@ function makeAttnRowsSubgroupSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM)
           partial += qv.$[cc]! * S.$.k[kBase + idx]!;
         }
       }
-      const score = std.subgroupAdd(partial);
+      let score = std.subgroupAdd(partial);
+      if (hasKeyBias > 0) {
+        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+      }
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
       const p = std.exp(score - mNew);
@@ -691,7 +740,7 @@ export function createAttnRowsMergePipeline(
 export function attnRowsHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnRowsPipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number },
+  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; keyBias?: KeyBias },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -707,6 +756,7 @@ export function attnRowsHandle(
     qLen: args.qLen,
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
+    ...keyBiasFields(args.keyBias),
   });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;
@@ -738,6 +788,7 @@ export function attnRowsSplitHandles(
     qHeads: number;
     chunks: number;
     subgroup?: boolean;
+    keyBias?: KeyBias;
   },
   buffers: {
     q: FloatBuffer;
@@ -756,6 +807,7 @@ export function attnRowsSplitHandles(
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
     chunks: args.chunks,
+    ...keyBiasFields(args.keyBias),
   });
   const splitBind = cachedBindGroup(root, attnSplitLayoutFor(elem), {
     q: buffers.q,
