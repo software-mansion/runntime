@@ -49,6 +49,7 @@ export {
   gluConv1d,
   layerNorm,
   localAttention,
+  logitStats,
   matmul,
   matmulGather,
   maxPool2d,

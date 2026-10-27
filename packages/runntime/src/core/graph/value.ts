@@ -102,6 +102,7 @@ export type OpName =
   | 'layerNorm'
   | 'rmsNorm'
   | 'topk'
+  | 'logitStats'
   // shape
   | 'astype'
   | 'transpose'
