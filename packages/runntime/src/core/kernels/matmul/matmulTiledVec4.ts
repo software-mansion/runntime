@@ -4,6 +4,9 @@
  *  f32.
  *
  *  Rows of a can be further apart than K, which lets conv1d run on this kernel.
+ *  With `conv`, row i of a is output frame i's conv window over an input of
+ *  aRows frames: tap j reads frame i·stride + j·dilation − padLeft, zero
+ *  outside the input.
  *
  *  Based on webgpu-kernels/ai.onnx.MatMul (matmul-notrans-vec4-tiled-reg). */
 
@@ -14,7 +17,7 @@ import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
-const Dims = d.struct({ m: d.u32 });
+const Dims = d.struct({ m: d.u32, aRows: d.u32 });
 
 function makeLayout(elem: Elem) {
   return tgpu.bindGroupLayout({
@@ -62,6 +65,8 @@ export interface MatmulTiledVec4Cfg {
   act?: number;
   /** Distance between rows of a, in values. K when omitted. */
   aStride?: number;
+  /** A conv1d's geometry: a is the [aRows, cIn] input, K is taps·cIn. */
+  conv?: { cIn: number; stride: number; dilation: number; padLeft: number };
 }
 
 function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
@@ -75,6 +80,12 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
   const k4 = k / 4;
   const aStride4 = (cfg.aStride ?? k) / 4;
   const n4 = n / 4;
+  const conv = cfg.conv;
+  const convMode = conv ? 1 : 0;
+  const cIn4 = conv ? conv.cIn / 4 : 1;
+  const cStride = conv ? conv.stride : 1;
+  const cDil = conv ? conv.dilation : 1;
+  const cPad = conv ? conv.padLeft : 0;
   const aVecs = (BM * bk4) / lanes;
   const bVecs = (BK * bn4) / lanes;
   const tiles = Math.ceil(k / BK);
@@ -100,7 +111,15 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
         const ak4 = t * bk4 + (e % bk4);
         let v = storeVec4();
         if (am < m && ak4 < k4) {
-          v = storeVec4(layout.$.a[am * aStride4 + ak4]!);
+          if (convMode > 0) {
+            const tap = std.intdiv(ak4, cIn4);
+            const pos = d.i32(am * cStride + tap * cDil) - cPad;
+            if (pos >= 0 && pos < d.i32(layout.$.dims.aRows)) {
+              v = storeVec4(layout.$.a[d.u32(pos) * cIn4 + (ak4 % cIn4)]!);
+            }
+          } else {
+            v = storeVec4(layout.$.a[am * aStride4 + ak4]!);
+          }
         }
         tileA.$[e] = storeVec4(v);
       }
@@ -174,8 +193,9 @@ export function matmulTiledVec4Handle(
     addend?: FloatBuffer;
   },
   elem: Elem = F32_ELEM,
+  aRows = m,
 ): KernelHandle {
-  const dims = cachedUniform(root, Dims, { m });
+  const dims = cachedUniform(root, Dims, { m, aRows });
   // Absent epilogue operands alias `a`; those pipelines never read them.
   const bindGroup = cachedBindGroup(root, layoutFor(elem), {
     ...buffers,

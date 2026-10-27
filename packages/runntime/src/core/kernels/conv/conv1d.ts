@@ -11,7 +11,7 @@ import {
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
-/** Direct strided 1-D convolution, time-major.
+/** Direct strided, dilated 1-D convolution, time-major.
  *
  *  One thread per (output frame, 4-channel unit) holds a vec4 accumulator, so
  *  each x value is loaded once and feeds four output channels. The last unit
@@ -31,6 +31,7 @@ const Dims = d.struct({ tIn: d.u32, tOut: d.u32 });
 const Config = d.struct({
   kernel: d.u32,
   stride: d.u32,
+  dilation: d.u32,
   cIn: d.u32,
   cOut: d.u32,
   c4c: d.u32, // ceil(cOut/4) — channel units per frame (tail unit may be partial)
@@ -40,6 +41,7 @@ const Config = d.struct({
 const config = tgpu.accessor(Config, {
   kernel: 1,
   stride: 1,
+  dilation: 1,
   cIn: 1,
   cOut: 1,
   c4c: 1,
@@ -78,8 +80,8 @@ function makeConv1dVariant(elem: Elem) {
     if (ch0 + 4 <= C.cOut) {
       let acc = d.vec4f();
       for (let tap = d.u32(0); tap < C.kernel; tap++) {
-        if (windowStart + tap >= C.padLeft) {
-          const xFrame = windowStart + tap - C.padLeft;
+        if (windowStart + tap * C.dilation >= C.padLeft) {
+          const xFrame = windowStart + tap * C.dilation - C.padLeft;
           if (xFrame < tIn) {
             const xBase = xFrame * C.cIn;
             const wBase = tap * C.cIn * C.cOut;
@@ -134,8 +136,8 @@ function makeConv1dVariant(elem: Elem) {
     for (let ch = ch0; ch < C.cOut; ch++) {
       let acc = d.f32(0);
       for (let tap = d.u32(0); tap < C.kernel; tap++) {
-        if (windowStart + tap >= C.padLeft) {
-          const xFrame = windowStart + tap - C.padLeft;
+        if (windowStart + tap * C.dilation >= C.padLeft) {
+          const xFrame = windowStart + tap * C.dilation - C.padLeft;
           if (xFrame < tIn) {
             const xBase = xFrame * C.cIn;
             const wBase = tap * C.cIn * C.cOut;
@@ -170,6 +172,7 @@ export function createConv1dPipeline(
   cfg: {
     kernel: number;
     stride: number;
+    dilation?: number;
     cIn: number;
     cOut: number;
     padLeft: number;
@@ -182,6 +185,7 @@ export function createConv1dPipeline(
     .with(config, {
       kernel: cfg.kernel,
       stride: cfg.stride,
+      dilation: cfg.dilation ?? 1,
       cIn: cfg.cIn,
       cOut: cfg.cOut,
       c4c: Math.ceil(cfg.cOut / 4),

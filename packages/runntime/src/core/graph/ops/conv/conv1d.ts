@@ -1,12 +1,13 @@
 import { pending, Value } from '../../value.ts';
 import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from '../shared.ts';
 
-/** Strided 1-D convolution over time-major [T_in, C_in], with w tap-major
- *  [kernelSize·C_in, C_out].
+/** Strided, dilated 1-D convolution over time-major [T_in, C_in], with w
+ *  tap-major [kernelSize·C_in, C_out]. Tap j reads frame j·dilation of the
+ *  window, so the window spans dilation·(kernelSize − 1) + 1 frames.
  *
  *  `padding` takes torch's number, 'valid' or 'same'; padLeft and padRight pad
- *  each side independently instead, and kernelSize−1 on the left is causal.
- *  Passing both is an error, and every pad must stay below kernelSize — an
+ *  each side independently instead, and span − 1 on the left is causal.
+ *  Passing both is an error, and every pad must stay below the span — an
  *  output frame computed from padding alone is a model bug.
  *
  *  `bias` and `activation` fold into the epilogue as act(conv + bias). */
@@ -16,6 +17,7 @@ export function conv1d(
   opts: {
     kernelSize: number;
     stride: number;
+    dilation?: number;
     padding?: number | 'valid' | 'same';
     padLeft?: number;
     padRight?: number;
@@ -24,6 +26,7 @@ export function conv1d(
   },
 ): Value {
   const { kernelSize, stride, padding, bias, activation } = opts;
+  const dilation = opts.dilation ?? 1;
   if (padding !== undefined && (opts.padLeft !== undefined || opts.padRight !== undefined)) {
     throw new Error('conv1d: padding excludes padLeft/padRight — give one form or the other');
   }
@@ -37,6 +40,10 @@ export function conv1d(
       `conv1d: kernelSize ${kernelSize} and stride ${stride} must be positive integers`,
     );
   }
+  if (!Number.isInteger(dilation) || dilation < 1) {
+    throw new Error(`conv1d: dilation ${dilation} must be a positive integer`);
+  }
+  const span = dilation * (kernelSize - 1) + 1;
   let padLeft: number;
   let padRight: number;
   if (padding === 'valid') {
@@ -46,8 +53,8 @@ export function conv1d(
     if (stride !== 1) {
       throw new Error(`conv1d: padding 'same' requires stride 1, got ${stride}`);
     }
-    padLeft = Math.floor((kernelSize - 1) / 2);
-    padRight = kernelSize - 1 - padLeft;
+    padLeft = Math.floor((span - 1) / 2);
+    padRight = span - 1 - padLeft;
   } else {
     padLeft = padding ?? opts.padLeft ?? 0;
     padRight = padding ?? opts.padRight ?? 0;
@@ -56,17 +63,17 @@ export function conv1d(
     ['padLeft', padLeft],
     ['padRight', padRight],
   ] as const) {
-    if (!Number.isInteger(pad) || pad < 0 || pad >= kernelSize) {
+    if (!Number.isInteger(pad) || pad < 0 || pad >= span) {
       const given = typeof padding === 'number' ? `padding ${padding}` : `${name} ${pad}`;
-      throw new Error(`conv1d: ${given} must be an integer in [0, kernelSize)`);
+      throw new Error(`conv1d: ${given} must be an integer in [0, ${span}), the window span`);
     }
   }
   if (wRows !== kernelSize * cIn) {
     throw new Error(`conv1d: w rows ${wRows} != kernelSize·C_in = ${kernelSize}·${cIn}`);
   }
-  if (tIn + padLeft + padRight < kernelSize) {
+  if (tIn + padLeft + padRight < span) {
     throw new Error(
-      `conv1d: padded frames ${tIn}+${padLeft}+${padRight} < kernelSize ${kernelSize} — no output`,
+      `conv1d: padded frames ${tIn}+${padLeft}+${padRight} < window span ${span} — no output`,
     );
   }
   if (bias && (bias.shape.dtype !== dtype || bias.shape.elems !== cOut)) {
@@ -75,13 +82,13 @@ export function conv1d(
     );
   }
   const act = activation ? ACT_CODE[activation] : 0;
-  const tOut = Math.floor((tIn + padLeft + padRight - kernelSize) / stride) + 1;
+  const tOut = Math.floor((tIn + padLeft + padRight - span) / stride) + 1;
   return pending(
     { elems: tOut * cOut, dtype, dims: [tOut, cOut] },
     'conv1d',
     [x, w, ...(bias ? [bias] : [])],
     undefined,
-    [kernelSize, stride, padLeft, padRight, bias ? 1 : 0, act],
+    [kernelSize, stride, padLeft, padRight, bias ? 1 : 0, act, dilation],
   );
 }
 
