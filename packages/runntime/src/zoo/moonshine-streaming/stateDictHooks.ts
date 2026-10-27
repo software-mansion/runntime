@@ -7,8 +7,9 @@
  *  rope tables carry the scale. Everything else renames.
  *
  *  Weights stay in torch layout for the core Linear and Conv1d hooks to
- *  transpose. Derived byteLengths carry the source file bytes, so load progress
- *  still sums to the checkpoint size. */
+ *  transpose. An F16 checkpoint gives f16 fused q/k/v; the norm gammas and
+ *  frontend constants stay f32. Derived byteLengths carry the source file
+ *  bytes, so load progress still sums to the checkpoint size. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import {
@@ -21,6 +22,8 @@ import {
 } from '../moonshine/stateDictHooks.ts';
 import type { MoonshineStreamingConfig } from './config.ts';
 
+/** Stays f32 for any checkpoint: rounding gamma + 1 to f16 would drop the low
+ *  bits of gamma, which an f32 run keeps. */
 function gammaPlusOne(t: LazyTensor): LazyTensor {
   return derivedTensor(
     t.shape,
