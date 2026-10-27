@@ -45,25 +45,39 @@ async function checkQuantMatmul({ m, k, n, bits, groupSize, experts = 1, expert 
 }
 
 describe('matmulQuantW kernel', () => {
-  // One route: a thread per (row, 4-column unit) streams its tiles. bits and
-  // groupSize are pipeline config; K and N are multiples of 4, and of 8 for
-  // int4.
+  // Routes are picked in gpu/dispatch/matmul.ts. This kernel takes an f32
+  // input with no epilogue on one expert, below 8 rows, or when K is not a
+  // multiple of 8. Other calls on a whole weight take matmulQuantTiled. K and
+  // groupSize are multiples of 4, N of 4 for int8 and of 8 for int4.
   it.for(
     ([8, 4] as const).flatMap((bits) =>
       [
+        // plain: m < 8
         { name: 'one tile', m: 1, k: 4, n: 8, groupSize: 4 },
         { name: 'one group per column', m: 3, k: 12, n: 8, groupSize: 12 },
         { name: 'a group every 4 rows', m: 3, k: 12, n: 16, groupSize: 4 },
         { name: 'groups of 8', m: 5, k: 64, n: 24, groupSize: 8 },
-        { name: 'rows past a workgroup of units', m: 70, k: 32, n: 8, groupSize: 16 },
         { name: 'a wide row', m: 2, k: 640, n: 640, groupSize: 32 },
-        // Past GRID_Y_STRIDE units the dispatch goes 2-D.
+        { name: 'one row short of the tiled route', m: 7, k: 32, n: 8, groupSize: 16 },
+        // tiled: a whole weight, m >= 8 and K % 8 == 0
+        { name: 'the first m on the tiled route', m: 8, k: 32, n: 8, groupSize: 16 },
+        // plain: one expert of a fused weight, whatever m
+        {
+          name: 'rows past a workgroup of units on one expert',
+          m: 70,
+          k: 32,
+          n: 8,
+          groupSize: 16,
+          experts: 2,
+          expert: 1,
+        },
+        // plain: K % 8 != 0. Past GRID_Y_STRIDE units the dispatch goes 2-D.
         { name: 'units past GRID_Y_STRIDE', m: GRID_Y_STRIDE / 2 + 5, k: 4, n: 8, groupSize: 4 },
       ].map((c) => ({ bits, ...c })),
     ),
   )('int$bits $name: [$m, $k] × [$k, $n], groupSize $groupSize', (c) => checkQuantMatmul(c));
 
-  // baseRow and scaleBase read one expert of a fused [E·K, N] weight.
+  // plain: baseRow and scaleBase read one expert of a fused [E·K, N] weight.
   it.for(([8, 4] as const).flatMap((bits) => [0, 1, 2].map((expert) => ({ bits, expert }))))(
     'int$bits expert $expert of 3',
     ({ bits, expert }) =>

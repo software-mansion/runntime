@@ -17,6 +17,7 @@ import {
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
+import { columnWord, deqRow } from '../quantCommon.ts';
 
 const Dims = d.struct({ m: d.u32 });
 
@@ -82,31 +83,11 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantTiledCfg, elem: Elem) {
   const aVecs = Math.ceil((BM * bk4) / lanes);
   const bUnits = Math.ceil((BK * bn4) / lanes);
   const tiles = k / BK;
-  // A packed block of W is 4 rows × 4 columns, column-major, `bits` per value.
+  // Words per packed 4×4 block of W.
   const tileWords = bits / 2;
-  // Row r of the block at word wb, one value per column.
-  const loadRow =
-    bits === 4
-      ? (wb: number, r: number) => {
-          'use gpu';
-          const w0 = std.bitcast(d.u32, d.i32)(layout.$.w[wb]!);
-          const w1 = std.bitcast(d.u32, d.i32)(layout.$.w[wb + 1]!);
-          return d.vec4f(
-            d.f32(std.extractBits(w0, r * 4, 4)),
-            d.f32(std.extractBits(w0, 16 + r * 4, 4)),
-            d.f32(std.extractBits(w1, r * 4, 4)),
-            d.f32(std.extractBits(w1, 16 + r * 4, 4)),
-          );
-        }
-      : (wb: number, r: number) => {
-          'use gpu';
-          return d.vec4f(
-            d.f32(std.extractBits(std.bitcast(d.u32, d.i32)(layout.$.w[wb]!), r * 8, 8)),
-            d.f32(std.extractBits(std.bitcast(d.u32, d.i32)(layout.$.w[wb + 1]!), r * 8, 8)),
-            d.f32(std.extractBits(std.bitcast(d.u32, d.i32)(layout.$.w[wb + 2]!), r * 8, 8)),
-            d.f32(std.extractBits(std.bitcast(d.u32, d.i32)(layout.$.w[wb + 3]!), r * 8, 8)),
-          );
-        };
+  const cw1 = columnWord(1, bits);
+  const cw2 = columnWord(2, bits);
+  const cw3 = columnWord(3, bits);
   const tileA = tgpu.workgroupVar(d.arrayOf(elem.vec4, BM * bk4));
   const tileB = tgpu.workgroupVar(d.arrayOf(elem.vec4, BK * bn4));
   return tgpu.computeFn({
@@ -142,7 +123,14 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantTiledCfg, elem: Elem) {
           let wv = storeVec4();
           if (bc4 < n4) {
             const wb = (bc4 * k4 + std.intdiv(bk, 4)) * tileWords;
-            const q = loadRow(wb, bk % 4);
+            const q = deqRow(
+              layout.$.w[wb]!,
+              layout.$.w[wb + cw1]!,
+              layout.$.w[wb + cw2]!,
+              layout.$.w[wb + cw3]!,
+              bk % 4,
+              bits,
+            );
             wv = storeVec4(q * layout.$.scales[std.intdiv(bk, groupSize) * n4 + bc4]!);
           }
           tileB.$[e] = storeVec4(wv);

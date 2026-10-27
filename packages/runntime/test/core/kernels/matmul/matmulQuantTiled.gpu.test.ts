@@ -57,6 +57,7 @@ async function checkQuantTiled(c: Case, dtype: 'f32' | 'f16') {
 }
 
 describe('matmulQuantTiled kernel', () => {
+  // tiled: a whole weight from 8 rows, K % 8 == 0
   const SHAPES = [
     { name: 'one tile', m: 8, k: 8, n: 8, groupSize: 4 },
     { name: 'partial row and column tiles', m: 37, k: 48, n: 40, groupSize: 8 },
@@ -73,7 +74,7 @@ describe('matmulQuantTiled kernel', () => {
     await checkQuantTiled(c, c.dtype);
   });
 
-  // A few rows take this route for an f16 input or an epilogue.
+  // tiled: an f16 input or an epilogue on a whole weight, whatever m
   it.for(
     (['f32', 'f16'] as const).flatMap((dtype) =>
       ([4, 8] as const).flatMap((bits) =>
