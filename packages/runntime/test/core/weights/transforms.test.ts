@@ -9,6 +9,7 @@ import {
 } from '../../../src/core/weights/safetensors.ts';
 import {
   concatRows,
+  reshapeWeight,
   scaleWeight,
   splitCols,
   splitRows,
@@ -226,6 +227,36 @@ describe('transposeWeight', () => {
   });
 });
 
+describe('reshapeWeight', () => {
+  // [2, 1, 3] → [2, 3]: an expert tensor with its expert axis folded into rows.
+  it.for(DTYPES)('reshapes $dtype, keeping the source dtype', async ({ dtype }) => {
+    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [2, 1, 3]);
+    const out = reshapeWeight(t, [2, 3]);
+    expect(out.shape).toEqual([2, 3]);
+    expect(out.byteLength).toBe(t.byteLength);
+    expect([out.kind, out.dtype]).toEqual([t.kind, t.dtype]);
+    expect([...(await out.f32())]).toEqual([1, 2, 3, 4, 5, 6]);
+    if (dtype !== 'F32') expect(await out.u16()).toEqual(await t.u16());
+  });
+
+  it('keeps the f16 halfwords of a derived source', async () => {
+    const [left] = splitCols(await source('F16', [1, 2, 3, 4, 5, 6, 7, 8], [2, 1, 4]), [2, 2]);
+    const out = reshapeWeight(left!, [2, 2]);
+    expect(out.shape).toEqual([2, 2]);
+    expect(await contents(out)).toEqual({ type: 'f16', values: [1, 2, 5, 6] });
+  });
+
+  it('throws CHECKPOINT_MISMATCH when the element counts differ', async () => {
+    const t = await source('F32', [1, 2, 3, 4, 5, 6], [2, 3]);
+    expect(() => reshapeWeight(t, [4, 2])).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'reshapeWeight: cannot reshape [2, 3] to [4, 2]',
+      }),
+    );
+  });
+});
+
 describe('weight helpers', () => {
   it('fetch nothing until an output is read, and split sources read once', async () => {
     const compute = vi.fn(async () => new Float32Array([1, 2, 3, 4]));
@@ -235,6 +266,7 @@ describe('weight helpers', () => {
     concatRows([t, t]);
     scaleWeight(t, 2);
     transposeWeight(t);
+    reshapeWeight(t, [4]);
     expect(compute).not.toHaveBeenCalled();
     await Promise.all([top!, bottom!].map(contents));
     expect(compute).toHaveBeenCalledOnce();

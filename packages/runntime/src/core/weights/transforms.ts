@@ -1,5 +1,5 @@
 /** Lazy reshaping helpers for `transformStateDict` hooks: concatenate, split,
- *  scale and transpose checkpoint tensors without fetching them.
+ *  scale, transpose and reshape checkpoint tensors without fetching them.
  *
  *  F16 sources give f16 halfwords and F32 sources give f32, except
  *  `scaleWeight`, which always gives f32. BF16 decodes to
@@ -186,4 +186,18 @@ export function transposeWeight(t: LazyTensor): LazyTensor {
     },
     t.byteLength,
   );
+}
+
+/** Gives `t` a new shape with the same element count, like torch `reshape`.
+ *  The data is untouched: a file tensor stays a file tensor of its dtype, and
+ *  byteLength stays the same. Throws CHECKPOINT_MISMATCH when the element
+ *  counts differ. */
+export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTensor {
+  if (numel(shape) !== numel(t.shape)) {
+    throw mismatch(
+      'reshapeWeight',
+      `cannot reshape [${t.shape.join(', ')}] to [${shape.join(', ')}]`,
+    );
+  }
+  return { ...t, shape: [...shape] };
 }
