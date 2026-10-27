@@ -1,15 +1,3 @@
-/** Checkpoints store dense weights [out, in]; nn.Linear wants [in, out]. */
-export function transposeF32(src: Float32Array, rows: number, cols: number): Float32Array {
-  if (src.length !== rows * cols) {
-    throw new Error(`transposeF32: length ${src.length} != ${rows}×${cols}`);
-  }
-  const out = new Float32Array(src.length);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) out[c * rows + r] = src[r * cols + c]!;
-  }
-  return out;
-}
-
 export function convToTapMajor(
   src: Float32Array,
   cOut: number,
