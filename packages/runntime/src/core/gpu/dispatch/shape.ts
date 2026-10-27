@@ -218,9 +218,9 @@ export const writeRowsSpec = defineSpec({
 });
 
 export const gatherRowsFromSpec = defineSpec({
-  attrs: () => undefined,
-  cfg: () => undefined,
-  pipeline: (root, dtype) => createGatherRowsFromPipeline(root, elemFor(dtype)),
+  attrs: (p) => ({ group: p.attrs![0]! }),
+  cfg: (_node, attrs) => ({ group: attrs.group }),
+  pipeline: (root, dtype, cfg) => createGatherRowsFromPipeline(root, cfg.group, elemFor(dtype)),
   encode: ({ node, pipeline, inputs, out, ctx }) => {
     const dtype = node.shape.dtype;
     return [
