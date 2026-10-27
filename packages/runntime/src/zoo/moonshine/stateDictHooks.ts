@@ -7,10 +7,11 @@
  *  Everything else renames.
  *
  *  Weights stay in torch layout for the core Linear and Conv1d hooks to
- *  transpose. Derived byteLengths carry the source file bytes, so load progress
- *  still sums to the checkpoint size. */
+ *  transpose. An F16 checkpoint gives f16 derived tensors. Derived byteLengths
+ *  carry the source file bytes, so load progress still sums to the checkpoint
+ *  size. */
 
-import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { concatRows, scaleWeight, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
 import type { MoonshineConfig } from './config.ts';
 
@@ -28,53 +29,14 @@ export function move(sd: LazyStateDict, from: string, to: string): void {
   sd.tensors.set(to, take(sd, from));
 }
 
-export function stackRows(
-  parts: readonly { t: LazyTensor; scale?: number }[],
-  cols: number,
-): LazyTensor {
-  let rows = 0;
-  for (const { t } of parts) {
-    if (t.shape.length !== 2 || t.shape[1] !== cols) {
-      throw checkpointMismatch(
-        'moonshine state dict',
-        `stackRows part shape [${t.shape}] != [_, ${cols}]`,
-      );
-    }
-    rows += t.shape[0]!;
-  }
-  return derivedTensor(
-    [rows, cols],
-    async () => {
-      const out = new Float32Array(rows * cols);
-      let base = 0;
-      for (const { t, scale } of parts) {
-        const data = await t.f32();
-        if (scale === undefined) out.set(data, base);
-        else for (let i = 0; i < data.length; i++) out[base + i] = data[i]! * scale;
-        base += data.length;
-      }
-      return out;
-    },
-    parts.reduce((sum, p) => sum + p.t.byteLength, 0),
-  );
-}
-
-export function fuseQkv(
-  sd: LazyStateDict,
-  hfPrefix: string,
-  ours: string,
-  cols: number,
-  qScale?: number,
-): void {
+/** Stacks q|k|v into one torch-layout [3·hidden, hidden] weight, with q times
+ *  `qScale` when given. */
+export function fuseQkv(sd: LazyStateDict, hfPrefix: string, ours: string, qScale?: number): void {
+  const part = (p: string) => take(sd, `${hfPrefix}.${p}_proj.weight`);
+  const query = part('q');
   sd.tensors.set(
     ours,
-    stackRows(
-      ['q', 'k', 'v'].map((p) => ({
-        t: take(sd, `${hfPrefix}.${p}_proj.weight`),
-        scale: p === 'q' ? qScale : undefined,
-      })),
-      cols,
-    ),
+    concatRows([qScale === undefined ? query : scaleWeight(query, qScale), part('k'), part('v')]),
   );
 }
 
@@ -90,7 +52,7 @@ export function moveTiedEmbedding(sd: LazyStateDict, prefix: string): void {
 export function transformDecoder(
   sd: LazyStateDict,
   prefix: string,
-  dec: { layers: number; hidden: number; headDim: number },
+  dec: { layers: number; headDim: number },
 ): void {
   const q = (name: string) => qualify(prefix, name);
   const crossQScale = 1 / Math.sqrt(dec.headDim);
@@ -98,22 +60,16 @@ export function transformDecoder(
     const hf = q(`model.decoder.layers.${i}`);
     const en = q(`decoder.layers.${i}`);
     move(sd, `${hf}.input_layernorm.weight`, `${en}.norm1.weight`);
-    fuseQkv(sd, `${hf}.self_attn`, `${en}.selfAttn.qkv.weight`, dec.hidden);
+    fuseQkv(sd, `${hf}.self_attn`, `${en}.selfAttn.qkv.weight`);
     move(sd, `${hf}.self_attn.o_proj.weight`, `${en}.selfAttn.out.weight`);
     move(sd, `${hf}.post_attention_layernorm.weight`, `${en}.norm2.weight`);
     sd.tensors.set(
       `${en}.crossAttn.q.weight`,
-      stackRows(
-        [{ t: take(sd, `${hf}.encoder_attn.q_proj.weight`), scale: crossQScale }],
-        dec.hidden,
-      ),
+      scaleWeight(take(sd, `${hf}.encoder_attn.q_proj.weight`), crossQScale),
     );
     sd.tensors.set(
       `${en}.crossAttn.kv.weight`,
-      stackRows(
-        ['k', 'v'].map((p) => ({ t: take(sd, `${hf}.encoder_attn.${p}_proj.weight`) })),
-        dec.hidden,
-      ),
+      concatRows(['k', 'v'].map((p) => take(sd, `${hf}.encoder_attn.${p}_proj.weight`))),
     );
     move(sd, `${hf}.encoder_attn.o_proj.weight`, `${en}.crossAttn.out.weight`);
     move(sd, `${hf}.final_layernorm.weight`, `${en}.norm3.weight`);
@@ -133,7 +89,6 @@ export function transformMoonshineStateDict(
   cfg: MoonshineConfig,
 ): void {
   const q = (name: string) => qualify(prefix, name);
-  const d = cfg.dModel;
 
   moveTiedEmbedding(sd, prefix);
 
@@ -149,7 +104,7 @@ export function transformMoonshineStateDict(
     const hf = q(`model.encoder.layers.${i}`);
     const en = q(`encoder.layers.${i}`);
     move(sd, `${hf}.input_layernorm.weight`, `${en}.norm1.weight`);
-    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`, d);
+    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`);
     move(sd, `${hf}.self_attn.o_proj.weight`, `${en}.attn.out.weight`);
     move(sd, `${hf}.post_attention_layernorm.weight`, `${en}.norm2.weight`);
     move(sd, `${hf}.mlp.fc1.weight`, `${en}.mlp.fc1.weight`);
@@ -159,5 +114,5 @@ export function transformMoonshineStateDict(
   }
   move(sd, q('model.encoder.layer_norm.weight'), q('encoder.norm.weight'));
 
-  transformDecoder(sd, prefix, { layers: cfg.decLayers, hidden: d, headDim: cfg.headDim });
+  transformDecoder(sd, prefix, { layers: cfg.decLayers, headDim: cfg.headDim });
 }
