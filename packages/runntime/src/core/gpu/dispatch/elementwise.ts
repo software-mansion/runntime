@@ -26,7 +26,8 @@ import {
   createSwigluChunkPipeline,
   swigluChunkHandle,
 } from '../../kernels/elementwise/swigluChunk.ts';
-import { defineSpec, narrowFloat } from './spec.ts';
+import { createSnakePipeline, snakeHandle } from '../../kernels/elementwise/snake.ts';
+import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
 function binarySpec(
   name: string,
@@ -121,6 +122,30 @@ export const swigluChunkSpec = defineSpec({
         pipeline,
         { total: node.shape.elems, half: node.shape.dims![1]! },
         { x: narrowFloat(inputs[0]!, dtype), out: narrowFloat(out, dtype) },
+        elemFor(dtype),
+      ),
+    ];
+  },
+});
+
+export const snakeSpec = defineSpec({
+  attrs: () => undefined,
+  cfg: () => undefined,
+  pipeline: (root, dtype) => createSnakePipeline(root, elemFor(dtype)),
+  encode: ({ node, pipeline, inputs, out, ctx }) => {
+    const dtype = node.shape.dtype;
+    const [rows, cols] = node.shape.dims as [number, number];
+    return [
+      snakeHandle(
+        ctx.root,
+        pipeline,
+        rows,
+        cols,
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          ab: narrow(inputs[1]!, 'f32'),
+          out: narrowFloat(out, dtype),
+        },
         elemFor(dtype),
       ),
     ];

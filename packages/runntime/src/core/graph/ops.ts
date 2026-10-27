@@ -12,6 +12,7 @@ export {
   rsqrt,
   sigmoid,
   silu,
+  snake,
   sub,
   swiglu,
   swigluChunk,

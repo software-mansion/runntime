@@ -15,6 +15,7 @@ import {
   rsqrtSpec,
   sigmoidSpec,
   siluSpec,
+  snakeSpec,
   subSpec,
   swigluChunkSpec,
   swigluSpec,
@@ -78,6 +79,7 @@ export const specs = {
   gelu: geluSpec,
   silu: siluSpec,
   asinh: asinhSpec,
+  snake: snakeSpec,
   // matmul
   matmul: matmulSpec,
   matmulQuantW: matmulQuantWSpec,

@@ -183,3 +183,15 @@ export function clamp(x: Value, lo: number, hi: number): Value {
   if (lo > 0 || hi < 0) refuseHwc4('clamp', x);
   return pending({ ...x.shape }, 'clampScalar', [x], undefined, [lo, hi]);
 }
+
+/** Snake activation over time-major x [T, C]: x + sin²(αx) / (α + 1e-9), one
+ *  α per channel. `ab` is f32 [2, C]: α, then 1 / (α + 1e-9), so the kernel
+ *  never divides. C must be a multiple of 4. */
+export function snake(x: Value, ab: Value): Value {
+  const [, c] = want2d('snake', x, FLOAT_DTYPES);
+  if (c % 4 !== 0) throw new Error(`snake: channels ${c} must be a multiple of 4`);
+  if (ab.shape.dtype !== 'f32' || ab.shape.elems !== 2 * c) {
+    throw new Error(`snake: ab must be f32 [2, ${c}], got (${ab.shape.elems},${ab.shape.dtype})`);
+  }
+  return pending({ ...x.shape }, 'snake', [x, ab]);
+}

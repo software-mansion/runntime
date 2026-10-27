@@ -1,5 +1,5 @@
 /** The elementwise kernels: add, sub and mul in all four broadcast modes,
- *  the scalar and unary kernels, swiglu, and hwc4 inputs. */
+ *  the scalar and unary kernels, swiglu, snake, and hwc4 inputs. */
 import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
 import { mat, randHwc4, randMat } from './inputs.ts';
@@ -38,6 +38,22 @@ function unary(
     build: (version) => {
       const x = randMat(version, m, n, dtype);
       return () => op(version, x);
+    },
+  };
+}
+
+/** Snake over [m, n] with a per-channel f32 [2, n] of α and its inverse. */
+function snake(name: string, m: number, n: number, dtype: Float): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      const x = randMat(version, m, n, dtype);
+      const ab = randMat(version, 2, n);
+      const call = () => version.lib.snake(x, ab);
+      // Built once here, so a base without snake throws and skips the case.
+      call();
+      return call;
     },
   };
 }
@@ -111,6 +127,9 @@ abSuite('elementwise', [
   unary('swigluChunk f16, prefill [200,2304]', 200, 2304, 'f16', (version, x) =>
     version.lib.swigluChunk(x),
   ),
+
+  snake('snake, Higgs block 4 [80000,64]', 80000, 64, 'f32'),
+  snake('snake f16, Higgs output [240000,32]', 240000, 32, 'f16'),
 
   hwc4('silu on hwc4, YOLO26n [64,80,80]', (version, x) => version.lib.silu(x)),
   hwc4('mulScalar on hwc4 [64,80,80]', (version, x) => version.lib.mul(x, 0.5)),
