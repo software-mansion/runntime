@@ -1,20 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { f16ToF32, f32ToF16Bits } from '../../../src/core/weights/convert.ts';
-import {
-  bufferSource,
-  fromSafetensors,
-  memoryStateDict,
-  type LazyStateDict,
-  type LazyTensor,
-} from '../../../src/core/weights/safetensors.ts';
 import { MINILM_L6 } from '../../../src/zoo/minilm/config.ts';
 import { transformMinilmStateDict } from '../../../src/zoo/minilm/stateDictHooks.ts';
+import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
 // The hook reads only hidden, headDim and layers. headDim 16 makes the q/k
 // scale 16^-0.25 = 0.5, exact in f16.
 const CFG = { ...MINILM_L6, hidden: 2, layers: 1, headDim: 16 };
-
-type Entry = { values: number[]; shape: number[] };
 
 /** A one-layer BertModel checkpoint with HF names. Every value is exact in f16. */
 const CHECKPOINT: Record<string, Entry> = {
@@ -44,54 +35,12 @@ const CHECKPOINT: Record<string, Entry> = {
   'pooler.dense.bias': { values: [0, 0], shape: [2] },
 };
 
-/** An F16 safetensors file, built from the format spec: an 8-byte
- *  little-endian header length, the JSON header, then the payload. */
-function f16File(entries: Record<string, Entry>): Uint8Array {
-  const header: Record<string, unknown> = {};
-  const halves: number[] = [];
-  for (const [name, { values, shape }] of Object.entries(entries)) {
-    const begin = halves.length * 2;
-    halves.push(...values.map(f32ToF16Bits));
-    header[name] = { dtype: 'F16', shape, data_offsets: [begin, halves.length * 2] };
-  }
-  const json = new TextEncoder().encode(JSON.stringify(header));
-  const payload = new Uint8Array(new Uint16Array(halves).buffer);
-  const out = new Uint8Array(8 + json.length + payload.length);
-  new DataView(out.buffer).setBigUint64(0, BigInt(json.length), true);
-  out.set(json, 8);
-  out.set(payload, 8 + json.length);
-  return out;
-}
-
-async function checkpoint(dtype: 'F32' | 'F16'): Promise<LazyStateDict> {
-  if (dtype === 'F16') {
-    return fromSafetensors(bufferSource(f16File(CHECKPOINT)), { chunkBytes: 0 });
-  }
-  return memoryStateDict(
-    Object.fromEntries(
-      Object.entries(CHECKPOINT).map(([name, { values, shape }]) => [
-        name,
-        { data: new Float32Array(values), shape },
-      ]),
-    ),
-  );
-}
-
-/** What a derived tensor holds: f16 halfwords or f32, decoded to numbers. */
-async function contents(t: LazyTensor): Promise<{ type: 'f16' | 'f32'; values: number[] }> {
-  if (t.kind !== 'derived') throw new Error('expected a derived tensor');
-  const data = await t.data();
-  if (data instanceof Uint16Array) return { type: 'f16', values: [...f16ToF32(data)] };
-  if (data instanceof Float32Array) return { type: 'f32', values: [...data] };
-  throw new Error('expected floats');
-}
-
 describe('transformMinilmStateDict', () => {
   it.for([
     { dtype: 'F32', elemBytes: 4 },
     { dtype: 'F16', elemBytes: 2 },
   ] as const)('maps a $dtype checkpoint', async ({ dtype, elemBytes }) => {
-    const sd = await checkpoint(dtype);
+    const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
     transformMinilmStateDict(sd, '', CFG);
     const get = (name: string) => sd.tensors.get(name)!;

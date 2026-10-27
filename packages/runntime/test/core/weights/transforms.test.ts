@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { f16ToF32, f32ToF16Bits } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
   derivedTensor,
@@ -15,22 +14,9 @@ import {
   splitRows,
   transposeWeight,
 } from '../../../src/core/weights/transforms.ts';
+import { contents, f16File } from './checkpoint.ts';
 
 type Dtype = 'F32' | 'F16' | 'BF16';
-
-/** A one-tensor safetensors file, built from the format spec: an 8-byte
- *  little-endian header length, the JSON header, then the payload. */
-function f16File(values: number[], shape: number[]): Uint8Array {
-  const payload = new Uint8Array(Uint16Array.from(values, f32ToF16Bits).buffer);
-  const header = new TextEncoder().encode(
-    JSON.stringify({ x: { dtype: 'F16', shape, data_offsets: [0, payload.length] } }),
-  );
-  const out = new Uint8Array(8 + header.length + payload.length);
-  new DataView(out.buffer).setBigUint64(0, BigInt(header.length), true);
-  out.set(header, 8);
-  out.set(payload, 8 + header.length);
-  return out;
-}
 
 /** Values as bf16 bits. Every value used here is exact in bf16 and f16. */
 const bf16 = (values: number[]) =>
@@ -41,20 +27,11 @@ const bf16 = (values: number[]) =>
 async function source(dtype: Dtype, values: number[], shape: number[]): Promise<LazyTensor> {
   const sd =
     dtype === 'F16'
-      ? await fromSafetensors(bufferSource(f16File(values, shape)), { chunkBytes: 0 })
+      ? await fromSafetensors(bufferSource(f16File({ x: { values, shape } })), { chunkBytes: 0 })
       : memoryStateDict({
           x: { data: dtype === 'F32' ? new Float32Array(values) : bf16(values), shape },
         });
   return sd.tensors.get('x')!;
-}
-
-/** What a helper's output holds: f16 halfwords or f32, decoded to numbers. */
-async function contents(t: LazyTensor): Promise<{ type: 'f16' | 'f32'; values: number[] }> {
-  if (t.kind !== 'derived') throw new Error('expected a derived tensor');
-  const data = await t.data();
-  if (data instanceof Uint16Array) return { type: 'f16', values: [...f16ToF32(data)] };
-  if (data instanceof Float32Array) return { type: 'f32', values: [...data] };
-  throw new Error('expected floats');
 }
 
 /** F16 stays f16; F32 stays f32; BF16 decodes to f32, which is exact. */
