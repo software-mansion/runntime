@@ -1,8 +1,6 @@
-/** The privacy filter's MoE MLP block, with topk routing on the GPU.
- *
- *  A forward runs in two eval phases: `selection` computes the routing, and the
- *  caller reads it back and groups it to shape `forward`, which builds the
- *  expert-compute DAG. `forwardPacked` does both in one DAG instead.
+/** The privacy filter's MoE MLP block. Topk routing stays on the GPU: the
+ *  expert matmuls read the selected ids straight from topk's output, so a
+ *  forward is one DAG with no readback.
  *
  *  The residual is folded in here, so composing callers must not re-add it.
  *  K is assumed equal to H. */
@@ -10,11 +8,7 @@
 import {
   astype,
   add,
-  cat,
-  gatherRows,
-  matmul,
   matmulGather,
-  matrix,
   moeDown,
   moeUp,
   mul,
@@ -25,7 +19,6 @@ import {
   type Value,
   type ValueMeta,
 } from '../../core/index.ts';
-import type { Grouping } from './routing.ts';
 
 const RMS_EPS = 1e-5; // legacy rmsnorm kernel epsilon (not the eager 1e-6 default)
 
@@ -36,7 +29,7 @@ export interface MoeDims {
   groupSize?: number;
 }
 
-export class EagerMoeMlp extends nn.Module<[Value, Grouping, Value[]], Value> {
+export class EagerMoeMlp extends nn.Module {
   readonly norm: InstanceType<typeof nn.RMSNorm>;
   readonly gate: InstanceType<typeof nn.Linear>;
   readonly gluWeight: InstanceType<typeof nn.Parameter>;
@@ -77,33 +70,6 @@ export class EagerMoeMlp extends nn.Module<[Value, Grouping, Value[]], Value> {
       this.linScales = new nn.Parameter(scaleMeta);
       this.outScales = new nn.Parameter(scaleMeta);
     }
-  }
-
-  routerLogits(x: Value): Value {
-    return this.gate.forward(this.norm.forward(x));
-  }
-
-  selection(x: Value): Value {
-    return topk(this.routerLogits(x), 4);
-  }
-
-  private expertMatmul(x: Value, w: Value, scales: Value | undefined, expert: number): Value {
-    const h = this.dims.hidden;
-    const f = this.dims.weightFormat;
-    if (f === 'f32') return matmul(x, w, { baseRow: expert * h });
-    if (f === 'quantInt8' || f === 'quantInt4') {
-      const bits = f === 'quantInt8' ? 8 : 4;
-      const groupSize = this.dims.groupSize ?? h;
-      const kg = h / groupSize;
-      return matmul(x, w, {
-        scales: scales!,
-        baseRow: expert * h,
-        scaleBase: expert * kg * h,
-        bits,
-        groupSize,
-      });
-    }
-    return matmul(x, slice(w, 0, expert * h, (expert + 1) * h));
   }
 
   private get actDtype(): 'f32' | 'f16' {
@@ -154,47 +120,4 @@ export class EagerMoeMlp extends nn.Module<[Value, Grouping, Value[]], Value> {
       groupSize,
     });
   }
-
-  override forward(x: Value, grouping: Grouping, gateColumns: Value[]): Value {
-    if (!grouping)
-      throw new Error(
-        'EagerMoeMlp.forward needs (x, grouping, gateColumns) — evaluate selection(x) and run parseTopk/groupByExpert first (see routing.ts)',
-      );
-    if (grouping.groups.length === 0) throw new Error('EagerMoeMlp.forward: empty grouping');
-    if (gateColumns.length !== grouping.groups.length)
-      throw new Error(
-        `EagerMoeMlp.forward: ${gateColumns.length} gate columns for ${grouping.groups.length} expert groups`,
-      );
-    const xn = this.norm.forward(x);
-    const contribs: Value[] = [];
-    grouping.groups.forEach((g, gi) => {
-      const rows = gatherRows(xn, g.tokens); // [n_g, H]
-      const e = g.expert;
-      const glu = add(
-        this.expertMatmul(rows, this.gluWeight.value, this.gluScales?.value, e),
-        slice(this.gluBias.value, 0, e, e + 1),
-      );
-      const lin = add(
-        this.expertMatmul(rows, this.linWeight.value, this.linScales?.value, e),
-        slice(this.linBias.value, 0, e, e + 1),
-      );
-      const act = swiglu(glu, lin); // [n_g, H]
-      const o = add(
-        this.expertMatmul(act, this.outWeight.value, this.outScales?.value, e),
-        slice(this.outBias.value, 0, e, e + 1),
-      );
-      contribs.push(mul(o, gateColumns[gi]!)); // [n_g,1] col-broadcast
-    });
-    const pile = cat(contribs, 0); // [4T, H] in group order
-    let y: Value | undefined;
-    for (let s = 0; s < 4; s++) {
-      const slot = gatherRows(pile, grouping.slotPos[s]!); // [T, H]
-      y = y ? add(y, slot) : slot;
-    }
-    return add(x, y!); // residual folded in
-  }
-}
-
-export function gateColumnShape(n: number) {
-  return matrix(n, 1);
 }
