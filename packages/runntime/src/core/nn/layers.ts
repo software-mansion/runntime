@@ -11,9 +11,12 @@ import {
   gatherRows,
   gatherRowsFrom,
   layerNorm,
+  reshape,
   rmsNorm,
   sdpa,
   sdpaPacked,
+  slice,
+  snake,
 } from '../graph/ops.ts';
 import { matrix, type Value } from '../graph/value.ts';
 import {
@@ -146,17 +149,19 @@ export class Linear extends Module {
   }
 }
 
-/** Strided 1D convolution over time-major [T, inChannels]. No batch dim, no
- *  dilation, no groups.
+/** Strided, dilated 1D convolution over time-major [T, inChannels]. No batch
+ *  dim, no groups.
  *
  *  `padding` takes torch's number, 'valid' or 'same'; padLeft and padRight pad
- *  each side independently instead, with kernelSize−1 on the left being causal.
+ *  each side independently instead. span − 1 on the left is causal, with
+ *  span = dilation·(kernelSize − 1) + 1.
  *  weight is stored tap-major and permutes from torch layout at load. bias and
  *  `activation` fold into the conv epilogue. */
 export class Conv1d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
   readonly stride: number;
+  readonly dilation: number;
   readonly padding?: number | 'valid' | 'same';
   readonly padLeft?: number;
   readonly padRight?: number;
@@ -167,6 +172,7 @@ export class Conv1d extends Module {
     readonly kernelSize: number,
     opts: {
       stride?: number;
+      dilation?: number;
       bias?: boolean;
       padding?: number | 'valid' | 'same';
       padLeft?: number;
@@ -176,6 +182,7 @@ export class Conv1d extends Module {
   ) {
     super();
     this.stride = opts.stride ?? 1;
+    this.dilation = opts.dilation ?? 1;
     this.padding = opts.padding;
     this.padLeft = opts.padLeft;
     this.padRight = opts.padRight;
@@ -218,12 +225,173 @@ export class Conv1d extends Module {
     return conv1d(x, this.weight.value, {
       kernelSize: this.kernelSize,
       stride: this.stride,
+      dilation: this.dilation,
       padding: this.padding,
       padLeft: this.padLeft,
       padRight: this.padRight,
       bias: this.bias?.value,
       activation: this.activation,
     });
+  }
+}
+
+/** Transposed 1D convolution over time-major [T, inChannels], like torch's
+ *  ConvTranspose1d, for kernelSize a multiple of stride.
+ *
+ *  Runs as a plain conv: kernelSize / stride taps to stride·outChannels
+ *  channels. Each output row holds `stride` frames side by side, so a reshape
+ *  unfolds them and a slice cuts the padding. The weight permutes from torch
+ *  layout [in, out, kernel] at load, and the bias repeats per frame. */
+export class ConvTranspose1d extends Module {
+  readonly weight: Parameter;
+  readonly bias?: Parameter;
+  readonly taps: number;
+  readonly stride: number;
+  readonly padding: number;
+  readonly outputPadding: number;
+  constructor(
+    readonly inChannels: number,
+    readonly outChannels: number,
+    readonly kernelSize: number,
+    opts: { stride: number; padding?: number; outputPadding?: number; bias?: boolean },
+  ) {
+    super();
+    const { stride, padding = 0, outputPadding = 0 } = opts;
+    if (kernelSize % stride !== 0) {
+      throw new Error(
+        `ConvTranspose1d: kernelSize ${kernelSize} must be a multiple of stride ${stride}`,
+      );
+    }
+    if (outputPadding > padding) {
+      throw new Error(
+        `ConvTranspose1d: outputPadding ${outputPadding} must not exceed padding ${padding}`,
+      );
+    }
+    this.taps = kernelSize / stride;
+    this.stride = stride;
+    this.padding = padding;
+    this.outputPadding = outputPadding;
+    this.weight = new Parameter(matrix(this.taps * inChannels, stride * outChannels));
+    this.bias =
+      opts.bias === false
+        ? undefined
+        : new Parameter({
+            elems: stride * outChannels,
+            dtype: 'f32',
+            dims: [stride * outChannels],
+          });
+  }
+  override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    const at = (n: string) => (prefix ? `${prefix}.${n}` : n);
+    const { inChannels: cIn, outChannels: cOut, kernelSize: k, taps, stride: s } = this;
+    const w = sd.tensors.get(at('weight'));
+    if (w) {
+      if (w.shape.length !== 3 || w.shape[0] !== cIn || w.shape[1] !== cOut || w.shape[2] !== k) {
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `ConvTranspose1d: ${at('weight')} has shape ${JSON.stringify(w.shape)}, ` +
+            `expected torch layout [${cIn}, ${cOut}, ${k}]`,
+        );
+      }
+      // Row q, tap i reads input frame q − (taps − 1) + i. Its frame r in
+      // that row uses kernel position (taps − 1 − i)·s + r.
+      sd.tensors.set(
+        at('weight'),
+        derivedTensor(
+          [taps * cIn, s * cOut],
+          async () => {
+            const src = await w.f32();
+            const out = new Float32Array(taps * cIn * s * cOut);
+            for (let i = 0; i < taps; i++) {
+              for (let c = 0; c < cIn; c++) {
+                const row = (i * cIn + c) * s * cOut;
+                for (let r = 0; r < s; r++) {
+                  const kk = (taps - 1 - i) * s + r;
+                  for (let o = 0; o < cOut; o++) {
+                    out[row + r * cOut + o] = src[(c * cOut + o) * k + kk]!;
+                  }
+                }
+              }
+            }
+            return out;
+          },
+          w.byteLength,
+        ),
+      );
+    }
+    const b = sd.tensors.get(at('bias'));
+    if (b && this.bias) {
+      sd.tensors.set(
+        at('bias'),
+        derivedTensor(
+          [s * cOut],
+          async () => {
+            const src = await b.f32();
+            const out = new Float32Array(s * cOut);
+            for (let r = 0; r < s; r++) out.set(src, r * cOut);
+            return out;
+          },
+          b.byteLength,
+        ),
+      );
+    }
+  }
+  forward(x: Value): Value {
+    const { taps, stride: s, padding: p, outChannels } = this;
+    const t = x.shape.dims![0]!;
+    const y = conv1d(x, this.weight.value, {
+      kernelSize: taps,
+      stride: 1,
+      padLeft: taps - 1,
+      padRight: taps - 1,
+      bias: this.bias?.value,
+    });
+    const rows = (t + taps - 1) * s;
+    const frames = (t - 1) * s - 2 * p + this.kernelSize + this.outputPadding;
+    const z = reshape(y, [rows, outChannels]);
+    return p === 0 && frames === rows ? z : slice(z, 0, p, p + frames);
+  }
+}
+
+/** Snake activation x + sin²(αx) / (α + 1e-9), one α per channel, over
+ *  time-major [T, channels]. The weight is f32 [2, channels]: α, then
+ *  1 / (α + 1e-9). A torch checkpoint's `alpha` [1, channels, 1] converts at
+ *  load. */
+export class Snake extends Module {
+  readonly weight: Parameter;
+  constructor(readonly channels: number) {
+    super();
+    this.weight = new Parameter(
+      { elems: 2 * channels, dtype: 'f32', dims: [2, channels] },
+      undefined,
+      true, // pinned: the kernel reads α in f32 whatever the activations are
+    );
+  }
+  override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    const at = (n: string) => (prefix ? `${prefix}.${n}` : n);
+    const alpha = sd.tensors.get(at('alpha'));
+    if (!alpha) return;
+    sd.tensors.delete(at('alpha'));
+    const c = this.channels;
+    sd.tensors.set(
+      at('weight'),
+      derivedTensor(
+        [2, c],
+        async () => {
+          const a = await alpha.f32();
+          const out = new Float32Array(2 * c);
+          for (let i = 0; i < c; i++) {
+            out[i] = a[i]!;
+            out[c + i] = 1 / (a[i]! + 1e-9);
+          }
+          return out;
+        },
+        alpha.byteLength,
+      ),
+    );
+  }
+  forward(x: Value): Value {
+    return snake(x, this.weight.value);
   }
 }
 
