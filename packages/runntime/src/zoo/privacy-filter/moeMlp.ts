@@ -76,7 +76,7 @@ export class EagerMoeMlp extends nn.Module {
     return this.norm.scale.shape.dtype === 'f16' ? 'f16' : 'f32';
   }
 
-  forwardGather(x: Value): Value {
+  override forward(x: Value): Value {
     const f = this.dims.weightFormat;
 
     const xn = this.norm.forward(x); // [T, H]

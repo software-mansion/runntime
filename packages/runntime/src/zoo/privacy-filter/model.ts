@@ -26,7 +26,7 @@ export class EagerBlock extends nn.Module<[Value, Value, Value], Value> {
 
   override forward(x: Value, cos: Value, sin: Value): Value {
     x = this.attn.forward(x, cos, sin);
-    x = this.mlp.forwardGather(x);
+    x = this.mlp.forward(x);
     return x;
   }
 }
