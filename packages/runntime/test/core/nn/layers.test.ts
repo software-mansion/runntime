@@ -75,7 +75,7 @@ function bitsOf(data: Float32Array | Uint32Array | Uint16Array) {
 
 /** f16 bits a widening to f32 could disturb: 1, −0, the smallest and largest
  *  subnormals, the largest finite value, −inf. */
-const EDGE_BITS = [0x3c00, 0x8000, 0x0001, 0x03ff, 0x7bff, 0xfc00];
+const EDGE_BITS = [0x3c00, 0x8000, 0x0001, 0x03ff, 0x7bff, 0xfc00] as const;
 
 /** Every f16 bit pattern but NaN. f16 → f32 → f16 maps each of these back to
  *  itself; NaN payloads collapse to one quiet NaN on that trip. */
@@ -127,7 +127,7 @@ describe('Linear', () => {
   });
 
   // torch [2, 3] rows [a b c], [d e f] load as [3, 2]: a d, b e, c f.
-  const [a, b, c, d, e, f] = EDGE_BITS as [number, number, number, number, number, number];
+  const [a, b, c, d, e, f] = EDGE_BITS;
   it.each([
     {
       name: 'F16 into an f16 layer uploads the halfwords transposed',
