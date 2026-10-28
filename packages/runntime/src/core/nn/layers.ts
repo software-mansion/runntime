@@ -109,8 +109,8 @@ export class Embedding extends Module<[readonly number[] | Value], Value> {
  *
  *  A quantized checkpoint weight loads as quantW words with its f32 scales in
  *  `weightScale` [in / groupSize, out], and forward() runs the quantized
- *  matmul. Which one the weight is shows only at load, so transformStateDict
- *  retypes the slot then.
+ *  matmul. Only the checkpoint says which kind it is, so transformStateDict
+ *  retypes the slot at load.
  *
  *  `addend` and `activation` fold a residual add and a following tanh or GELU
  *  into the matmul epilogue, as act(x·W + bias) + addend. */
@@ -176,7 +176,7 @@ export class Linear extends Module {
         'CHECKPOINT_MISMATCH',
         `Linear: ${name} is int${bits} in groups of ${groupSize}, which needs in features ` +
           `a multiple of ${MATMUL_QUANT_TILED_BK} and of the group size, out features a ` +
-          `multiple of ${32 / bits} and a group size a multiple of 4, got [${n}, ${k}]`,
+          `multiple of ${32 / bits} and a group size a multiple of 4, got [out, in] = [${n}, ${k}]`,
       );
     }
     this.quantization = { bits, groupSize };
