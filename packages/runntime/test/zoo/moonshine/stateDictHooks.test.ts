@@ -3,9 +3,9 @@ import { MOONSHINE_TINY } from '../../../src/zoo/moonshine/config.ts';
 import { transformMoonshineStateDict } from '../../../src/zoo/moonshine/stateDictHooks.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
-// The hook reads only encLayers, decLayers and headDim. headDim 4 makes the
-// cross-attention q scale 1/√4 = 0.5, exact in f16.
-const CFG = { ...MOONSHINE_TINY, encLayers: 1, decLayers: 1, headDim: 4 };
+// The hook reads only dModel, encLayers, decLayers and headDim. headDim 4
+// makes the cross-attention q scale 1/√4 = 0.5, exact in f16.
+const CFG = { ...MOONSHINE_TINY, dModel: 2, encLayers: 1, decLayers: 1, headDim: 4 };
 
 const square = (values: number[]): Entry => ({ values, shape: [2, 2] });
 const ZERO = square([0, 0, 0, 0]);
@@ -105,5 +105,19 @@ describe('transformMoonshineStateDict', () => {
 
     // The dropped proj_out (4 elems) is the only byte loss.
     expect(sd.totalBytes()).toBe(total - 4 * elemBytes);
+  });
+
+  it('rejects a projection whose width is not dModel', async () => {
+    const name = 'model.encoder.layers.0.self_attn.k_proj.weight';
+    const sd = await checkpoint('F32', {
+      ...CHECKPOINT,
+      [name]: { values: [1, 2, 3], shape: [1, 3] },
+    });
+    expect(() => transformMoonshineStateDict(sd, '', CFG)).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringContaining(name),
+      }),
+    );
   });
 });
