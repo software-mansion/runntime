@@ -441,8 +441,10 @@ function unpackInt4(bytes: Uint8Array): Int8Array {
   return out;
 }
 
-/** The int weight `name` (I8 for int8, U8 holding two int4 per byte) paired
- *  with its F16 `scale`, checked against the file's quantization setting. */
+/** The int weight `name` paired with its F16 `scale`, checked against the
+ *  file's quantization setting. bits 8 needs I8; bits 4 needs U8, where U8
+ *  means packed bytes of two signed nibbles, not unsigned values. Any other
+ *  pairing throws CHECKPOINT_MISMATCH. */
 function fileQuantTensor(
   name: string,
   info: SafeTensorInfo,
