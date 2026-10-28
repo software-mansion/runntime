@@ -258,6 +258,7 @@ describe('reshapeWeight', () => {
     const out = reshapeWeight(t, [2, 3]);
     expect(out.shape).toEqual([2, 3]);
     expect(out.byteLength).toBe(t.byteLength);
+    if (t.kind === 'quant' || out.kind === 'quant') throw new Error('expected float tensors');
     expect([out.kind, out.dtype]).toEqual([t.kind, t.dtype]);
     expect([...(await out.f32())]).toEqual([1, 2, 3, 4, 5, 6]);
     if (dtype !== 'F32') expect(await out.u16()).toEqual(await t.u16());

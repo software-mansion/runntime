@@ -408,6 +408,144 @@ describe('fromSafetensors', () => {
     );
   });
 
+  describe('with quantized weights', () => {
+    const int8Setting = {
+      'runntime.quant': '{"version":1,"bits":8,"groupSize":2,"scheme":"symmetric"}',
+    };
+    const int4Setting = {
+      'runntime.quant': '{"version":1,"bits":4,"groupSize":2,"scheme":"symmetric"}',
+    };
+    const i8Bytes = (values: number[]) => new Uint8Array(new Int8Array(values).buffer);
+    // f16 bits of 1, 0.5, 2 and -1: one scale per 2 columns of a [2, 4] weight.
+    const scale: TensorSpec = {
+      dtype: 'F16',
+      shape: [2, 2],
+      bytes: u16Bytes([0x3c00, 0x3800, 0x4000, 0xbc00]),
+    };
+    const bias: TensorSpec = { dtype: 'F32', shape: [2], bytes: f32Bytes([0.5, -1]) };
+
+    async function open(tensors: Record<string, TensorSpec>, metadata = int8Setting) {
+      return fromSafetensors(bufferSource(tensorFile(tensors, metadata)));
+    }
+
+    it('pairs an int8 weight with its scales into one tensor', async () => {
+      const sd = await open({
+        'fc.weight': {
+          dtype: 'I8',
+          shape: [2, 4],
+          bytes: i8Bytes([1, -2, 127, -128, 0, 5, -7, 3]),
+        },
+        'fc.weight_scale': scale,
+        'fc.bias': bias,
+      });
+      expect([...sd.tensors.keys()]).toEqual(['fc.weight', 'fc.bias']);
+      const w = sd.tensors.get('fc.weight')!;
+      if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
+      expect(w).toMatchObject({ name: 'fc.weight', shape: [2, 4], bits: 8, groupSize: 2 });
+      expect(await w.ints()).toEqual(new Int8Array([1, -2, 127, -128, 0, 5, -7, 3]));
+      expect(await w.scales()).toEqual(new Uint16Array([0x3c00, 0x3800, 0x4000, 0xbc00]));
+      // 8 int8 bytes + 4 f16 scales of 2 bytes
+      expect(w.byteLength).toBe(8 + 8);
+      // ... + the bias, 2 f32: the whole payload
+      expect(sd.totalBytes()).toBe(8 + 8 + 8);
+    });
+
+    it('unpacks int4 low nibble first, sign-extending each nibble', async () => {
+      const sd = await open(
+        {
+          // 0x21: 1, 2. 0xf8: 8 → -8, f → -1. 0x7e: e → -2, 7. 0x09: 9 → -7, 0.
+          'fc.weight': {
+            dtype: 'U8',
+            shape: [2, 2],
+            bytes: new Uint8Array([0x21, 0xf8, 0x7e, 0x09]),
+          },
+          'fc.weight_scale': scale,
+        },
+        int4Setting,
+      );
+      const w = sd.tensors.get('fc.weight')!;
+      if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
+      // 2 bytes per row hold 4 logical columns
+      expect(w).toMatchObject({ shape: [2, 4], bits: 4, groupSize: 2, byteLength: 4 + 8 });
+      expect(await w.ints()).toEqual(new Int8Array([1, 2, -8, -1, -2, 7, -7, 0]));
+      expect(sd.totalBytes()).toBe(4 + 8);
+    });
+
+    it('pairs a weight whose scales come first in the file', async () => {
+      const sd = await open({
+        'fc.weight_scale': scale,
+        'fc.weight': { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+      });
+      expect([...sd.tensors.keys()]).toEqual(['fc.weight']);
+      expect(sd.tensors.get('fc.weight')!.kind).toBe('quant');
+    });
+
+    it.each(['f32', 'u16', 'halfWords', 'words'] as const)(
+      'rejects %s() on a quantized tensor with CHECKPOINT_MISMATCH',
+      async (call) => {
+        const sd = await open({
+          'fc.weight': { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+          'fc.weight_scale': scale,
+        });
+        await expect(sd.tensors.get('fc.weight')![call]()).rejects.toMatchObject({
+          code: 'CHECKPOINT_MISMATCH',
+          message: expect.stringMatching(/fc\.weight is quantized/),
+        });
+      },
+    );
+
+    it.each<{ name: string; tensors: Record<string, TensorSpec>; error: RegExp }>([
+      {
+        name: 'a U8 weight in an int8 file',
+        tensors: { w: { dtype: 'U8', shape: [2, 2], bytes: new Uint8Array(4) }, w_scale: scale },
+        error: /is U8, but int8 is stored as I8/,
+      },
+      {
+        name: 'a 1D weight',
+        tensors: { w: { dtype: 'I8', shape: [4], bytes: new Uint8Array(4) }, w_scale: scale },
+        error: /needs a 2D shape/,
+      },
+      {
+        name: 'columns that are not a multiple of the group size',
+        tensors: { w: { dtype: 'I8', shape: [2, 3], bytes: new Uint8Array(6) }, w_scale: scale },
+        error: /3 columns, not a multiple of groupSize 2/,
+      },
+      {
+        name: 'a weight with no scales',
+        tensors: { w: { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) } },
+        error: /has no w_scale/,
+      },
+      {
+        name: 'F32 scales',
+        tensors: {
+          w: { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+          w_scale: { dtype: 'F32', shape: [2, 2], bytes: new Uint8Array(16) },
+        },
+        error: /needs an F16 w_scale of shape \[2, 2\], got F32 \[2, 2\]/,
+      },
+      {
+        name: 'one scale per row instead of per group',
+        tensors: {
+          w: { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+          w_scale: { dtype: 'F16', shape: [2, 1], bytes: new Uint8Array(4) },
+        },
+        error: /needs an F16 w_scale of shape \[2, 2\], got F16 \[2, 1\]/,
+      },
+    ])('rejects $name with CHECKPOINT_MISMATCH', async ({ tensors, error }) => {
+      const opened = open(tensors);
+      await expect(opened).rejects.toMatchObject({ code: 'CHECKPOINT_MISMATCH' });
+      await expect(opened).rejects.toThrow(error);
+    });
+
+    it('rejects an I8 weight in an int4 file', async () => {
+      const tensors = {
+        w: { dtype: 'I8', shape: [2, 2], bytes: new Uint8Array(4) },
+        w_scale: { dtype: 'F16', shape: [2, 2], bytes: new Uint8Array(8) },
+      } satisfies Record<string, TensorSpec>;
+      await expect(open(tensors, int4Setting)).rejects.toThrow(/is I8, but int4 is stored as U8/);
+    });
+  });
+
   describe('with a cache', () => {
     it('loads a second time without touching the source', async () => {
       const { cache } = memoryCache();
@@ -676,7 +814,7 @@ describe('memoryStateDict', () => {
 
   it('treats a Uint16Array as bf16 bits', async () => {
     const t = memoryStateDict({ w: new Uint16Array([0x3fc0, 0xbe80]) }).tensors.get('w')!;
-    expect(t.dtype).toBe('BF16');
+    expect(t).toMatchObject({ kind: 'file', dtype: 'BF16' });
     expect(await t.f32()).toEqual(new Float32Array([1.5, -0.25]));
     expect(await t.u16()).toEqual(new Uint16Array([0x3fc0, 0xbe80]));
   });
