@@ -230,7 +230,8 @@ names and lays them out like this:
   (int8) or 7 (int4).
 - The file metadata holds the setting under `runntime.quant`, as a JSON
   string: `{"version":1,"bits":8,"groupSize":32,"scheme":"symmetric"}`,
-  with `bits` 8 or 4.
+  with `bits` 8 or 4. `version` must be `1` and `scheme` must be
+  `"symmetric"`, or the load throws.
 - Embeddings, LayerNorms and biases stay float.
 
 `groupSize` must be a multiple of 4 that divides 384 and 1536: 32, 64 and
