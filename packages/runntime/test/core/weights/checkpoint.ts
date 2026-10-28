@@ -93,15 +93,41 @@ export async function contents(t: LazyTensor): Promise<{ type: 'f16' | 'f32'; va
  *  `[out, in / groupSize]`. */
 export type QuantEntry = { ints: number[]; scales: number[]; shape: [number, number] };
 
+/** `values`, a torch-layout `[out, in]` weight, quantized the way the format
+ *  spec's symmetric scheme reads it: per group of `groupSize` along `in`, the
+ *  scale is the group's largest |value| over the top int (127 for int8, 7 for
+ *  int4) rounded to f16, and each int is value / scale rounded to nearest. */
+export function quantizeWeight(
+  values: Float32Array,
+  shape: [number, number],
+  bits: 4 | 8,
+  groupSize: number,
+): QuantEntry {
+  const top = 2 ** (bits - 1) - 1;
+  const ints = new Array<number>(values.length);
+  const scales = new Array<number>(values.length / groupSize);
+  for (let g = 0; g < scales.length; g++) {
+    const group = values.subarray(g * groupSize, (g + 1) * groupSize);
+    const largest = group.reduce((most, v) => Math.max(most, Math.abs(v)), 0);
+    const scale = f16ToF32(Uint16Array.of(f32ToF16Bits(largest / top)))[0]!;
+    scales[g] = scale;
+    // An all-zero group has scale 0 and ints 0.
+    group.forEach((v, i) => (ints[g * groupSize + i] = scale === 0 ? 0 : Math.round(v / scale)));
+  }
+  return { ints, scales, shape };
+}
+
 /** A quantized safetensors file in the format spec: each entry's ints as
  *  `name` (I8, or U8 with two int4 per byte, low nibble first), its scales
- *  rounded to f16 as `name_scale`, and the setting in `runntime.quant`. */
+ *  rounded to f16 as `name_scale`, and the setting in `runntime.quant`.
+ *  `floats` go in as F32 tensors next to them. */
 export function quantFile(
   bits: 4 | 8,
   groupSize: number,
   entries: Record<string, QuantEntry>,
+  floats: Record<string, { data: Float32Array; shape: number[] }> = {},
 ): Uint8Array {
-  const tensors: Parameters<typeof safetensorsFile>[0] = {};
+  const tensors: Parameters<typeof safetensorsFile>[0] = { ...floats };
   for (const [name, { ints, scales, shape }] of Object.entries(entries)) {
     const [out, cols] = shape;
     tensors[name] =
