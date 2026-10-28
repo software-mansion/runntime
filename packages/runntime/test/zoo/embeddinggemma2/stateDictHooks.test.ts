@@ -394,6 +394,8 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     const conv0 = get('conv0.weight');
     expect(conv0.shape).toEqual([2, 9]);
     expect(conv0.byteLength).toBe(18 * elemBytes);
+    if (source.kind === 'quant' || conv0.kind === 'quant')
+      throw new Error('expected float tensors');
     expect([conv0.kind, conv0.dtype]).toEqual([source.kind, source.dtype]);
 
     // Tap k of channel c moves from c·9 + k to k·2 + c.

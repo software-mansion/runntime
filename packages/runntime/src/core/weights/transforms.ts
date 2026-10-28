@@ -24,6 +24,7 @@ const mismatch = (helper: string, why: string) =>
  *  tensor whose data does not fill its shape. A file tensor's length is
  *  checked by the header parser. */
 export async function readFloats(helper: string, t: LazyTensor): Promise<Floats> {
+  if (t.kind === 'quant') throw mismatch(helper, `${t.name} is quantized, not float`);
   if (t.kind === 'file') return t.dtype === 'F16' ? t.u16() : t.f32();
   const data = await t.data();
   if (data instanceof Uint32Array) throw mismatch(helper, 'source holds packed u32 words');
