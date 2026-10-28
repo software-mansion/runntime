@@ -194,7 +194,8 @@ await createEmbedder({
 ```
 
 - **modelPath** - the weights, a `model.safetensors` file. The model is
-  read from the file.
+  read from the file. For all-MiniLM-L6-v2 the file can hold int8 or int4
+  weights, see [Quantized weights](#quantized-weights).
 - **visionPath** - the weights for images and video. `null` skips the
   download, and images and video become an error.
 - **audioPath** - the same for audio.
@@ -209,6 +210,28 @@ await createEmbedder({
 
 Every field is optional. A missing one comes from the model's `DEFAULT`
 entry. Without `modelPath`, the model is EmbeddingGemma 2.
+
+### Quantized weights
+
+all-MiniLM-L6-v2 loads from a `model.safetensors` whose Linear weights
+(attention query, key, value and output, and both feed-forward layers) are
+int8 or int4. The file keeps the Hugging Face tensor names and lays them out
+like this:
+
+- A Linear weight `W` of shape `[out, in]` is stored as `W`: `I8` of shape
+  `[out, in]` for int8, or `U8` of shape `[out, in / 2]` for int4, two
+  signed 4-bit values per byte with the even index in the low nibble.
+- Its scales are `W_scale`: `F16` of shape `[out, in / groupSize]`, one per
+  `groupSize` values along a row. A weight is its int times its group's
+  scale. The usual choice is the group's largest absolute value over 127
+  (int8) or 7 (int4).
+- The file metadata holds the setting under `runntime.quant`, as a JSON
+  string: `{"version":1,"bits":8,"groupSize":32,"scheme":"symmetric"}`,
+  with `bits` 8 or 4.
+- Embeddings, LayerNorms and biases stay float.
+
+`groupSize` must be a multiple of 4 that divides 384 and 1536: 32, 64 and
+128 all fit.
 
 ## Loading options
 
