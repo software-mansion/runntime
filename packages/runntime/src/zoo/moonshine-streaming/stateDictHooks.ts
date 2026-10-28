@@ -7,9 +7,10 @@
  *  rope tables carry the scale. Everything else renames.
  *
  *  Weights stay in torch layout for the core Linear and Conv1d hooks to
- *  transpose. An F16 checkpoint gives f16 fused q/k/v; the norm gammas and
- *  frontend constants stay f32. Derived byteLengths carry the source file
- *  bytes, so load progress still sums to the checkpoint size. */
+ *  transpose. An F16 checkpoint gives f16 decoder q/k/v; the scaled encoder
+ *  q/k/v and cross-attention q, the norm gammas and the frontend constants
+ *  stay f32. Derived byteLengths carry the source file bytes, so load progress
+ *  still sums to the checkpoint size. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import {
