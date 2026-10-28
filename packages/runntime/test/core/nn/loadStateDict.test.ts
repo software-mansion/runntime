@@ -1,6 +1,7 @@
 import type { TgpuRoot } from 'typegpu';
 import { describe, expect, it, vi } from 'vitest';
 import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
+import { Linear } from '../../../src/core/nn/layers.ts';
 import { gpuUpload, loadLazyStateDict } from '../../../src/core/nn/loadStateDict.ts';
 import {
   Buffer,
@@ -19,6 +20,7 @@ import {
   type LazyTensor,
   type MemoryStateDict,
 } from '../../../src/core/weights/safetensors.ts';
+import { f32ToF16Bits } from '../../../src/core/weights/convert.ts';
 import { meta } from '../graph/values.ts';
 import { safetensorsFile } from '../weights/checkpoint.ts';
 
@@ -260,18 +262,128 @@ describe('a quantized tensor', () => {
     { name: 'an f32 parameter', param: () => new Parameter(meta([2, 2])), dtype: 'f32' },
     { name: 'an f16 parameter', param: () => new Parameter(meta([2, 2], 'f16')), dtype: 'f16' },
     { name: 'a CpuParameter', param: () => new CpuParameter(meta([2, 2])), dtype: 'f32' },
+    {
+      name: 'a quantW parameter',
+      param: () => new Parameter({ elems: 1, dtype: 'quantW', dims: [2, 2] }),
+      dtype: 'quantW',
+    },
   ])('is refused by $name with CHECKPOINT_MISMATCH', async ({ param, dtype }) => {
-    class Linear extends Module {
+    class NotLinear extends Module {
       weight = param();
     }
     const upload = recorder();
-    await expect(load(new Linear(), { weight: quant }, upload)).rejects.toMatchObject({
+    await expect(load(new NotLinear(), { weight: quant }, upload)).rejects.toMatchObject({
       code: 'CHECKPOINT_MISMATCH',
-      message: `loadStateDict: 'weight' is quantized (int8), but the parameter holds ${dtype}`,
+      message:
+        "loadStateDict: 'weight' is quantized (int8), but only a Linear weight loads quantized " +
+        `and this parameter holds ${dtype}`,
     });
     expect(upload).not.toHaveBeenCalled();
     expect(ints).not.toHaveBeenCalled();
     expect(scales).not.toHaveBeenCalled();
+  });
+});
+
+describe('a quantized Linear', () => {
+  // torch [out 4, in 8] int8 in groups of 4: ints o·8 + i, f16-exact scales
+  // o + g/2, and an f32 bias.
+  const file = safetensorsFile(
+    {
+      'fc.weight': { data: Int8Array.from({ length: 32 }, (_, i) => i), shape: [4, 8] },
+      'fc.weight_scale': {
+        data: Uint16Array.from([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5], f32ToF16Bits),
+        shape: [4, 2],
+      },
+      'fc.bias': { data: new Float32Array([1, 2, 3, 4]), shape: [4] },
+    },
+    {
+      'runntime.quant': JSON.stringify({ version: 1, bits: 8, groupSize: 4, scheme: 'symmetric' }),
+    },
+  );
+  class Net extends Module {
+    fc = new Linear(8, 4);
+  }
+
+  it('uploads the words, the scales and the bias in file order', async () => {
+    const sd = await fromSafetensors(bufferSource(file), { chunkBytes: 0 });
+    const weight = sd.tensors.get('fc.weight')!;
+    if (weight.kind !== 'quant') throw new Error('expected a quantized tensor');
+    const ints = vi.spyOn(weight, 'ints');
+    const upload = recorder();
+    const progress: [string, number, number][] = [];
+    const net = new Net();
+    await loadLazyStateDict(net, sd, {
+      upload,
+      onProgress: (name, done, total) => progress.push([name, done, total]),
+    });
+    expect(upload.mock.calls.map(([data, shape]) => [data.constructor.name, shape])).toEqual([
+      ['Uint32Array', { elems: 8, dtype: 'quantW', dims: [8, 4] }],
+      ['Float32Array', meta([2, 4])],
+      ['Float32Array', meta([4])],
+    ]);
+    expect(upload.mock.calls[1]![0]).toEqual(new Float32Array([0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5]));
+    expect(ints).toHaveBeenCalledTimes(1);
+    // 32 int8 bytes + 16 scale bytes, then the 16-byte bias: the payload size
+    expect(progress).toEqual([
+      ['fc.weight', 48, 64],
+      ['fc.weightScale', 48, 64],
+      ['fc.bias', 64, 64],
+    ]);
+    expect(net.fc.weightScale!.loaded).toBe(true);
+  });
+
+  it('loads a float checkpoint into the same layer as before', async () => {
+    const upload = recorder();
+    const net = new Net();
+    await load(
+      net,
+      {
+        'fc.weight': { data: new Float32Array(32), shape: [4, 8] },
+        'fc.bias': new Float32Array(4),
+      },
+      upload,
+    );
+    expect(upload.mock.calls.map(([, shape]) => shape)).toEqual([meta([8, 4]), meta([4])]);
+    expect(net.fc.weightScale).toBeUndefined();
+  });
+});
+
+describe('a quantW slot', () => {
+  // int8 [4, 4]: 16 values in 4 words.
+  class Packed extends Module {
+    w = new Parameter({ elems: 4, dtype: 'quantW', dims: [4, 4] });
+  }
+
+  /** A file holding `words` as one U32 tensor `w` of `shape`. */
+  const wordFile = (words: Uint32Array, shape: number[]) =>
+    fromSafetensors(bufferSource(safetensorsFile({ w: { data: words, shape } })), {
+      chunkBytes: 0,
+    });
+
+  it('takes pre-packed U32 words from a file, counted in words', async () => {
+    const words = new Uint32Array([1, 2, 3, 4]);
+    const upload = recorder();
+    await loadLazyStateDict(new Packed(), await wordFile(words, [4]), { upload });
+    expect(upload).toHaveBeenCalledWith(words, { elems: 4, dtype: 'quantW', dims: [4, 4] });
+  });
+
+  it('takes derived words counted in logical values', async () => {
+    const words = new Uint32Array([1, 2, 3, 4]);
+    const upload = recorder();
+    await load(new Packed(), { w: derivedTensor([4, 4], () => Promise.resolve(words)) }, upload);
+    expect(upload).toHaveBeenCalledWith(words, { elems: 4, dtype: 'quantW', dims: [4, 4] });
+  });
+
+  it.each([
+    { name: 'U32 words of another count', sd: () => wordFile(new Uint32Array(5), [5]) },
+    {
+      name: 'derived words of another logical size',
+      sd: async () => dict({ w: derivedTensor([4], () => Promise.resolve(new Uint32Array(4))) }),
+    },
+  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ sd }) => {
+    await expect(
+      loadLazyStateDict(new Packed(), await sd(), { upload: recorder() }),
+    ).rejects.toMatchObject({ code: 'CHECKPOINT_MISMATCH' });
   });
 });
 
