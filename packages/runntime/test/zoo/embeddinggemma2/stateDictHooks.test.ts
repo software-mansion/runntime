@@ -138,10 +138,11 @@ describe('transformEmbeddingGemma2StateDict', () => {
     expect(scalar.byteLength).toBe(elemBytes);
     expect(await contents(scalar)).toEqual({ type: 'f32', values: [0.25] });
 
+    // Scaled, so f32 on every checkpoint.
     const ple = get('ple.per_layer_model_projection.weight');
     expect(ple.shape).toEqual([2, 4]);
     expect(ple.byteLength).toBe(8 * elemBytes);
-    expect(await contents(ple)).toEqual({ type, values: [0, 0.5, 1, 1.5, 5, 5.5, 6, 6.5] });
+    expect(await contents(ple)).toEqual({ type: 'f32', values: [0, 0.5, 1, 1.5, 5, 5.5, 6, 6.5] });
 
     expect(sd.totalBytes()).toBe(total);
   });
@@ -370,7 +371,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       values: [1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 8, 17, 9, 18],
     });
 
-    // Times the residual weight 0.5.
+    // Times the residual weight 0.5, so f32 on every checkpoint.
     for (const [name, values] of [
       ['layers.0.feed_forward1.post_layer_norm.scale', [1, 2, 3, 4]],
       ['layers.0.feed_forward2.post_layer_norm.scale', [0.5, 1.5, 2.5, 3.5]],
@@ -378,7 +379,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       const norm = get(name);
       expect(norm.shape).toEqual([4]);
       expect(norm.byteLength).toBe(4 * elemBytes);
-      expect(await contents(norm)).toEqual({ type, values });
+      expect(await contents(norm)).toEqual({ type: 'f32', values });
     }
 
     const qkv = get('layers.0.qkv.weight');
