@@ -188,14 +188,19 @@ export class Linear extends Module {
     );
     const words = derivedTensor(
       [k, n],
-      async () =>
-        packQuantW(transposed(await tensor.ints(), new Int8Array(k * n), n, k), k, n, bits),
+      async () => packQuantW(await tensor.ints(), k, n, bits),
       tensor.byteLength,
     );
-    const scales = derivedTensor([k / groupSize, n], async () => {
+    const groups = k / groupSize;
+    const scales = derivedTensor([groups, n], async () => {
       const data = await tensor.scales();
       const f32 = data instanceof Float32Array ? data : f16ToF32(data);
-      return transposed(f32, new Float32Array(f32.length), n, k / groupSize);
+      // torch's [out, in / groupSize] to the kernels' [in / groupSize, out]
+      const out = new Float32Array(f32.length);
+      for (let o = 0; o < n; o++) {
+        for (let g = 0; g < groups; g++) out[g * n + o] = f32[o * groups + g]!;
+      }
+      return out;
     });
     const scaleName = prefix ? `${prefix}.weightScale` : 'weightScale';
     const entries = [...sd.tensors];
@@ -217,19 +222,6 @@ export class Linear extends Module {
       activation: this.activation,
     });
   }
-}
-
-/** Fills `out` with `data` row-major [rows, cols] as [cols, rows]. */
-function transposed<T extends Int8Array | Float32Array>(
-  data: T,
-  out: T,
-  rows: number,
-  cols: number,
-): T {
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) out[c * rows + r] = data[r * cols + c]!;
-  }
-  return out;
 }
 
 /** Strided, dilated 1D convolution over time-major [T, inChannels]. No batch
