@@ -1,5 +1,6 @@
 /** Lazy reshaping helpers for `transformStateDict` hooks: concatenate, split,
- *  scale, transpose and reshape checkpoint tensors without fetching them.
+ *  permute, scale, transpose and reshape checkpoint tensors without fetching
+ *  them.
  *
  *  F16 sources give f16 halfwords and F32 sources give f32, except
  *  `scaleWeight`, which always gives f32. BF16 decodes to
@@ -139,6 +140,34 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
       (t.byteLength * cols) / width,
     );
   });
+}
+
+/** Reorders the rows of dim 0: row i of the result is row `order[i]` of `t`,
+ *  like torch `t[order]`. Throws CHECKPOINT_MISMATCH when `order` is not a
+ *  permutation of 0 … rows − 1. */
+export function permuteRows(t: LazyTensor, order: readonly number[]): LazyTensor {
+  if (t.shape.length === 0) throw mismatch('permuteRows', 'cannot permute a scalar');
+  const rows = t.shape[0]!;
+  const inRange = order.every((r) => Number.isInteger(r) && r >= 0 && r < rows);
+  if (order.length !== rows || new Set(order).size !== rows || !inRange) {
+    throw mismatch(
+      'permuteRows',
+      `order is not a permutation of the ${rows} rows of shape [${t.shape.join(', ')}]`,
+    );
+  }
+  const rowElems = numel(t.shape) / rows;
+  return derivedTensor(
+    t.shape,
+    async () => {
+      const data = await readFloats('permuteRows', t);
+      const out = allocLike(data, data.length);
+      for (const [i, r] of order.entries()) {
+        out.set(data.subarray(r * rowElems, (r + 1) * rowElems), i * rowElems);
+      }
+      return out;
+    },
+    t.byteLength,
+  );
 }
 
 /** Multiplies `t` by `scale`: one number for every element, or one per row
