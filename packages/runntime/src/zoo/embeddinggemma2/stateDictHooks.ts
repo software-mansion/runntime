@@ -5,7 +5,9 @@
  *
  *  An F16 checkpoint gives f16 derived tensors, except the text layer
  *  scalars and the audio tower's clip bounds, distance bias rows and q
- *  scales, which the CPU code and the attention kernel read as f32. */
+ *  scales, which the CPU code and the attention kernel read as f32, and the
+ *  scaled PLE projection and audio post norms, which stay f32 so an f32
+ *  model loads exact values. */
 
 import {
   concatRows,
