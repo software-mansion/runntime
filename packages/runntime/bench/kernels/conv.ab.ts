@@ -75,14 +75,13 @@ function conv1d(
     name,
     build: (version) => {
       const x = randMat(version, tIn, cIn);
-      const w = version.upload(
-        version.lib.convToTapMajor(version.rand(cOut * cIn * k), cOut, cIn, k),
-        {
-          elems: k * cIn * cOut,
-          dtype: 'f32',
-          dims: [k * cIn, cOut],
-        },
-      );
+      // Random taps need no tap-major reorder: a permutation of them is as
+      // random, and A and B draw the same numbers either way.
+      const w = version.upload(version.rand(cOut * cIn * k), {
+        elems: k * cIn * cOut,
+        dtype: 'f32',
+        dims: [k * cIn, cOut],
+      });
       const call = () =>
         version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act, ...geometry });
       // Built once here, so a base that refuses the geometry skips the case.

@@ -1,18 +1,6 @@
 /** A torch [cOut, cIn, k] conv1d weight as tap-major [k·cIn, cOut]. A pure
  *  permutation, so f16 halfwords move as they are. */
 export function convToTapMajor(
-  src: Float32Array,
-  cOut: number,
-  cIn: number,
-  k: number,
-): Float32Array;
-export function convToTapMajor(
-  src: Float32Array | Uint16Array,
-  cOut: number,
-  cIn: number,
-  k: number,
-): Float32Array | Uint16Array;
-export function convToTapMajor(
   src: Float32Array | Uint16Array,
   cOut: number,
   cIn: number,
