@@ -19,6 +19,7 @@ import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/modul
 import { f16ToF32, f32ArrayToF16Bits } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
+  derivedTensor,
   fromSafetensors,
   memoryStateDict,
   type LazyStateDict,
@@ -49,6 +50,18 @@ function f16Checkpoint(bits: Uint16Array, shape: number[]): Promise<LazyStateDic
   file.set(header, 8);
   file.set(new Uint8Array(bits.buffer, bits.byteOffset, bits.byteLength), 8 + header.length);
   return fromSafetensors(bufferSource(file), { chunkBytes: 0 });
+}
+
+/** A state dict whose `weight` is a derived tensor holding `data`, as a zoo
+ *  hook hands one over: a Uint16Array means f16 halfwords, a Uint32Array
+ *  packed words. */
+function derivedCheckpoint(data: Uint16Array | Uint32Array, shape: number[]): LazyStateDict {
+  const tensor = derivedTensor(shape, () => Promise.resolve(data), data.byteLength);
+  return {
+    metadata: {},
+    tensors: new Map([['weight', tensor]]),
+    totalBytes: () => data.byteLength,
+  };
 }
 
 /** bf16 bits: the top half of the f32 pattern. */
@@ -164,10 +177,40 @@ describe('Linear', () => {
       half: false,
       want: bitsOf(new Float32Array([1, 4, 2, 5, 3, 6])),
     },
+    {
+      name: 'BF16 into an f16 layer decodes, transposes, then narrows',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: true,
+      // f16 bits of 1, 4, 2, 5, 3, 6
+      want: { type: 'f16', bits: [0x3c00, 0x4400, 0x4000, 0x4500, 0x4200, 0x4600] },
+    },
+    {
+      name: 'derived halfwords into an f16 layer upload transposed',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: true,
+      want: { type: 'f16', bits: [a, d, b, e, c, f] },
+    },
+    {
+      name: 'derived halfwords into an f32 layer decode transposed',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: false,
+      want: bitsOf(new Float32Array([1, (1023 / 1024) * 2 ** -14, -0, 65504, 2 ** -24, -Infinity])),
+    },
   ])('$name', async ({ checkpoint, half, want }) => {
     const layer = new Linear(3, 2, { bias: false });
     if (half) layer.half();
     expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('rejects derived packed words', async () => {
+    const sd = derivedCheckpoint(new Uint32Array(6), [2, 3]);
+    await expect(uploadedWeight(new Linear(3, 2, { bias: false }), sd)).rejects.toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'transposeWeight: source holds packed u32 words',
+      }),
+    );
   });
 
   it('transposes F16 halfwords without decoding them to f32', async () => {
@@ -272,10 +315,39 @@ describe('Conv1d', () => {
       half: false,
       want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
     },
+    {
+      name: 'BF16 into an f16 layer decodes, reorders, then narrows',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16(f32Values), shape: [2, 3, 2] } }),
+      half: true,
+      want: bitsOf(f32ArrayToF16Bits(new Float32Array(TAP_MAJOR.map((i) => i + 1))).data),
+    },
+    {
+      name: 'derived halfwords into an f16 layer upload reordered',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: true,
+      want: bitsOf(reordered),
+    },
+    {
+      name: 'derived halfwords into an f32 layer decode reordered',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: false,
+      want: bitsOf(f16ToF32(reordered)),
+    },
   ])('$name', async ({ checkpoint, half, want }) => {
     const layer = new Conv1d(3, 2, 2, { bias: false });
     if (half) layer.half();
     expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('rejects derived packed words', async () => {
+    const sd = derivedCheckpoint(new Uint32Array(12), [2, 3, 2]);
+    await expect(uploadedWeight(new Conv1d(3, 2, 2, { bias: false }), sd)).rejects.toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'Conv1d: source holds packed u32 words',
+      }),
+    );
   });
 
   it('reorders F16 halfwords without decoding them to f32', async () => {
