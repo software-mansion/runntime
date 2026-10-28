@@ -66,6 +66,8 @@ export class BatchNormC extends Module {
     const [g, b, m, v] = [at('weight'), at('bias'), at('running_mean'), at('running_var')];
     const c = this.channels;
     const eps = this.eps;
+    // f32 on purpose: channelAffine reads f32, and shift = beta − mean · scale
+    // would lose its low bits in f16.
     let memo: Promise<{ scale: Float32Array; shift: Float32Array }> | undefined;
     const affine = () =>
       (memo ??= (async () => {
@@ -157,6 +159,7 @@ export class RepDW extends Module {
     const center = centerTap(this.kH, this.kW);
     const eps = this.eps;
 
+    // f32: the loader rounds the merged taps to f16 once, for the pinned conv.
     let memo: Promise<{ w: Float32Array; b: Float32Array }> | undefined;
     const merged = () =>
       (memo ??= (async () => {
