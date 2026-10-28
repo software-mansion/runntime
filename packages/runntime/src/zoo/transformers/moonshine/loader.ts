@@ -51,14 +51,9 @@ export function moonshinePreset(config: PretrainedConfig): {
   return { size, cfg };
 }
 
+/** The hub tokenizer decodes the text, so the transcriber's text stays empty. */
 function idsOnlyTokenizer(cfg: MoonshineConfig): MoonshineTokenizer {
-  return {
-    version: 0,
-    bosId: cfg.bos,
-    eosId: cfg.eos,
-    specialIds: [cfg.bos, cfg.eos],
-    vocab: new Array<string>(cfg.vocab).fill(''),
-  };
+  return { eosId: cfg.eos, decode: () => '' };
 }
 
 export function moonshineLoader(

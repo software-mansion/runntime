@@ -24,7 +24,7 @@ import {
 import { checkpointMismatch } from '../errors.ts';
 import { splitIntoChunks, type ChunkOpts } from '../moonshine/chunking.ts';
 import { buildRopeTables } from '../moonshine/rope.ts';
-import { decodeTokens, type MoonshineTokenizer } from '../moonshine/tokenizer.ts';
+import type { MoonshineTokenizer } from '../moonshine/tokenizer.ts';
 import type { SelfKV } from '../moonshine/decoder.ts';
 import type { TranscribeResult, Transcriber, TranscriberPerf } from '../moonshine/transcriber.ts';
 import { presetFromStateDict, type MoonshineStreamingConfig } from './config.ts';
@@ -184,7 +184,7 @@ export async function createTranscriber(
     release(cross);
     return {
       ids,
-      text: decodeTokens(tokenizer, ids),
+      text: tokenizer.decode(ids),
       timings: { encodeMs, decodeMs: performance.now() - t1, steps: ids.length - 1 },
     };
   };

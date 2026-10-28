@@ -29,7 +29,7 @@ import { buildRopeTables } from './rope.ts';
 import { MIN_SAMPLES, stemFrames } from './convStem.ts';
 import { MoonshineModel } from './model.ts';
 import type { SelfKV } from './decoder.ts';
-import { decodeTokens, type MoonshineTokenizer } from './tokenizer.ts';
+import type { MoonshineTokenizer } from './tokenizer.ts';
 
 export interface TranscribeResult {
   ids: number[];
@@ -203,7 +203,7 @@ export async function createTranscriber(
     release(cross);
     return {
       ids,
-      text: decodeTokens(tokenizer, ids),
+      text: tokenizer.decode(ids),
       timings: { encodeMs, decodeMs: performance.now() - t1, steps: ids.length - 1 },
     };
   };

@@ -1,88 +1,36 @@
-/** Decode-only detokenizer for Moonshine's Llama-style BPE vocabulary. STT
- *  never encodes text — the decoder starts from BOS and emits ids, so id →
- *  string is the whole job: special ids skipped, `▁` → space, byte-fallback
- *  tokens (`<0xNN>`) accumulated per run and decoded as UTF-8 (multibyte
- *  characters span several byte tokens), one leading space stripped (the
- *  sentencepiece prefix on the first word). The asset comes from
- *  moonshineTokenizerAsset, read from a Hub tokenizer.json or the compact
- *  file tools/export_moonshine_tokenizer.py writes. */
+/** Moonshine tokenizer, decode-only: the decoder starts from BOS and emits
+ *  ids, so id → text is the whole job. tokenizers.js runs the Hub's Llama-style
+ *  BPE tokenizer.json with its special ids skipped and the text left as is. */
 
+import { Tokenizer } from '@huggingface/tokenizers';
 import { checkpointMismatch } from '../errors.ts';
 
 export interface MoonshineTokenizer {
-  version: number;
-  bosId: number;
-  eosId: number;
-  specialIds: number[];
-  vocab: string[];
+  /** Text of the ids, special ids skipped. `ids` is never empty. */
+  decode(ids: number[]): string;
+  readonly eosId: number;
 }
 
-const BYTE_TOKEN = /^<0x([0-9A-Fa-f]{2})>$/;
+const isBpeTokenizerJson = (json: unknown): json is object =>
+  typeof json === 'object' &&
+  json !== null &&
+  'model' in json &&
+  typeof json.model === 'object' &&
+  json.model !== null &&
+  'type' in json.model &&
+  json.model.type === 'BPE';
 
-export function decodeTokens(tok: MoonshineTokenizer, ids: readonly number[]): string {
-  const specials = new Set(tok.specialIds);
-  const utf8 = new TextDecoder('utf-8');
-  let out = '';
-  let bytes: number[] = [];
-  const flushBytes = () => {
-    if (bytes.length === 0) return;
-    out += utf8.decode(Uint8Array.from(bytes));
-    bytes = [];
-  };
-  for (const id of ids) {
-    if (specials.has(id)) continue;
-    const token = tok.vocab[id];
-    if (token === undefined) throw new Error(`decodeTokens: id ${id} outside vocab`);
-    const byte = BYTE_TOKEN.exec(token);
-    if (byte) {
-      bytes.push(parseInt(byte[1]!, 16));
-      continue;
-    }
-    flushBytes();
-    out += token.replaceAll('▁', ' ');
-  }
-  flushBytes();
-  return out.startsWith(' ') ? out.slice(1) : out;
-}
-
-interface HfTokenizerJson {
-  model: { type: string; vocab: Record<string, number> };
-  added_tokens?: { id: number; content: string; special: boolean }[];
-}
-
-export function moonshineTokenizerAsset(json: unknown): MoonshineTokenizer {
+/** Builds the tokenizer from a Hugging Face tokenizer.json of the BPE kind.
+ *  Throws CHECKPOINT_MISMATCH for any other file. */
+export function createMoonshineTokenizer(json: unknown): MoonshineTokenizer {
   const bad = (why: string) => checkpointMismatch('moonshine tokenizer', why);
-  if (typeof json !== 'object' || json === null) throw bad('not a JSON object');
-
-  if ('vocab' in json && Array.isArray(json.vocab)) {
-    const asset = json as MoonshineTokenizer;
-    if (asset.version !== 1) throw bad(`unsupported asset version ${asset.version}`);
-    return asset;
-  }
-
-  const hf = json as Partial<HfTokenizerJson>;
-  if (hf.model?.type !== 'BPE' || typeof hf.model.vocab !== 'object') {
-    throw bad('expected a BPE tokenizer.json or a version 1 asset');
-  }
-  const added = hf.added_tokens ?? [];
-  const entries = [
-    ...Object.entries(hf.model.vocab),
-    ...added.map((t) => [t.content, t.id] as const),
-  ];
-  let size = 0;
-  for (const [, id] of entries) size = Math.max(size, id + 1);
-  const vocab = new Array<string>(size).fill('');
-  for (const [token, id] of entries) vocab[id] = token;
-  const idOf = (content: string): number => {
-    const id = added.find((t) => t.content === content)?.id ?? hf.model!.vocab[content];
-    if (id === undefined) throw bad(`vocab has no ${content}`);
-    return id;
-  };
+  if (!isBpeTokenizerJson(json)) throw bad('expected a BPE tokenizer.json');
+  const tokenizer = new Tokenizer(json, {});
+  const eosId = tokenizer.token_to_id('</s>');
+  if (eosId === undefined) throw bad('vocab has no </s>');
   return {
-    version: 1,
-    bosId: idOf('<s>'),
-    eosId: idOf('</s>'),
-    specialIds: added.filter((t) => t.special).map((t) => t.id),
-    vocab,
+    eosId,
+    decode: (ids) =>
+      tokenizer.decode(ids, { skip_special_tokens: true, clean_up_tokenization_spaces: false }),
   };
 }

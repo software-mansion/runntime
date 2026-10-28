@@ -18,7 +18,7 @@ import {
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import { models } from '../../models.ts';
 import { analyzeSegment } from '../../moonshine/segmenter.ts';
-import { moonshineTokenizerAsset } from '../../moonshine/tokenizer.ts';
+import { createMoonshineTokenizer } from '../../moonshine/tokenizer.ts';
 import { createTranscriber } from '../../moonshine/transcriber.ts';
 import { createTranscriber as createStreamingTranscriber } from '../../moonshine-streaming/transcriber.ts';
 import { SPEECH_SAMPLE_RATE } from './audioInput.ts';
@@ -41,7 +41,7 @@ export interface SpeechToTextModel {
   readonly arch?: SpeechToTextArch;
   /** The safetensors checkpoint. */
   readonly modelPath?: ModelPath;
-  /** The tokenizer JSON: a Hugging Face tokenizer.json or our compact asset. */
+  /** The Hugging Face tokenizer.json. */
   readonly tokenizerPath?: string;
   /** Precision on the GPU. `f16` runs the whole model in half precision,
    *  weights and activations, for half the memory traffic; the text stays
@@ -116,7 +116,7 @@ export async function createSpeechToText(
       ...opts,
       cacheId: opts.cacheId ?? cacheId(modelPath),
     });
-    const tokenizer = moonshineTokenizerAsset(
+    const tokenizer = createMoonshineTokenizer(
       await fetchJson(tokenizerPath, { ...opts, cacheId: cacheId(tokenizerPath) }),
     );
 
