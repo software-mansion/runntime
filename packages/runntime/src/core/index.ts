@@ -123,7 +123,7 @@ export {
 } from './error.ts';
 export { createResourceScope, type Disposable, type ResourceScope } from './lifetime.ts';
 export { BufferPool } from './gpu/bufferPool.ts';
-export { packQuantColSlice } from './weights/quantPack.ts';
+export { packQuantW } from './weights/quantPack.ts';
 export type { WeightCache } from './weights/cache.ts';
 export {
   bufferSource,
