@@ -222,7 +222,8 @@ names and lays them out like this:
 
 - A Linear weight `W` of shape `[out, in]` is stored as `W`: `I8` of shape
   `[out, in]` for int8, or `U8` of shape `[out, in / 2]` for int4, two
-  signed 4-bit values per byte with the even index in the low nibble.
+  4-bit two's-complement values (-8 to 7) per byte with the even index in
+  the low nibble.
 - Its scales are `W_scale`: `F16` of shape `[out, in / groupSize]`, one per
   `groupSize` values along a row. A weight is its int times its group's
   scale. The usual choice is the group's largest absolute value over 127
