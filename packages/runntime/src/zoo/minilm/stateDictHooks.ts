@@ -6,14 +6,15 @@
  *  across the q and k parts, so the scale-free kernel still computes
  *  q·kᵀ/√headDim.
  *
- *  Weights stay in torch layout for the core Linear hook to transpose. An F16
- *  checkpoint gives f16 derived tensors. Derived byteLengths carry the source
- *  file bytes, so load progress still sums to the checkpoint size. */
+ *  Weights stay in torch layout for the core Linear hook to transpose. The
+ *  fused q/k/v and the position sum are f32 even from an F16 checkpoint, so
+ *  an f32 model loads exact values and an f16 model rounds once in the
+ *  loader. Derived byteLengths carry the source file bytes, so load progress
+ *  still sums to the checkpoint size. */
 
 import {
   concatRows,
   derivedTensor,
-  f32ArrayToF16Bits,
   scaleWeight,
   type LazyStateDict,
   type LazyTensor,
@@ -50,7 +51,6 @@ export function transformMinilmStateDict(
   // position' = position + tokenType[0] (every real input is token type 0).
   const position = take(sd, q('embeddings.position_embeddings.weight'));
   const tokenType = take(sd, q('embeddings.token_type_embeddings.weight'));
-  const half = position.dtype === 'F16' && tokenType.dtype === 'F16';
   sd.tensors.set(
     q('embeddings.position.weight'),
     derivedTensor(
@@ -60,7 +60,7 @@ export function transformMinilmStateDict(
         const type = await tokenType.f32();
         const out = new Float32Array(pos.length);
         for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
-        return half ? f32ArrayToF16Bits(out).data : out;
+        return out;
       },
       position.byteLength + tokenType.byteLength,
     ),

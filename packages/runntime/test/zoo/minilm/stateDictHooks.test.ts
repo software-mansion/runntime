@@ -88,9 +88,9 @@ async function contents(t: LazyTensor): Promise<{ type: 'f16' | 'f32'; values: n
 
 describe('transformMinilmStateDict', () => {
   it.for([
-    { dtype: 'F32', type: 'f32', elemBytes: 4 },
-    { dtype: 'F16', type: 'f16', elemBytes: 2 },
-  ] as const)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
+    { dtype: 'F32', elemBytes: 4 },
+    { dtype: 'F16', elemBytes: 2 },
+  ] as const)('maps a $dtype checkpoint', async ({ dtype, elemBytes }) => {
     const sd = await checkpoint(dtype);
     const total = sd.totalBytes();
     transformMinilmStateDict(sd, '', CFG);
@@ -110,24 +110,25 @@ describe('transformMinilmStateDict', () => {
       ].sort(),
     );
 
-    // q|k|v rows in that order, q and k times 0.5, v as is.
+    // q|k|v rows in that order, q and k times 0.5, v as is. Derived
+    // tensors are f32 on every checkpoint.
     const qkvWeight = get('layers.0.qkv.weight');
     expect(qkvWeight.shape).toEqual([6, 2]);
     expect(qkvWeight.byteLength).toBe(12 * elemBytes);
     expect(await contents(qkvWeight)).toEqual({
-      type,
+      type: 'f32',
       values: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 9, 10, 11, 12],
     });
     const qkvBias = get('layers.0.qkv.bias');
     expect(qkvBias.shape).toEqual([6]);
     expect(qkvBias.byteLength).toBe(6 * elemBytes);
-    expect(await contents(qkvBias)).toEqual({ type, values: [0.5, 1, 1.5, 2, 5, 6] });
+    expect(await contents(qkvBias)).toEqual({ type: 'f32', values: [0.5, 1, 1.5, 2, 5, 6] });
 
     // position + tokenType row 0: [1 + 10, 2 + 20, 3 + 10, 4 + 20].
     const position = get('embeddings.position.weight');
     expect(position.shape).toEqual([2, 2]);
     expect(position.byteLength).toBe(8 * elemBytes);
-    expect(await contents(position)).toEqual({ type, values: [11, 22, 13, 24] });
+    expect(await contents(position)).toEqual({ type: 'f32', values: [11, 22, 13, 24] });
 
     // The dropped pooler (6 elems) and position_ids (2) are the only bytes lost.
     expect(sd.totalBytes()).toBe(total - 8 * elemBytes);
