@@ -106,7 +106,8 @@ function fusedQkvNorm(
     ...Array<LazyTensor>(kvHeads).fill(kn),
     ones(kvHeads * d),
   ]);
-  // Each norm is downloaded once, however many heads it is tiled over.
+  // concatRows reads a part listed several times once, so each norm is
+  // downloaded once however many heads it is tiled over.
   return { ...tiled, byteLength: nq.byteLength + nk.byteLength };
 }
 
