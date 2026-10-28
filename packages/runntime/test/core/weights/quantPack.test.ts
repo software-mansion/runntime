@@ -8,8 +8,10 @@ import { packQuantW } from '../../../src/core/weights/quantPack.ts';
 //
 // Expected words below are worked out by hand from that description.
 
-/** Row-major [k, n] values numbered 0, 1, 2, ... so each value names its spot. */
-const numbered = (k: number, n: number) => Int8Array.from({ length: k * n }, (_, i) => i);
+/** Output-first [n, k] ints where row r, column c of the logical [k, n] weight
+ *  holds r·n + c, so each value names its spot. */
+const numbered = (k: number, n: number) =>
+  Int8Array.from({ length: k * n }, (_, i) => (i % k) * n + Math.floor(i / k));
 
 describe('packQuantW', () => {
   it('packs one int8 tile column by column', () => {
@@ -42,8 +44,8 @@ describe('packQuantW', () => {
       { length: 16 },
       (_, i) => (words[(i * bits) >> 5]! >>> ((i * bits) & 31)) & mask,
     );
-    // column-major in, so value (row r, column c) comes out at c*4 + r
-    const want = Array.from({ length: 16 }, (_, i) => ints[(i % 4) * 4 + (i >> 2)]! & mask);
+    // a tile is column-major like the output-first input, so values keep their order
+    const want = Array.from(ints, (v) => v & mask);
     expect(unpacked).toEqual(want);
   });
 
@@ -51,8 +53,7 @@ describe('packQuantW', () => {
     // K=8, N=8: 2 column units × 2 row chunks = 4 tiles of 4 words
     const k = 8;
     const n = 8;
-    const ints = Int8Array.from({ length: k * n }, (_, i) => i);
-    const words = packQuantW(ints, k, n, 8);
+    const words = packQuantW(numbered(k, n), k, n, 8);
     expect(words).toHaveLength(16);
     // first byte of each tile = row 0 of the chunk's first column
     const firstByte = (tile: number) => words[tile * 4]! & 0xff;
@@ -83,7 +84,7 @@ describe('packQuantW', () => {
           for (let r = 0; r < 4; r++) {
             const off = ((c * 4 * bits) % 32) + r * bits;
             const raw = (word >>> off) & ((1 << bits) - 1);
-            read[(k4 * 4 + r) * n + unit * 4 + c] = raw >= half ? raw - 2 * half : raw;
+            read[(unit * 4 + c) * k + k4 * 4 + r] = raw >= half ? raw - 2 * half : raw;
           }
         }
       }
