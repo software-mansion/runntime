@@ -9,6 +9,7 @@ import {
   memoryStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../gpu.ts';
+import { ACTIVATION_REF } from '../kernels/matmul/checkMatmul.ts';
 import { quantFile } from '../weights/checkpoint.ts';
 
 const { root, ex } = await gpu();
@@ -19,11 +20,13 @@ interface Case {
   outF: number;
   groupSize: number;
   bias: boolean;
+  addend?: boolean;
   activation?: SlotAct;
 }
 
-/** A Linear loaded from a quantized file and the same Linear loaded with the
- *  dequantized float weights (int · f16 scale) give the same output. */
+/** A Linear loaded from a quantized file matches a CPU loop of
+ *  act(x·W + bias) + addend in f64, with W dequantized from the same ints as
+ *  int · f16 scale. */
 async function checkQuantizedLinear(c: Case, bits: 4 | 8, dtype: 'f32' | 'f16') {
   const { m, inF, outF, groupSize } = c;
   const half = 2 ** (bits - 1);
@@ -34,34 +37,42 @@ async function checkQuantizedLinear(c: Case, bits: 4 | 8, dtype: 'f32' | 'f16') 
   const scales = roundF16(
     randomF32((outF * inF) / groupSize, 2).map((v) => (Math.abs(v) + 0.1) / half),
   );
-  const dequant = Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);
+  // Rounded to f16 for both dtypes, so the f16 upload stores them exactly.
   const bias = roundF16(randomF32(outF, 3));
+  const xs = roundF16(randomF32(m * inF, 4));
+  const addend = roundF16(randomF32(m * outF, 5));
 
-  const layer = (): Linear => {
-    const l = new Linear(inF, outF, { bias: c.bias, activation: c.activation });
-    if (dtype === 'f16') l.half(root);
-    onTestFinished(() => l.dispose());
-    return l;
-  };
-  const quantized = layer();
+  const layer = new Linear(inF, outF, { bias: c.bias, activation: c.activation });
+  if (dtype === 'f16') layer.half(root);
+  onTestFinished(() => layer.dispose());
   const file = quantFile(bits, groupSize, {
     weight: { ints, scales: [...scales], shape: [outF, inF] },
   });
   const sd = await fromSafetensors(bufferSource(file), { chunkBytes: 0 });
   if (c.bias) sd.tensors.set('bias', memoryStateDict({ bias }).tensors.get('bias')!);
-  await quantized.loadStateDict(sd, { root });
-  const float = layer();
-  await float.loadStateDict(
-    { weight: { data: dequant, shape: [outF, inF] }, ...(c.bias ? { bias } : {}) },
-    { root },
-  );
+  await layer.loadStateDict(sd, { root });
 
-  const x = upload(root, randomF32(m * inF, 4), { ...matrix(m, inF), dtype });
-  const got = await toArray(quantized.forward(x), ex);
-  const want = await toArray(float.forward(x), ex);
-  // f16 stores the outputs, and the two kernels sum in different orders.
-  const tol =
-    dtype === 'f16' ? { atol: 2e-3 * Math.sqrt(inF), rtol: 5e-3 } : { atol: 1e-5, rtol: 1e-4 };
+  const x = upload(root, xs, { ...matrix(m, inF), dtype });
+  const call = c.addend ? { addend: upload(root, addend, { ...matrix(m, outF), dtype }) } : {};
+  const got = await toArray(layer.forward(x, call), ex);
+
+  // The f16 kernel stages the dequantized weight in f16 workgroup memory.
+  const dequant = Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);
+  const weight = dtype === 'f16' ? roundF16(dequant) : dequant;
+  const want = new Float64Array(m * outF);
+  for (let i = 0; i < m; i++) {
+    for (let o = 0; o < outF; o++) {
+      let sum = 0;
+      for (let p = 0; p < inF; p++) sum += xs[i * inF + p]! * weight[o * inF + p]!;
+      if (c.bias) sum += bias[o]!;
+      if (c.activation) sum = ACTIVATION_REF[c.activation](sum);
+      if (c.addend) sum += addend[i * outF + o]!;
+      want[i * outF + o] = sum;
+    }
+  }
+  // The kernel sums in f32, so its error grows with inF; f16 also rounds the
+  // output to half precision, 2^-11 relative.
+  const tol = dtype === 'f16' ? { atol: 1e-5 * inF, rtol: 1e-3 } : { atol: 1e-6 * inF, rtol: 1e-5 };
   expectClose(got, want, tol);
 }
 
@@ -74,7 +85,7 @@ describe('Linear with a quantized weight', () => {
     { name: 'plain, 7 rows', m: 7, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32'] },
     // tiled: m >= 8
     { name: 'tiled, 8 rows', m: 8, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32'] },
-    // tiled: a bias or an activation is an epilogue, whatever m
+    // tiled: a bias, an activation or an addend is an epilogue, whatever m
     {
       name: 'tiled by its bias, 7 rows',
       m: 7,
@@ -91,6 +102,27 @@ describe('Linear with a quantized weight', () => {
       outF: 48,
       groupSize: 16,
       bias: false,
+      activation: 'gelu',
+      dtypes: ['f32', 'f16'],
+    },
+    {
+      name: 'tiled by its addend, 2 rows',
+      m: 2,
+      inF: 64,
+      outF: 48,
+      groupSize: 16,
+      bias: false,
+      addend: true,
+      dtypes: ['f32', 'f16'],
+    },
+    {
+      name: 'bias, gelu and addend, 37 rows',
+      m: 37,
+      inF: 256,
+      outF: 136,
+      groupSize: 32,
+      bias: true,
+      addend: true,
       activation: 'gelu',
       dtypes: ['f32', 'f16'],
     },
