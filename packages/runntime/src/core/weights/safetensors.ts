@@ -483,6 +483,48 @@ function bf16Tensor(bits: Uint16Array, shape: number[]): FileTensor {
   };
 }
 
+/** Metadata key of a quantized file: a JSON string
+ *  `{"version":1,"bits":8|4,"groupSize":N,"scheme":"symmetric"}`. */
+const QUANT_METADATA_KEY = 'runntime.quant';
+
+/** How a quantized file stores its int weights: `bits` per value, one f16
+ *  scale per `groupSize` values along each row. */
+interface QuantConfig {
+  bits: 4 | 8;
+  groupSize: number;
+}
+
+/** The file's quantization setting, or undefined for a float file. Throws
+ *  CHECKPOINT_MISMATCH on a setting this reader does not know. */
+function quantConfigOf(metadata: Record<string, string>): QuantConfig | undefined {
+  const raw: unknown = metadata[QUANT_METADATA_KEY];
+  if (raw === undefined) return undefined;
+  const bad = (why: string): never => {
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      `safetensors: '${QUANT_METADATA_KEY}' metadata ${JSON.stringify(raw)} ${why}`,
+    );
+  };
+  if (typeof raw !== 'string') return bad('is not a string');
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return bad('is not valid JSON');
+  }
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+    return bad('is not a JSON object');
+  }
+  const { version, bits, groupSize, scheme } = json as Record<string, unknown>;
+  if (version !== 1) return bad('has a version other than 1');
+  if (bits !== 4 && bits !== 8) return bad('needs bits 4 or 8');
+  if (typeof groupSize !== 'number' || !Number.isSafeInteger(groupSize) || groupSize <= 0) {
+    return bad('needs a positive integer groupSize');
+  }
+  if (scheme !== 'symmetric') return bad("needs scheme 'symmetric'");
+  return { bits, groupSize };
+}
+
 export async function fromSafetensors(
   src: string | RangeSource,
   opts: {
@@ -532,8 +574,17 @@ export async function fromSafetensors(
   const data = cached(
     chunkBytes > 0 && payloadEnd > 0 ? chunkedSource(raw, payloadEnd, chunkBytes) : raw,
   );
+  const quant = quantConfigOf(index.metadata);
   const tensors = new Map<string, LazyTensor>();
-  for (const [name, info] of index.tensors) tensors.set(name, fileTensor(name, info, data));
+  for (const [name, info] of index.tensors) {
+    if (!quant && (info.dtype === 'I8' || info.dtype === 'U8')) {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `safetensors: tensor ${name} is ${info.dtype}, but the file has no '${QUANT_METADATA_KEY}' metadata`,
+      );
+    }
+    tensors.set(name, fileTensor(name, info, data));
+  }
   return {
     metadata: index.metadata,
     tensors,
