@@ -20,7 +20,12 @@ import {
 } from '../graph/ops.ts';
 import { matrix, type Value } from '../graph/value.ts';
 import {
+  MATMUL_QUANT_TILED_BK,
+  matmulQuantTiledEligible,
+} from '../kernels/matmul/matmulQuantTiled.ts';
+import {
   convToTapMajor,
+  f16ToF32,
   packConv1x1Hwc4F16,
   packConvHwc4F16,
   packConvWinogradF16,
@@ -28,7 +33,8 @@ import {
   permuteConvTransposeF16,
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
-import { derivedTensor, type LazyStateDict } from '../weights/safetensors.ts';
+import { packQuantW } from '../weights/quantPack.ts';
+import { derivedTensor, type LazyStateDict, type QuantTensor } from '../weights/safetensors.ts';
 import { readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
@@ -100,12 +106,21 @@ export class Embedding extends Module<[readonly number[] | Value], Value> {
 /** y = x @ weight + bias. weight is stored [in, out]; torch checkpoints
  *  transpose once at load.
  *
+ *  A quantized checkpoint weight loads as quantW words with its f32 scales in
+ *  `weightScale` [in / groupSize, out], and forward() runs the quantized
+ *  matmul. Which one the weight is shows only at load, so transformStateDict
+ *  retypes the slot then.
+ *
  *  `addend` and `activation` fold a residual add and a following tanh or GELU
  *  into the matmul epilogue, as act(x·W + bias) + addend. */
 export class Linear extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
   readonly activation?: SlotAct;
+  /** Set when a quantized weight loads. */
+  weightScale?: Parameter;
+  /** How the loaded weight is quantized, or undefined for a float weight. */
+  private quantization?: { bits: 4 | 8; groupSize: number };
   constructor(
     readonly inFeatures: number,
     readonly outFeatures: number,
@@ -135,11 +150,76 @@ export class Linear extends Module {
           `expected torch layout [${this.outFeatures}, ${this.inFeatures}]`,
       );
     }
+    if (tensor.kind === 'quant') {
+      this.loadQuantized(sd, prefix, name, tensor);
+      return;
+    }
     sd.tensors.set(name, transposeWeight(tensor));
+  }
+  /** Replaces `name` with quantW words [in, out] and adds its scales
+   *  [in / groupSize, out] right after it, so they bind in file order. The
+   *  words carry the whole byteLength of the ints and scales. */
+  private loadQuantized(
+    sd: LazyStateDict,
+    prefix: string,
+    name: string,
+    tensor: QuantTensor,
+  ): void {
+    const { bits, groupSize } = tensor;
+    const k = this.inFeatures;
+    const n = this.outFeatures;
+    // The quantized matmul reads whole tiles of 4 columns and 8 rows and
+    // packs int4 columns 8 to a word.
+    if (!matmulQuantTiledEligible(k, n, groupSize) || n % (32 / bits) !== 0) {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `Linear: ${name} is int${bits} in groups of ${groupSize}, which needs in features ` +
+          `a multiple of ${MATMUL_QUANT_TILED_BK} and of the group size, out features a ` +
+          `multiple of ${32 / bits} and a group size a multiple of 4, got [${n}, ${k}]`,
+      );
+    }
+    this.quantization = { bits, groupSize };
+    this.weight.retype('quantW', (k * n * bits) / 32);
+    this.weightScale = new Parameter(
+      { elems: (k / groupSize) * n, dtype: 'f32', dims: [k / groupSize, n] },
+      undefined,
+      true,
+    );
+    const words = derivedTensor(
+      [k, n],
+      async () =>
+        packQuantW(transposed(await tensor.ints(), new Int8Array(k * n), n, k), k, n, bits),
+      tensor.byteLength,
+    );
+    const scales = derivedTensor([k / groupSize, n], async () => {
+      const data = await tensor.scales();
+      const f32 = data instanceof Float32Array ? data : f16ToF32(data);
+      return transposed(f32, new Float32Array(f32.length), n, k / groupSize);
+    });
+    const scaleName = prefix ? `${prefix}.weightScale` : 'weightScale';
+    const entries = [...sd.tensors];
+    sd.tensors.clear();
+    for (const [key, t] of entries) {
+      sd.tensors.set(key, key === name ? words : t);
+      if (key === name) sd.tensors.set(scaleName, scales);
+    }
   }
   forward(x: Value, call: { addend?: Value } = {}): Value {
     return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
   }
+}
+
+/** Fills `out` with `data` row-major [rows, cols] as [cols, rows]. */
+function transposed<T extends Int8Array | Float32Array>(
+  data: T,
+  out: T,
+  rows: number,
+  cols: number,
+): T {
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) out[c * rows + r] = data[r * cols + c]!;
+  }
+  return out;
 }
 
 /** Strided, dilated 1D convolution over time-major [T, inChannels]. No batch
