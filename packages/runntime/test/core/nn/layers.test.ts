@@ -25,6 +25,7 @@ import {
   type LazyStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { hwc4Input, input, meta } from '../graph/values.ts';
+import { safetensorsFile } from '../weights/checkpoint.ts';
 
 /** Binds every parameter to a stand-in of its declared shape, so forward()
  *  can build its graph without real weights. */
@@ -37,20 +38,12 @@ function fakeLoad<M extends AnyModule>(m: M): M {
 const shapes = (m: AnyModule) =>
   Object.fromEntries([...m.namedParameters()].map(([n, p]) => [n, p.shape]));
 
-/** A state dict with one F16 tensor named `weight`, read from a real
- *  safetensors file built from the format spec: an 8-byte little-endian
- *  header length, the JSON header, then the payload. memoryStateDict reads a
- *  Uint16Array as BF16, so F16 needs the file. */
-function f16Checkpoint(bits: Uint16Array, shape: number[]): Promise<LazyStateDict> {
-  const header = new TextEncoder().encode(
-    JSON.stringify({ weight: { dtype: 'F16', shape, data_offsets: [0, bits.byteLength] } }),
-  );
-  const file = new Uint8Array(8 + header.length + bits.byteLength);
-  new DataView(file.buffer).setBigUint64(0, BigInt(header.length), true);
-  file.set(header, 8);
-  file.set(new Uint8Array(bits.buffer, bits.byteOffset, bits.byteLength), 8 + header.length);
-  return fromSafetensors(bufferSource(file), { chunkBytes: 0 });
-}
+/** A state dict with one F16 tensor named `weight`, read from a real file:
+ *  memoryStateDict reads a Uint16Array as BF16. */
+const f16Checkpoint = (bits: Uint16Array, shape: number[]): Promise<LazyStateDict> =>
+  fromSafetensors(bufferSource(safetensorsFile({ weight: { data: bits, shape } })), {
+    chunkBytes: 0,
+  });
 
 /** A state dict whose `weight` is a derived tensor holding `data`, as a zoo
  *  hook hands one over: a Uint16Array means f16 halfwords, a Uint32Array

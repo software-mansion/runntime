@@ -10,24 +10,44 @@ import {
 
 export type Entry = { values: number[]; shape: number[] };
 
-/** An F16 safetensors file, built from the format spec: an 8-byte
- *  little-endian header length, the JSON header, then the payload. */
-export function f16File(entries: Record<string, Entry>): Uint8Array {
+/** A safetensors file built from the format spec: an 8-byte little-endian
+ *  header length, the JSON header, then the payload. An entry's dtype follows
+ *  its data: F32 for a Float32Array, F16 for a Uint16Array of halfwords. */
+export function safetensorsFile(
+  entries: Record<string, { data: Float32Array | Uint16Array; shape: number[] }>,
+): Uint8Array {
   const header: Record<string, unknown> = {};
-  const halves: number[] = [];
-  for (const [name, { values, shape }] of Object.entries(entries)) {
-    const begin = halves.length * 2;
-    halves.push(...values.map(f32ToF16Bits));
-    header[name] = { dtype: 'F16', shape, data_offsets: [begin, halves.length * 2] };
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+  for (const [name, { data, shape }] of Object.entries(entries)) {
+    const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const dtype = data instanceof Uint16Array ? 'F16' : 'F32';
+    header[name] = { dtype, shape, data_offsets: [offset, offset + bytes.length] };
+    chunks.push(bytes);
+    offset += bytes.length;
   }
   const json = new TextEncoder().encode(JSON.stringify(header));
-  const payload = new Uint8Array(new Uint16Array(halves).buffer);
-  const out = new Uint8Array(8 + json.length + payload.length);
+  const out = new Uint8Array(8 + json.length + offset);
   new DataView(out.buffer).setBigUint64(0, BigInt(json.length), true);
   out.set(json, 8);
-  out.set(payload, 8 + json.length);
+  let at = 8 + json.length;
+  for (const bytes of chunks) {
+    out.set(bytes, at);
+    at += bytes.length;
+  }
   return out;
 }
+
+/** An F16 safetensors file of `entries`, each value rounded to f16. */
+export const f16File = (entries: Record<string, Entry>): Uint8Array =>
+  safetensorsFile(
+    Object.fromEntries(
+      Object.entries(entries).map(([name, { values, shape }]) => [
+        name,
+        { data: Uint16Array.from(values, f32ToF16Bits), shape },
+      ]),
+    ),
+  );
 
 /** `entries` as an F16 safetensors file, or as f32 in memory. memoryStateDict
  *  reads a Uint16Array as BF16, so F16 has to go through a real file. */
