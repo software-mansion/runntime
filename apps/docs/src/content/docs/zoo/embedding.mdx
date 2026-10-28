@@ -234,8 +234,9 @@ names and lays them out like this:
   `"symmetric"`, or the load throws.
 - Embeddings, LayerNorms and biases stay float.
 
-`groupSize` must be a multiple of 4 that divides 384 and 1536: 32, 64 and
-128 all fit.
+`groupSize` is any multiple of 4 that divides 384, the smallest Linear
+input size, for example 32, 64 or 128. Another value throws when the model
+loads.
 
 ## Loading options
 
