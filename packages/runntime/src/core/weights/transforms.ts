@@ -199,5 +199,7 @@ export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTens
       `cannot reshape [${t.shape.join(', ')}] to [${shape.join(', ')}]`,
     );
   }
+  // Every LazyTensor is a plain object whose readers close over their own
+  // source, so a shallow copy shares the data and reads it the same way.
   return { ...t, shape: [...shape] };
 }
