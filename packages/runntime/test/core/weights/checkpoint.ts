@@ -6,22 +6,35 @@ import {
   memoryStateDict,
   type LazyStateDict,
   type LazyTensor,
+  type QuantTensor,
 } from '../../../src/core/weights/safetensors.ts';
 
 export type Entry = { values: number[]; shape: number[] };
 
+/** Safetensors dtype by the array type that holds an entry's data. */
+const dtypeOf = (data: Float32Array | Uint16Array | Int8Array | Uint8Array) => {
+  if (data instanceof Float32Array) return 'F32';
+  if (data instanceof Uint16Array) return 'F16';
+  return data instanceof Int8Array ? 'I8' : 'U8';
+};
+
 /** A safetensors file built from the format spec: an 8-byte little-endian
  *  header length, the JSON header, then the payload. An entry's dtype follows
- *  its data: F32 for a Float32Array, F16 for a Uint16Array of halfwords. */
+ *  its data: F32 for a Float32Array, F16 for a Uint16Array of halfwords, I8
+ *  for an Int8Array, U8 for a Uint8Array. `metadata` goes in `__metadata__`. */
 export function safetensorsFile(
-  entries: Record<string, { data: Float32Array | Uint16Array; shape: number[] }>,
+  entries: Record<
+    string,
+    { data: Float32Array | Uint16Array | Int8Array | Uint8Array; shape: number[] }
+  >,
+  metadata?: Record<string, string>,
 ): Uint8Array {
-  const header: Record<string, unknown> = {};
+  const header: Record<string, unknown> = metadata ? { __metadata__: metadata } : {};
   const chunks: Uint8Array[] = [];
   let offset = 0;
   for (const [name, { data, shape }] of Object.entries(entries)) {
     const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    const dtype = data instanceof Uint16Array ? 'F16' : 'F32';
+    const dtype = dtypeOf(data);
     header[name] = { dtype, shape, data_offsets: [offset, offset + bytes.length] };
     chunks.push(bytes);
     offset += bytes.length;
@@ -73,4 +86,64 @@ export async function contents(t: LazyTensor): Promise<{ type: 'f16' | 'f32'; va
   if (data instanceof Uint16Array) return { type: 'f16', values: [...f16ToF32(data)] };
   if (data instanceof Float32Array) return { type: 'f32', values: [...data] };
   throw new Error('expected floats');
+}
+
+/** A quantized linear weight: `ints` row-major `[out, in]`, `scales` row-major
+ *  `[out, in / groupSize]`. */
+export type QuantEntry = { ints: number[]; scales: number[]; shape: [number, number] };
+
+/** A quantized safetensors file in the format spec: each entry's ints as
+ *  `name` (I8, or U8 with two int4 per byte, low nibble first), its scales
+ *  rounded to f16 as `name_scale`, and the setting in `runntime.quant`. */
+export function quantFile(
+  bits: 4 | 8,
+  groupSize: number,
+  entries: Record<string, QuantEntry>,
+): Uint8Array {
+  const tensors: Parameters<typeof safetensorsFile>[0] = {};
+  for (const [name, { ints, scales, shape }] of Object.entries(entries)) {
+    const [out, cols] = shape;
+    tensors[name] =
+      bits === 8
+        ? { data: Int8Array.from(ints), shape }
+        : {
+            data: Uint8Array.from({ length: ints.length / 2 }, (_, i) => {
+              return (ints[2 * i]! & 0x0f) | ((ints[2 * i + 1]! & 0x0f) << 4);
+            }),
+            shape: [out, cols / 2],
+          };
+    tensors[`${name}_scale`] = {
+      data: Uint16Array.from(scales, f32ToF16Bits),
+      shape: [out, cols / groupSize],
+    };
+  }
+  const setting = { version: 1, bits, groupSize, scheme: 'symmetric' };
+  return safetensorsFile(tensors, { 'runntime.quant': JSON.stringify(setting) });
+}
+
+/** The quantized tensor `name` of `entries`, read back from a quantFile. */
+export async function quantSource(
+  bits: 4 | 8,
+  groupSize: number,
+  name: string,
+  entry: QuantEntry,
+): Promise<QuantTensor> {
+  const file = quantFile(bits, groupSize, { [name]: entry });
+  const t = (await fromSafetensors(bufferSource(file), { chunkBytes: 0 })).tensors.get(name)!;
+  if (t.kind !== 'quant') throw new Error('expected a quantized tensor');
+  return t;
+}
+
+/** What a QuantTensor holds: its ints, and its scales decoded to numbers with
+ *  whether they are f16 halfwords or f32. */
+export async function quantContents(
+  t: LazyTensor,
+): Promise<{ ints: number[]; scaleType: 'f16' | 'f32'; scales: number[] }> {
+  if (t.kind !== 'quant') throw new Error('expected a quantized tensor');
+  const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
+  return {
+    ints: [...ints],
+    scaleType: scales instanceof Uint16Array ? 'f16' : 'f32',
+    scales: [...(scales instanceof Uint16Array ? f16ToF32(scales) : scales)],
+  };
 }
