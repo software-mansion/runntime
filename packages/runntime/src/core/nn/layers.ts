@@ -11,6 +11,7 @@ import {
   gatherRows,
   gatherRowsFrom,
   layerNorm,
+  matmul,
   reshape,
   rmsNorm,
   sdpa,
@@ -205,7 +206,16 @@ export class Linear extends Module {
     }
   }
   forward(x: Value, call: { addend?: Value } = {}): Value {
-    return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
+    if (!this.weightScale || !this.quantization) {
+      return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
+    }
+    return matmul(x, this.weight.value, {
+      scales: this.weightScale.value,
+      ...this.quantization,
+      bias: this.bias?.value,
+      addend: call.addend,
+      activation: this.activation,
+    });
   }
 }
 

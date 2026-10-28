@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ACT_CODE } from '../../../src/core/graph/ops/shared.ts';
 import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
 import {
   BatchNorm2d,
@@ -379,6 +380,33 @@ describe('Linear with a quantized weight', () => {
     );
     expect(layer.weight.shape.dtype).toBe('f32');
   });
+
+  it.each([
+    { name: 'f32', half: false },
+    { name: 'f16', half: true },
+  ])(
+    'runs the $name forward as a quantized matmul with bias and activation in the epilogue',
+    async ({ half }) => {
+      const layer = new Linear(8, 4, { activation: 'gelu' });
+      if (half) layer.half();
+      layer.transformStateDict(await quantCheckpoint(8, 4, { weight: entry }), '');
+      fakeLoad(layer);
+      const x = input([5, 8], half ? 'f16' : 'f32');
+      const addend = input([5, 4], half ? 'f16' : 'f32');
+      const y = layer.forward(x, { addend });
+      expect(y.shape).toEqual(meta([5, 4], half ? 'f16' : 'f32'));
+      expect(y.pending?.op).toBe('matmulQuantW');
+      expect(y.pending?.inputs).toEqual([
+        x,
+        layer.weight.value,
+        layer.weightScale!.value,
+        layer.bias!.value,
+        addend,
+      ]);
+      // baseRow, scaleBase, bits, groupSize, bias, addend, activation
+      expect(y.pending?.attrs).toEqual([0, 0, 8, 4, 1, 1, ACT_CODE.gelu]);
+    },
+  );
 
   it('refuses a weight in [in, out] layout', async () => {
     const sd = await quantCheckpoint(8, 4, { weight: { ints: numbered, scales, shape: [8, 4] } });
