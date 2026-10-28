@@ -165,8 +165,8 @@ describe('splitCols', () => {
 });
 
 describe('scaleWeight', () => {
-  // 3 · 0.1 = 0.3. f16 has 10 mantissa bits: 0.3 = 0.25 · (1 + 204.8/1024),
-  // which rounds to 205/1024, so f16 holds 0.25 · 1229/1024 = 0.300048828125.
+  // 3 · 0.1 = 0.3, which f16 would round to 0.300048828125. The product is
+  // f32 for every source, so an f32 model loads what it did before the helper.
   it.for([
     { dtype: 'F32', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
     { dtype: 'F16', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
@@ -174,7 +174,7 @@ describe('scaleWeight', () => {
     { dtype: 'F32', scale: [2, -1], values: [1, 2, 3, 4], want: [2, 4, -3, -4] },
     { dtype: 'F16', scale: [2, -1], values: [1, 2, 3, 4], want: [2, 4, -3, -4] },
     { dtype: 'F32', scale: 0.1, values: [3, 0, 0, 0], want: [Math.fround(0.3), 0, 0, 0] },
-    { dtype: 'F16', scale: 0.1, values: [3, 0, 0, 0], want: [0.300048828125, 0, 0, 0] },
+    { dtype: 'F16', scale: 0.1, values: [3, 0, 0, 0], want: [Math.fround(0.3), 0, 0, 0] },
   ] satisfies { dtype: Dtype; scale: number | number[]; values: number[]; want: number[] }[])(
     'scales $dtype by $scale',
     async ({ dtype, scale, values, want }) => {
@@ -182,7 +182,7 @@ describe('scaleWeight', () => {
       const out = scaleWeight(t, scale);
       expect(out.shape).toEqual([2, 2]);
       expect(out.byteLength).toBe(t.byteLength);
-      expect(await contents(out)).toEqual({ type: dtype === 'F16' ? 'f16' : 'f32', values: want });
+      expect(await contents(out)).toEqual({ type: 'f32', values: want });
     },
   );
 
@@ -233,12 +233,19 @@ describe('weight helpers', () => {
   });
 
   it('chain: f16 halfwords from one helper stay f16 through the next', async () => {
-    // q|k fused with k scaled by 0.5, then transposed:
-    //   [[1, 2], [3, 4]] → [[1, 2], [1.5, 2]] → [[1, 1.5], [2, 2]]
+    // q|k fused, then transposed: [[1, 2], [3, 4]] → [[1, 3], [2, 4]]
     const q = await source('F16', [1, 2], [1, 2]);
     const k = await source('F16', [3, 4], [1, 2]);
-    const out = transposeWeight(concatRows([q, scaleWeight(k, 0.5)]));
-    expect(await contents(out)).toEqual({ type: 'f16', values: [1, 1.5, 2, 2] });
+    const out = transposeWeight(concatRows([q, k]));
+    expect(await contents(out)).toEqual({ type: 'f16', values: [1, 3, 2, 4] });
+  });
+
+  it('chain: a scaled F16 part makes the fused result f32', async () => {
+    // q|k fused with k scaled by 0.5: [[1, 2], [3, 4]] → [[1, 2], [1.5, 2]]
+    const q = await source('F16', [1, 2], [1, 2]);
+    const k = await source('F16', [3, 4], [1, 2]);
+    const out = concatRows([q, scaleWeight(k, 0.5)]);
+    expect(await contents(out)).toEqual({ type: 'f32', values: [1, 2, 1.5, 2] });
   });
 
   it.for([

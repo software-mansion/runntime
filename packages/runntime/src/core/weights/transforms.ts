@@ -1,12 +1,13 @@
 /** Lazy reshaping helpers for `transformStateDict` hooks: concatenate, split,
  *  scale and transpose checkpoint tensors without fetching them.
  *
- *  F16 sources give f16 halfwords and F32 sources give f32. BF16 decodes to
+ *  F16 sources give f16 halfwords and F32 sources give f32, except
+ *  `scaleWeight`, which always gives f32. BF16 decodes to
  *  f32, which is exact; a derived tensor's Uint16Array means f16, so bf16 bits
  *  have no derived form. Each output's byteLength is its share of the source
  *  bytes, so load progress still sums to the checkpoint size. */
 import { RunntimeError } from '../error.ts';
-import { f16ToF32, f32ToF16Bits } from './convert.ts';
+import { f16ToF32 } from './convert.ts';
 import { derivedTensor, type LazyTensor } from './safetensors.ts';
 
 /** f32 values, or f16 halfwords. */
@@ -130,7 +131,8 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
 }
 
 /** Multiplies `t` by `scale`: one number for every element, or one per row
- *  of dim 0. F16 rounds each product back to f16. */
+ *  of dim 0. The result is f32 even for an F16 source: rounding the product
+ *  back to f16 would change what an f32 model loads. */
 export function scaleWeight(t: LazyTensor, scale: number | readonly number[]): LazyTensor {
   const rows = t.shape[0] ?? 1;
   if (typeof scale !== 'number' && scale.length !== rows) {
@@ -146,9 +148,8 @@ export function scaleWeight(t: LazyTensor, scale: number | readonly number[]): L
     t.shape,
     async () => {
       const data = await readFloats('scaleWeight', t);
-      if (data instanceof Float32Array) return data.map((v, i) => v * scaleAt(i));
-      const values = f16ToF32(data);
-      return Uint16Array.from(values, (v, i) => f32ToF16Bits(v * scaleAt(i)));
+      const values = data instanceof Float32Array ? data : f16ToF32(data);
+      return values.map((v, i) => v * scaleAt(i));
     },
     t.byteLength,
   );
