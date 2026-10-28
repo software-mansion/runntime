@@ -50,6 +50,8 @@ export class ConvBlock extends Module {
     const key = (n: string) => (prefix ? `${prefix}.${n}` : n);
     const at = (n: string) => requireTensor(sd, key(n), `ConvBlock at '${prefix}'`);
     const scale = at('layer_scale');
+    // f32 on purpose: the BatchNorm fold reads it next, and an f16 product
+    // would round once more before the fold.
     for (const n of ['mlp.fc2.bn.weight', 'mlp.fc2.bn.bias']) {
       const src = at(n);
       sd.tensors.set(

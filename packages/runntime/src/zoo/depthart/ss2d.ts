@@ -97,6 +97,7 @@ export class SS2D extends Module {
     // prefix is empty when this module is the root.
     const key = prefix ? `${prefix}.A_logs` : 'A_logs';
     const src = requireTensor(sd, key, `SS2D at '${prefix}'`);
+    // f32 on purpose: A is an f32 parameter of the scan.
     sd.tensors.set(
       key,
       derivedTensor(
