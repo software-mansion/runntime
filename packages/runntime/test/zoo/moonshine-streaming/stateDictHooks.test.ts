@@ -15,6 +15,8 @@ const CFG = {
 };
 
 const square = (values: number[]): Entry => ({ values, shape: [2, 2] });
+/** A decoder projection: 2 rows of the decoder's hidden size 3. */
+const wide = (values: number[]): Entry => ({ values, shape: [2, 3] });
 const ZERO = square([0, 0, 0, 0]);
 
 /** Tensors the hook only renames, HF name → ours. */
@@ -56,12 +58,12 @@ const CHECKPOINT: Record<string, Entry> = {
   'model.encoder.layers.0.self_attn.q_proj.weight': square([1, 2, 3, 4]),
   'model.encoder.layers.0.self_attn.k_proj.weight': square([5, 6, 7, 8]),
   'model.encoder.layers.0.self_attn.v_proj.weight': square([9, 10, 11, 12]),
-  'model.decoder.layers.0.self_attn.q_proj.weight': square([-1, -2, -3, -4]),
-  'model.decoder.layers.0.self_attn.k_proj.weight': square([-5, -6, -7, -8]),
-  'model.decoder.layers.0.self_attn.v_proj.weight': square([-9, -10, -11, -12]),
-  'model.decoder.layers.0.encoder_attn.q_proj.weight': square([1, 3, 5, 7]),
-  'model.decoder.layers.0.encoder_attn.k_proj.weight': square([2, 4, 6, 8]),
-  'model.decoder.layers.0.encoder_attn.v_proj.weight': square([10, 20, 30, 40]),
+  'model.decoder.layers.0.self_attn.q_proj.weight': wide([-1, -2, -3, -4, -5, -6]),
+  'model.decoder.layers.0.self_attn.k_proj.weight': wide([-7, -8, -9, -10, -11, -12]),
+  'model.decoder.layers.0.self_attn.v_proj.weight': wide([-13, -14, -15, -16, -17, -18]),
+  'model.decoder.layers.0.encoder_attn.q_proj.weight': wide([1, 3, 5, 7, 9, 11]),
+  'model.decoder.layers.0.encoder_attn.k_proj.weight': wide([2, 4, 6, 8, 10, 12]),
+  'model.decoder.layers.0.encoder_attn.v_proj.weight': wide([10, 20, 30, 40, 50, 60]),
 };
 
 describe('transformStreamingStateDict', () => {
@@ -126,23 +128,26 @@ describe('transformStreamingStateDict', () => {
 
     // Decoder q|k|v unscaled: its rope tables carry the scale.
     const decQkv = get('decoder.layers.0.selfAttn.qkv.weight');
-    expect(decQkv.shape).toEqual([6, 2]);
-    expect(decQkv.byteLength).toBe(12 * elemBytes);
+    expect(decQkv.shape).toEqual([6, 3]);
+    expect(decQkv.byteLength).toBe(18 * elemBytes);
     expect(await contents(decQkv)).toEqual({
       type,
-      values: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12],
+      values: Array.from({ length: 18 }, (_, i) => -(i + 1)),
     });
 
     // Cross-attention q times 1/√headDim = 0.5, f32 on every checkpoint;
     // k|v stacked as is.
     const crossQ = get('decoder.layers.0.crossAttn.q.weight');
-    expect(crossQ.shape).toEqual([2, 2]);
-    expect(crossQ.byteLength).toBe(4 * elemBytes);
-    expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5] });
+    expect(crossQ.shape).toEqual([2, 3]);
+    expect(crossQ.byteLength).toBe(6 * elemBytes);
+    expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5] });
     const crossKv = get('decoder.layers.0.crossAttn.kv.weight');
-    expect(crossKv.shape).toEqual([4, 2]);
-    expect(crossKv.byteLength).toBe(8 * elemBytes);
-    expect(await contents(crossKv)).toEqual({ type, values: [2, 4, 6, 8, 10, 20, 30, 40] });
+    expect(crossKv.shape).toEqual([4, 3]);
+    expect(crossKv.byteLength).toBe(12 * elemBytes);
+    expect(await contents(crossKv)).toEqual({
+      type,
+      values: [2, 4, 6, 8, 10, 12, 10, 20, 30, 40, 50, 60],
+    });
 
     // The dropped proj_out (4 elems) is the only byte loss.
     expect(sd.totalBytes()).toBe(total - 4 * elemBytes);

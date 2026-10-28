@@ -30,10 +30,28 @@ export function move(sd: LazyStateDict, from: string, to: string): void {
   sd.tensors.set(to, take(sd, from));
 }
 
+/** Takes an attention projection weight, which must be [_, hidden]. */
+function takeProjection(sd: LazyStateDict, name: string, hidden: number): LazyTensor {
+  const t = take(sd, name);
+  if (t.shape.length !== 2 || t.shape[1] !== hidden) {
+    throw checkpointMismatch(
+      'moonshine state dict',
+      `'${name}' has shape [${t.shape.join(', ')}], expected [_, ${hidden}]`,
+    );
+  }
+  return t;
+}
+
 /** Stacks q|k|v into one torch-layout [3·hidden, hidden] weight, with q times
  *  `qScale` when given. */
-export function fuseQkv(sd: LazyStateDict, hfPrefix: string, ours: string, qScale?: number): void {
-  const part = (p: string) => take(sd, `${hfPrefix}.${p}_proj.weight`);
+export function fuseQkv(
+  sd: LazyStateDict,
+  hfPrefix: string,
+  ours: string,
+  hidden: number,
+  qScale?: number,
+): void {
+  const part = (p: string) => takeProjection(sd, `${hfPrefix}.${p}_proj.weight`, hidden);
   const query = part('q');
   sd.tensors.set(
     ours,
@@ -53,7 +71,7 @@ export function moveTiedEmbedding(sd: LazyStateDict, prefix: string): void {
 export function transformDecoder(
   sd: LazyStateDict,
   prefix: string,
-  dec: { layers: number; headDim: number },
+  dec: { layers: number; hidden: number; headDim: number },
 ): void {
   const q = (name: string) => qualify(prefix, name);
   const crossQScale = 1 / Math.sqrt(dec.headDim);
@@ -61,16 +79,20 @@ export function transformDecoder(
     const hf = q(`model.decoder.layers.${i}`);
     const en = q(`decoder.layers.${i}`);
     move(sd, `${hf}.input_layernorm.weight`, `${en}.norm1.weight`);
-    fuseQkv(sd, `${hf}.self_attn`, `${en}.selfAttn.qkv.weight`);
+    fuseQkv(sd, `${hf}.self_attn`, `${en}.selfAttn.qkv.weight`, dec.hidden);
     move(sd, `${hf}.self_attn.o_proj.weight`, `${en}.selfAttn.out.weight`);
     move(sd, `${hf}.post_attention_layernorm.weight`, `${en}.norm2.weight`);
     sd.tensors.set(
       `${en}.crossAttn.q.weight`,
-      scaleWeight(take(sd, `${hf}.encoder_attn.q_proj.weight`), crossQScale),
+      scaleWeight(takeProjection(sd, `${hf}.encoder_attn.q_proj.weight`, dec.hidden), crossQScale),
     );
     sd.tensors.set(
       `${en}.crossAttn.kv.weight`,
-      concatRows(['k', 'v'].map((p) => take(sd, `${hf}.encoder_attn.${p}_proj.weight`))),
+      concatRows(
+        ['k', 'v'].map((p) =>
+          takeProjection(sd, `${hf}.encoder_attn.${p}_proj.weight`, dec.hidden),
+        ),
+      ),
     );
     move(sd, `${hf}.encoder_attn.o_proj.weight`, `${en}.crossAttn.out.weight`);
     move(sd, `${hf}.final_layernorm.weight`, `${en}.norm3.weight`);
@@ -105,7 +127,7 @@ export function transformMoonshineStateDict(
     const hf = q(`model.encoder.layers.${i}`);
     const en = q(`encoder.layers.${i}`);
     move(sd, `${hf}.input_layernorm.weight`, `${en}.norm1.weight`);
-    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`);
+    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`, cfg.dModel);
     move(sd, `${hf}.self_attn.o_proj.weight`, `${en}.attn.out.weight`);
     move(sd, `${hf}.post_attention_layernorm.weight`, `${en}.norm2.weight`);
     move(sd, `${hf}.mlp.fc1.weight`, `${en}.mlp.fc1.weight`);
@@ -115,5 +137,5 @@ export function transformMoonshineStateDict(
   }
   move(sd, q('model.encoder.layer_norm.weight'), q('encoder.norm.weight'));
 
-  transformDecoder(sd, prefix, { layers: cfg.decLayers, headDim: cfg.headDim });
+  transformDecoder(sd, prefix, { layers: cfg.decLayers, hidden: cfg.dModel, headDim: cfg.headDim });
 }

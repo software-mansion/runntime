@@ -76,7 +76,7 @@ export function transformStreamingStateDict(
     const hf = q(`model.encoder.layers.${i}`);
     const en = q(`encoder.layers.${i}`);
     gammaNorm(`${hf}.input_layernorm.gamma`, `${en}.norm1.weight`);
-    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`, encQScale);
+    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`, eh, encQScale);
     move(sd, `${hf}.self_attn.o_proj.weight`, `${en}.attn.out.weight`);
     gammaNorm(`${hf}.post_attention_layernorm.gamma`, `${en}.norm2.weight`);
     move(sd, `${hf}.mlp.fc1.weight`, `${en}.mlp.fc1.weight`);
@@ -89,5 +89,5 @@ export function transformStreamingStateDict(
   move(sd, q('model.decoder.pos_emb.weight'), q('adapter.posEmb'));
   if (eh !== dh) move(sd, q('model.decoder.proj.weight'), q('adapter.proj.weight'));
 
-  transformDecoder(sd, prefix, { layers: cfg.dec.layers, headDim: cfg.dec.headDim });
+  transformDecoder(sd, prefix, { layers: cfg.dec.layers, hidden: dh, headDim: cfg.dec.headDim });
 }
