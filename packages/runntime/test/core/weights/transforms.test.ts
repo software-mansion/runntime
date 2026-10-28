@@ -73,6 +73,14 @@ describe('concatRows', () => {
     expect(await contents(out)).toEqual({ type, values: [1, 2, 3, 4, 5, 6] });
   });
 
+  it('reads a part listed several times once', async () => {
+    const compute = vi.fn(async () => new Float32Array([1, 2]));
+    const norm = derivedTensor([2], compute);
+    const out = concatRows([norm, norm, norm]);
+    expect(await contents(out)).toEqual({ type: 'f32', values: [1, 2, 1, 2, 1, 2] });
+    expect(compute).toHaveBeenCalledOnce();
+  });
+
   it('gives f32 when f16 and f32 parts mix', async () => {
     const out = concatRows([
       await source('F16', [1, 2], [1, 2]),
@@ -228,8 +236,11 @@ describe('weight helpers', () => {
     scaleWeight(t, 2);
     transposeWeight(t);
     expect(compute).not.toHaveBeenCalled();
-    await Promise.all([top!, bottom!, left!, right!].map(contents));
+    await Promise.all([top!, bottom!].map(contents));
     expect(compute).toHaveBeenCalledOnce();
+    // Each split reads the source once for all its outputs.
+    await Promise.all([left!, right!].map(contents));
+    expect(compute).toHaveBeenCalledTimes(2);
   });
 
   it('chain: f16 halfwords from one helper stay f16 through the next', async () => {

@@ -50,7 +50,8 @@ function checkSizes(helper: string, t: LazyTensor, sizes: readonly number[], axi
 }
 
 /** Stacks `parts` along dim 0. Every part needs the same trailing dims. The
- *  result is f16 when every part is, f32 otherwise. */
+ *  result is f16 when every part is, f32 otherwise. A part listed more than
+ *  once (a norm tiled over every head) is read once. */
 export function concatRows(parts: readonly LazyTensor[]): LazyTensor {
   const shapes = parts.map((p) => `[${p.shape.join(', ')}]`).join(', ');
   const first = parts[0];
@@ -66,8 +67,11 @@ export function concatRows(parts: readonly LazyTensor[]): LazyTensor {
   return derivedTensor(
     shape,
     async () => {
-      const datas: Floats[] = [];
-      for (const p of parts) datas.push(await readFloats('concatRows', p));
+      const read = new Map<LazyTensor, Floats>();
+      for (const p of parts) {
+        if (!read.has(p)) read.set(p, await readFloats('concatRows', p));
+      }
+      const datas = parts.map((p) => read.get(p)!);
       const half = datas.every((d) => d instanceof Uint16Array);
       const out = half ? new Uint16Array(numel(shape)) : new Float32Array(numel(shape));
       let base = 0;

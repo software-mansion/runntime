@@ -644,11 +644,12 @@ describe('memoryStateDict', () => {
 });
 
 describe('derivedTensor', () => {
-  it('computes once, however often it is read', async () => {
+  it('computes on every read and holds nothing between reads', async () => {
     const compute = vi.fn(async () => new Float32Array([0.25]));
     const t = derivedTensor([1], compute);
-    await Promise.all([t.f32(), t.f32(), t.data()]);
-    expect(compute).toHaveBeenCalledOnce();
+    expect(await t.f32()).toEqual(new Float32Array([0.25]));
+    expect(await t.data()).toEqual(new Float32Array([0.25]));
+    expect(compute).toHaveBeenCalledTimes(2);
   });
 
   it('decodes f16 halfwords for f32()', async () => {

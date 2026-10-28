@@ -46,8 +46,8 @@ export function foldBnIntoConv(
         const scale = g[o]! / Math.sqrt(v[o]! + eps);
         const base = o * perOut;
         // In-place is safe only because `weight` is file-backed, so each f32()
-        // decodes a fresh array. A derived tensor would hand back a shared
-        // memoized array and this loop would corrupt it for every reader.
+        // decodes a fresh array. An in-memory tensor hands back the array it
+        // was made from, and this loop would corrupt it for every reader.
         for (let i = 0; i < perOut; i++) w[base + i]! *= scale;
         b[o] = be[o]! + ((prior?.[o] ?? 0) - m[o]!) * scale;
       }

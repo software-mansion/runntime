@@ -397,17 +397,18 @@ export function eagerTensor(data: Float32Array | Uint32Array, shape: number[]): 
 }
 
 /** `byteLength` is this tensor's share of the download. A transform over
- *  several file tensors gives the sum to one output and 0 to the rest. */
+ *  several file tensors gives the sum to one output and 0 to the rest.
+ *  Every read runs `compute` again: the tensor holds nothing between reads,
+ *  so a load keeps only the tensor being bound in host memory. A transform
+ *  with several outputs shares one read itself, like `splitRows`. */
 export function derivedTensor(
   shape: number[],
   compute: () => Promise<Float32Array | Uint16Array | Uint32Array>,
   byteLength = 0,
 ): DerivedTensor {
-  let memo: Promise<Float32Array | Uint16Array | Uint32Array> | undefined;
-  const get = () => (memo ??= compute());
   /** Shared by halfWords() and words(); both want a Uint32Array back. */
   const asWords = async (): Promise<Uint32Array> => {
-    const data = await get();
+    const data = await compute();
     if (!(data instanceof Uint32Array))
       throw new Error('derived tensor holds f32 or halfwords, not words');
     return data;
@@ -417,11 +418,11 @@ export function derivedTensor(
     dtype: 'F32', // nominal only — see DerivedTensor
     shape,
     byteLength,
-    data: get,
+    data: compute,
     /** Halfwords decode, so an f16 transform still loads into an f32
      *  parameter or a hook that reads f32. */
     async f32() {
-      const data = await get();
+      const data = await compute();
       if (data instanceof Uint16Array) return f16ToF32(data);
       if (!(data instanceof Float32Array))
         throw new Error('derived tensor holds packed words, not f32');
@@ -431,7 +432,7 @@ export function derivedTensor(
     words: asWords,
     /** Lets a transform that already made f16 halfwords skip the f32 detour. */
     async u16(): Promise<Uint16Array> {
-      const data = await get();
+      const data = await compute();
       if (!(data instanceof Uint16Array)) throw new Error('derived tensor has no raw u16 bits');
       return data;
     },
