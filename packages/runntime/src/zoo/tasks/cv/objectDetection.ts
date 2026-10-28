@@ -1,16 +1,23 @@
 /** Object detection task: an image in, the objects in it out, as labeled
  *  boxes. Runs YOLO26 on the initRunntime() device. */
 
-import { createResourceScope, RunntimeError } from '../../../core/index.ts';
+import {
+  createResourceScope,
+  objectDetection,
+  RunntimeError,
+  type DetectionList,
+} from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
-import { createDetector } from '../../yolo26/detector.ts';
+import { createDetector, type Yolo26Input } from '../../yolo26/detector.ts';
 import { COCO_NAMES, decodeDetections } from '../../yolo26/pipeline.ts';
 import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { decodeBox, scaleBox, type BoundingBox } from './ops/box.ts';
+import { createDetectionEncoder } from './utils/encodeDetections.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
+import type { EncodeOptions, GpuImage, GpuTensor } from '../gpu.ts';
 
 /** What to load. Every field is optional; a missing `modelPath` comes from
  *  models.objectDetection.YOLO26.DEFAULT. */
@@ -45,11 +52,46 @@ export interface ObjectDetection {
   readonly box: BoundingBox<'xyxy'>;
 }
 
+/** One object as encodeDetectObjects writes it: `box` in pixels of the
+ *  source image, `confidence` 0 to 1, `classId` into `labels`. */
+export type ObjectDetectionData = typeof objectDetection;
+
+/** What encodeDetectObjects writes: `count` objects, best first, then
+ *  unused room. */
+export type ObjectDetectionList = DetectionList<ObjectDetectionData>;
+
+export interface EncodeDetectObjectsOptions extends EncodeOptions<
+  GpuImage | GpuTensor<Yolo26Input>,
+  GpuTensor<ObjectDetectionList>
+> {
+  /** Drops objects scored below this, 0 to 1. Default 0.3. */
+  readonly confidenceThreshold?: number;
+  /** At most this many objects, best first. Default: as many as the target
+   *  holds. */
+  readonly maxDetections?: number;
+}
+
 export interface ObjectDetector {
   /** The class names, by class index. */
   readonly labels: readonly string[];
+  /** Width and height of the model input in pixels. */
+  readonly inputSize: number;
+  /** Buffer layouts for encodeDetectObjects, at this runner's size: the
+   *  model input, and the list with room for `maxDetections` objects. Pass
+   *  one to `root.createBuffer` to make a buffer of the right type and size. */
+  readonly schemas: {
+    readonly input: Yolo26Input;
+    readonly output: (maxDetections: number) => ObjectDetectionList;
+  };
   /** Image in, the objects in it out, best first. */
   detectObjects(image: ImageBuffer, options?: DetectObjectsOptions): Promise<ObjectDetection[]>;
+  /** Records a detection from GPU memory into GPU memory, with no CPU
+   *  copy. A texture source is fitted like an ImageBuffer; a buffer source
+   *  is the model input as-is. The target gets the list of objects, decoded on
+   *  the GPU. Work submitted after it sees the result.
+   *  @throws RunntimeError `INVALID_ARGUMENT` for a resource of the wrong
+   *  format, usage or size, or an option out of range. */
+  encodeDetectObjects(options: EncodeDetectObjectsOptions): void;
   /** Frees the weights and every GPU buffer the runner holds. */
   dispose(): void;
 }
@@ -97,6 +139,13 @@ export async function createObjectDetector(
     );
     // One scratch array, rewritten each call; the detector copies it to the GPU.
     const pixels = new Float32Array(3 * inputSize * inputSize);
+    const encoder = scope.track(
+      createDetectionEncoder(detector, preprocessor, objectDetection, {
+        numExtra: 0,
+        maskSize: 0,
+      }),
+    );
+    const schemas = { input: detector.schemas.input, output: encoder.schema };
 
     let disposed = false;
     // Calls run one after another: the next preprocess overwrites the scratch
@@ -104,6 +153,8 @@ export async function createObjectDetector(
     let queue: Promise<unknown> = Promise.resolve();
     return {
       labels,
+      inputSize,
+      schemas,
       async detectObjects(image, options = {}) {
         if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'object detector is disposed');
         const { confidenceThreshold = 0.3, maxDetections = 300 } = options;
@@ -131,6 +182,10 @@ export async function createObjectDetector(
             },
           };
         });
+      },
+      encodeDetectObjects(options) {
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'object detector is disposed');
+        encoder.encode(options);
       },
       dispose() {
         disposed = true;

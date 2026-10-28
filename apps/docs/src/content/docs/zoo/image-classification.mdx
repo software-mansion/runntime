@@ -91,10 +91,15 @@ function createImageClassifier(
 interface ImageClassifier {
   readonly labels: readonly string[];
   readonly inputSize: number;
+  readonly schemas: {
+    readonly input: ClassifyInput;
+    readonly output: (topk: number) => ClassificationList;
+  };
   classify(
     image: ImageBuffer,
     options?: ClassifyOptions,
   ): Promise<(Classification & { label: string })[]>;
+  encodeClassify(options: EncodeClassifyOptions): void;
   dispose(): void;
 }
 
@@ -109,9 +114,81 @@ interface ClassifyOptions {
   `imageBuffer(bytes, width, height, format?)` from raw `rgba`, `rgb`,
   `bgra`, `bgr` or `gray` bytes.
   `topk` caps how many come back.
+- `encodeClassify(options)` reads an image already on the GPU and writes
+  the best classes to a GPU buffer, see [GPU in, GPU out](#gpu-in-gpu-out).
 - `labels` are the class names, by class index.
 - `inputSize` is the model input width and height, 224.
+- `schemas` are the TypeGPU layouts of the model input and of the list
+  `encodeClassify` writes, for buffers passed to it.
 - `dispose()` frees the GPU memory.
+
+## GPU in, GPU out
+
+When the image is already on the GPU, a video frame or the output of your
+own shader, `encodeClassify` skips the CPU: no pixels are read back, and the
+best classes are ranked on the GPU, straight into a buffer you own, for your
+next pass to read.
+
+```ts twoslash
+declare const video: HTMLVideoElement;
+// ---cut---
+import { createImageClassifier, initRunntime, models } from 'runntime/zoo';
+import tgpu from 'typegpu';
+
+// 1. Set up the engine and load the model once.
+const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
+initRunntime(root);
+const classifier = await createImageClassifier(models.imageClassification.MOBILENETV4.DEFAULT);
+
+// 2. A buffer for up to 5 classes, typed by the classifier's schema.
+const best = root.createBuffer(classifier.schemas.output(5)).$usage('storage');
+
+// 3. Each frame: video in, the list out, then your own passes in the same encoder.
+const encoder = root['~unstable'].createCommandEncoder();
+classifier.encodeClassify({
+  source: root.device.importExternalTexture({ source: video }),
+  target: best,
+  encoder,
+});
+// ...record your own passes that read `best` here...
+encoder.submit();
+```
+
+**Source** - one of:
+
+- a texture: a `GPUTexture`, a TypeGPU texture with `sampled` usage, or a
+  `GPUExternalTexture` from a video. It is fitted like an `ImageBuffer`,
+  with the classifier's `resizeMode`, and each value 0-1 counts as a byte
+  0-255. Formats: `rgba8unorm`, `bgra8unorm`, `rgb10a2unorm`,
+  `rgba16float`, `rgba32float`. sRGB formats are rejected: the GPU would
+  turn their values linear, which the model was not trained on.
+- a buffer holding the model input as is: 3×224×224 f32, normalized RGB, one
+  plane per channel. A raw `GPUBuffer` needs `COPY_SRC` usage.
+
+**Target** - a buffer with `STORAGE` usage, laid out as
+`schemas.output(topk)`:
+
+```wgsl
+struct Classification { classId: u32, confidence: f32 }
+array<Classification, topk>
+```
+
+The entries are the classes `classify` would return, best first: `classId`
+indexes `labels`, `confidence` is 0 to 1, a softmax over every class. In a
+raw `GPUBuffer` entry `i` starts at byte `8 * i`.
+
+`topk` caps how many are written, by default as many as the target holds, up
+to every class.
+
+**encoder** - optional. Pass a `GPUCommandEncoder` or a TypeGPU command
+encoder to record the classification together with your own passes into one command
+buffer. You then finish and submit it yourself, before `dispose()`. Without
+it, the call submits its own before it returns, and does not wait for the
+GPU. Work you submit after it sees the result.
+
+Every resource must come from the device passed to `initRunntime()`. A
+wrong format, usage or size, or an option out of range, throws
+`INVALID_ARGUMENT`.
 
 ## Options
 
