@@ -92,11 +92,12 @@ describe('transformMoonshineStateDict', () => {
       values: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12],
     });
 
-    // Cross-attention q times 1/√headDim = 0.5; k|v stacked as is.
+    // Cross-attention q times 1/√headDim = 0.5, f32 on every checkpoint;
+    // k|v stacked as is.
     const crossQ = get('decoder.layers.0.crossAttn.q.weight');
     expect(crossQ.shape).toEqual([2, 2]);
     expect(crossQ.byteLength).toBe(4 * elemBytes);
-    expect(await contents(crossQ)).toEqual({ type, values: [0.5, 1.5, 2.5, 3.5] });
+    expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5] });
     const crossKv = get('decoder.layers.0.crossAttn.kv.weight');
     expect(crossKv.shape).toEqual([4, 2]);
     expect(crossKv.byteLength).toBe(8 * elemBytes);
