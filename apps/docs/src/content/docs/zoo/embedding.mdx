@@ -215,8 +215,10 @@ entry. Without `modelPath`, the model is EmbeddingGemma 2.
 
 all-MiniLM-L6-v2 loads from a `model.safetensors` whose Linear weights
 (attention query, key, value and output, and both feed-forward layers) are
-int8 or int4. The file keeps the Hugging Face tensor names and lays them out
-like this:
+int8 or int4. Each Linear can be quantized or float on its own, except query,
+key and value: the model stacks them into one weight, so the three are
+quantized together or not at all. The file keeps the Hugging Face tensor
+names and lays them out like this:
 
 - A Linear weight `W` of shape `[out, in]` is stored as `W`: `I8` of shape
   `[out, in]` for int8, or `U8` of shape `[out, in / 2]` for int4, two
