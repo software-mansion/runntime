@@ -6,7 +6,7 @@ import type { EmbeddingModel, EmbeddingModelLoad } from '../tasks/multimodal/emb
 import { EMBEDDING_DIM, MINILM_L6 } from './config.ts';
 import { createMinilmEmbedCore } from './embedCore.ts';
 import { MinilmModel } from './model.ts';
-import { createMinilmTokenizer, minilmTokenizerAsset } from './tokenizer.ts';
+import { createMinilmTokenizer } from './tokenizer.ts';
 
 export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<EmbeddingModel> {
   const { maxTokens } = load;
@@ -20,7 +20,7 @@ export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<Em
       `createEmbedder: maxTokens must be an integer from 2 to ${most}, got ${maxTokens}`,
     );
   }
-  const tokenizer = createMinilmTokenizer(minilmTokenizerAsset(load.tokenizer, maxTokens));
+  const tokenizer = createMinilmTokenizer(load.tokenizer, maxTokens);
 
   const scope = createResourceScope();
   try {
