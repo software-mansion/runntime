@@ -272,7 +272,7 @@ describe('fromSafetensors', () => {
     f16: { dtype: 'F16', shape: [3], bytes: u16Bytes([0x3e00, 0xb400, 0x3c00]) }, // 1.5, -0.25, 1
     bf16: { dtype: 'BF16', shape: [2], bytes: u16Bytes([0x3fc0, 0xbe80]) }, // 1.5, -0.25
     u32: { dtype: 'U32', shape: [2], bytes: u32Bytes([7, 0xffffffff]) },
-    u8: { dtype: 'U8', shape: [1], bytes: new Uint8Array([9]) },
+    bool: { dtype: 'BOOL', shape: [1], bytes: new Uint8Array([1]) },
   });
 
   async function getTensor(name: string) {
@@ -303,7 +303,7 @@ describe('fromSafetensors', () => {
   });
 
   it.each([
-    { name: 'f32() on U8', tensor: 'u8', call: 'f32' },
+    { name: 'f32() on BOOL', tensor: 'bool', call: 'f32' },
     { name: 'u16() on F32', tensor: 'f32', call: 'u16' },
     { name: 'halfWords() on BF16', tensor: 'bf16', call: 'halfWords' },
     { name: 'words() on F16', tensor: 'f16', call: 'words' },
@@ -318,7 +318,7 @@ describe('fromSafetensors', () => {
     const sd = await fromSafetensors(bufferSource(file));
     expect(sd.tensors.get('f16')).toMatchObject({ kind: 'file', dtype: 'F16', shape: [3] });
     expect(sd.tensors.get('f16')!.byteLength).toBe(3 * 2); // 3 values, 2 bytes each
-    // f32: 3×4, f16: 3×2, bf16: 2×2, u32: 2×4, u8: 1×1
+    // f32: 3×4, f16: 3×2, bf16: 2×2, u32: 2×4, bool: 1×1
     expect(sd.totalBytes()).toBe(12 + 6 + 4 + 8 + 1);
   });
 
@@ -344,18 +344,68 @@ describe('fromSafetensors', () => {
   it('fails the read, not the open, when the payload is cut short', async () => {
     const cut = file.slice(0, file.length - 4);
     const sd = await fromSafetensors(bufferSource(cut));
-    await expect(sd.tensors.get('u8')!.f32()).rejects.toThrow(/past end/);
+    await expect(sd.tensors.get('bool')!.f32()).rejects.toThrow(/past end/);
   });
 
   it('reads tensors that span several chunks', async () => {
     const values = Array.from({ length: 10 }, (_, i) => i + 0.5);
     const big = tensorFile({
-      a: { dtype: 'U8', shape: [3], bytes: new Uint8Array([1, 2, 3]) },
+      a: { dtype: 'BOOL', shape: [3], bytes: new Uint8Array([1, 0, 1]) },
       b: { dtype: 'F32', shape: [10], bytes: f32Bytes(values) },
     });
     const sd = await fromSafetensors(bufferSource(big), { chunkBytes: 8 });
     // 'a' is 3 bytes, so 'b' starts mid-chunk and crosses 5 chunk edges
     expect(await sd.tensors.get('b')!.f32()).toEqual(new Float32Array(values));
+  });
+
+  describe('with quantization metadata', () => {
+    // An int8 [1, 2] weight, one group of 2, scale 1 (f16 0x3c00).
+    const int8Tensors: Record<string, TensorSpec> = {
+      'w.weight': { dtype: 'I8', shape: [1, 2], bytes: new Uint8Array([1, 2]) },
+      'w.weight_scale': { dtype: 'F16', shape: [1, 1], bytes: u16Bytes([0x3c00]) },
+    };
+    const quant = (setting: unknown) => ({ 'runntime.quant': JSON.stringify(setting) });
+    const valid = { version: 1, bits: 8, groupSize: 2, scheme: 'symmetric' };
+
+    it('opens a file with a valid setting', async () => {
+      const sd = await fromSafetensors(bufferSource(tensorFile(int8Tensors, quant(valid))));
+      expect(sd.metadata['runntime.quant']).toBe(JSON.stringify(valid));
+    });
+
+    it.each([
+      { name: 'text that is not JSON', metadata: { 'runntime.quant': '{bits' }, error: /JSON/ },
+      { name: 'a JSON array', metadata: quant([1, 8]), error: /not a JSON object/ },
+      { name: 'version 2', metadata: quant({ ...valid, version: 2 }), error: /version/ },
+      { name: 'no version', metadata: quant({ ...valid, version: undefined }), error: /version/ },
+      { name: 'bits 2', metadata: quant({ ...valid, bits: 2 }), error: /bits 4 or 8/ },
+      { name: "bits '8'", metadata: quant({ ...valid, bits: '8' }), error: /bits 4 or 8/ },
+      { name: 'groupSize 0', metadata: quant({ ...valid, groupSize: 0 }), error: /groupSize/ },
+      { name: 'groupSize 1.5', metadata: quant({ ...valid, groupSize: 1.5 }), error: /groupSize/ },
+      { name: "groupSize '2'", metadata: quant({ ...valid, groupSize: '2' }), error: /groupSize/ },
+      {
+        name: 'an asymmetric scheme',
+        metadata: quant({ ...valid, scheme: 'asymmetric' }),
+        error: /scheme/,
+      },
+    ])('rejects $name with CHECKPOINT_MISMATCH', async ({ metadata, error }) => {
+      const open = fromSafetensors(bufferSource(tensorFile(int8Tensors, metadata)));
+      await expect(open).rejects.toMatchObject({
+        name: 'RunntimeError',
+        code: 'CHECKPOINT_MISMATCH',
+      });
+      await expect(open).rejects.toThrow(error);
+    });
+
+    it.each(['I8', 'U8'] as const)(
+      'rejects a %s tensor in a file with no setting',
+      async (dtype) => {
+        const file = tensorFile({ w: { dtype, shape: [2], bytes: new Uint8Array(2) } });
+        await expect(fromSafetensors(bufferSource(file))).rejects.toMatchObject({
+          code: 'CHECKPOINT_MISMATCH',
+          message: expect.stringMatching(new RegExp(`w is ${dtype}.*no 'runntime.quant'`)),
+        });
+      },
+    );
   });
 
   describe('with a cache', () => {
