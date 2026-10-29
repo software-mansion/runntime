@@ -18,7 +18,7 @@ import {
   makeHandle,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
-import { type AttnGeoCfg, type KeyBias, keyBiasFields } from './attn.ts';
+import { type AttnGeoCfg, type KeyBias, keyBiasAt, keyBiasFields } from './attn.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
 const LN2 = Math.LN2;
@@ -189,7 +189,7 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
         }
         const kj = t0 + kk;
         if (hasKeyBias > 0) {
-          part += std.select(d.f32(0), D.bias, kj >= D.biasStart && kj < D.biasEnd);
+          part += keyBiasAt(kj, D.biasStart, D.biasEnd, D.bias);
         }
         s[kk] = std.select(d.f32(MASKED), part, kj >= band.x && kj < band.y);
         tileMax = std.max(tileMax, s[kk]!);

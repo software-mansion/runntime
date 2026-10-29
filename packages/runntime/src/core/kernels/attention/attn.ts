@@ -29,6 +29,12 @@ export interface KeyBias {
   value: number;
 }
 
+/** The key bias for key j: value inside [start, end), 0 outside. */
+export const keyBiasAt = (j: number, start: number, end: number, value: number) => {
+  'use gpu';
+  return std.select(d.f32(0), value, j >= start && j < end);
+};
+
 /** Uniform fields for a key bias; an empty range when there is none. */
 export const keyBiasFields = (b?: KeyBias) => ({
   biasStart: b?.start ?? 0,
@@ -160,7 +166,7 @@ function makeAttnKernel(elem: Elem = F32_ELEM) {
         }
       }
       if (C.hasKeyBias > 0) {
-        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+        score += keyBiasAt(j, D.biasStart, D.biasEnd, D.bias);
       }
 
       const mNew = std.max(m, score);
@@ -383,7 +389,7 @@ function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
         }
       }
       if (hasKeyBias > 0) {
-        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+        score += keyBiasAt(j, D.biasStart, D.biasEnd, D.bias);
       }
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
@@ -494,7 +500,7 @@ function makeAttnRowsSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
         }
       }
       if (hasKeyBias > 0) {
-        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+        score += keyBiasAt(j, D.biasStart, D.biasEnd, D.bias);
       }
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
@@ -611,7 +617,7 @@ function makeAttnRowsSubgroupSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM)
       }
       let score = std.subgroupAdd(partial);
       if (hasKeyBias > 0) {
-        score += std.select(d.f32(0), D.bias, j >= D.biasStart && j < D.biasEnd);
+        score += keyBiasAt(j, D.biasStart, D.biasEnd, D.bias);
       }
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
