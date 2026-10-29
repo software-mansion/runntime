@@ -10,7 +10,7 @@ const json = {
   ],
   normalizer: { type: 'BertNormalizer', lowercase: true },
   pre_tokenizer: { type: 'BertPreTokenizer' },
-  post_processor: null,
+  post_processor: { type: 'BertProcessing', sep: ['[SEP]', 3], cls: ['[CLS]', 2] },
   decoder: null,
   model: {
     type: 'WordPiece',
