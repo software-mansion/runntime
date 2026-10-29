@@ -316,7 +316,6 @@ image preprocessing, which is most of that row's time.
 pixels in to boxes out, in the n, s and m sizes. ruNNtime runs the f16
 weights, its only precision. transformers.js runs the ONNX export of the
 same model in fp32, its WebGPU default, plus the fp16 and q4 exports.
-Through the plugin, ruNNtime keeps transformers.js's image preprocessing.
 
 ### FPS
 
@@ -326,17 +325,14 @@ Through the plugin, ruNNtime keeps transformers.js's image preprocessing.
   digits={1}
   rows={[
     { label: 'ruNNtime n', value: 77.1, unit: ' fps', ours: true },
-    { label: 'ruNNtime n, tjs plugin', value: 64.7, unit: ' fps', ours: true },
     { label: 'transformers.js n fp32', value: 24.7, unit: ' fps' },
     { label: 'transformers.js n fp16', value: 25.9, unit: ' fps' },
     { label: 'transformers.js n q4', value: 24.3, unit: ' fps' },
     { label: 'ruNNtime s', value: 43.6, unit: ' fps', ours: true },
-    { label: 'ruNNtime s, tjs plugin', value: 43.1, unit: ' fps', ours: true },
     { label: 'transformers.js s fp32', value: 19.5, unit: ' fps' },
     { label: 'transformers.js s fp16', value: 21.1, unit: ' fps' },
     { label: 'transformers.js s q4', value: 19.9, unit: ' fps' },
     { label: 'ruNNtime m', value: 25.1, unit: ' fps', ours: true },
-    { label: 'ruNNtime m, tjs plugin', value: 24.9, unit: ' fps', ours: true },
     { label: 'transformers.js m fp32', value: 11.8, unit: ' fps' },
     { label: 'transformers.js m fp16', value: 14.3, unit: ' fps' },
     { label: 'transformers.js m q4', value: 11.9, unit: ' fps' },
@@ -345,23 +341,20 @@ Through the plugin, ruNNtime keeps transformers.js's image preprocessing.
 
 ### All numbers
 
-| Model | Engine               | Precision | ms per image | FPS  |
-| ----- | -------------------- | --------- | ------------ | ---- |
-| n     | ruNNtime             | f16       | 12.9         | 77.1 |
-| n     | ruNNtime, tjs plugin | f16       | 15.1         | 64.7 |
-| n     | transformers.js      | fp32      | 40.9         | 24.7 |
-| n     | transformers.js      | fp16      | 38.1         | 25.9 |
-| n     | transformers.js      | q4        | 42.1         | 24.3 |
-| s     | ruNNtime             | f16       | 22.7         | 43.6 |
-| s     | ruNNtime, tjs plugin | f16       | 23.2         | 43.1 |
-| s     | transformers.js      | fp32      | 48.9         | 19.5 |
-| s     | transformers.js      | fp16      | 43.4         | 21.1 |
-| s     | transformers.js      | q4        | 49.1         | 19.9 |
-| m     | ruNNtime             | f16       | 39.8         | 25.1 |
-| m     | ruNNtime, tjs plugin | f16       | 39.8         | 24.9 |
-| m     | transformers.js      | fp32      | 84.9         | 11.8 |
-| m     | transformers.js      | fp16      | 69.5         | 14.3 |
-| m     | transformers.js      | q4        | 83.7         | 11.9 |
+| Model | Engine          | Precision | ms per image | FPS  |
+| ----- | --------------- | --------- | ------------ | ---- |
+| n     | ruNNtime        | f16       | 12.9         | 77.1 |
+| n     | transformers.js | fp32      | 40.9         | 24.7 |
+| n     | transformers.js | fp16      | 38.1         | 25.9 |
+| n     | transformers.js | q4        | 42.1         | 24.3 |
+| s     | ruNNtime        | f16       | 22.7         | 43.6 |
+| s     | transformers.js | fp32      | 48.9         | 19.5 |
+| s     | transformers.js | fp16      | 43.4         | 21.1 |
+| s     | transformers.js | q4        | 49.1         | 19.9 |
+| m     | ruNNtime        | f16       | 39.8         | 25.1 |
+| m     | transformers.js | fp32      | 84.9         | 11.8 |
+| m     | transformers.js | fp16      | 69.5         | 14.3 |
+| m     | transformers.js | q4        | 83.7         | 11.9 |
 
 The transformers.js rows run the same model and the same compute, but
 their boxes are wrong: the ONNX export's config makes transformers.js score
