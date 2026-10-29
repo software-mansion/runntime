@@ -7,18 +7,22 @@ export function WeightsGate<T>({
   state,
   onStart,
   note,
+  controls,
   children,
 }: {
   state: ModelState<T>;
   onStart: () => void;
   /** One line under the button: what is fetched and how big it is. */
   note: string;
+  /** Rendered above the button, like a model picker. */
+  controls?: ReactNode;
   children: (model: T) => ReactNode;
 }) {
   if (state.status === 'ready') return children(state.model);
 
   return (
     <div className="demo demo-gate not-content">
+      {controls}
       <button className="demo-button" onClick={onStart} disabled={state.status === 'loading'}>
         {state.status === 'loading' ? 'Downloading…' : 'Download weights'}
       </button>

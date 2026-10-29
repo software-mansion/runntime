@@ -71,18 +71,27 @@
   gap: 0.625rem;
 }
 
-.demo-input {
+.demo-input,
+.demo-select {
   background: var(--surface-sunken);
   border: 1px solid var(--border-hairline);
   border-radius: 6px;
   color: var(--text-primary);
-  flex: 1;
   font: inherit;
-  min-width: 0;
   padding: 0.55rem 0.75rem;
 }
 
-.demo-input:focus {
+.demo-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.demo-select {
+  flex: none;
+}
+
+.demo-input:focus,
+.demo-select:focus {
   border-color: var(--border-strong);
   outline: none;
 }
