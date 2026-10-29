@@ -134,7 +134,7 @@ export async function createDepthEstimator(
     // One scratch array, rewritten each call; the estimator copies it to the GPU.
     const pixels = new Float32Array(3 * inputSize * inputSize);
     const root = defaultRoot();
-    const imageToChw = createImageToChw(root);
+    const imageToChw = scope.track(createImageToChw(root));
     const mapToTexture = scope.track(createMapToTexture(root));
     const schemas = {
       input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),

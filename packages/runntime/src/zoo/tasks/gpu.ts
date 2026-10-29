@@ -105,6 +105,17 @@ export function unwrapTarget(
   return { image: raw };
 }
 
+/** Unwraps a target a shader writes and checks it: a buffer of at least
+ *  `bytes` with STORAGE usage. */
+export function unwrapStorageTarget(target: GpuTensor<d.BaseData>, bytes: number): GPUBuffer {
+  const raw = unwrap(target);
+  if (!('mapState' in raw)) {
+    throw new RunntimeError('INVALID_ARGUMENT', 'target: expected a buffer, got a texture');
+  }
+  checkBuffer(raw, bytes, GPUBufferUsage.STORAGE, 'STORAGE', 'target');
+  return raw;
+}
+
 /** Runs `record` on the caller's encoder, or on a new one it then submits. */
 export function encodeWith(
   encoder: GpuEncoder | undefined,

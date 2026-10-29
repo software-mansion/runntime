@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { unwrapSource, unwrapTarget } from '../../../src/zoo/tasks/gpu.ts';
+import { unwrapSource, unwrapStorageTarget, unwrapTarget } from '../../../src/zoo/tasks/gpu.ts';
 
 // The WebGPU usage bits, as the spec numbers them. Node has no WebGPU.
 const BUFFER = { COPY_SRC: 0x4, COPY_DST: 0x8, STORAGE: 0x80 };
@@ -76,6 +76,25 @@ describe('unwrapTarget', () => {
     { name: 'a multisampled texture', target: texture({ sampleCount: 4 }) },
   ])('rejects $name', ({ target }) => {
     expect(() => unwrapTarget(target as GPUTexture, 64)).toThrow(
+      expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
+    );
+  });
+});
+
+describe('unwrapStorageTarget', () => {
+  it.each([
+    { name: 'a buffer of the list size', target: buffer(64, BUFFER.STORAGE) },
+    { name: 'a larger buffer', target: buffer(128, BUFFER.STORAGE | BUFFER.COPY_SRC) },
+  ])('accepts $name', ({ target }) => {
+    expect(unwrapStorageTarget(target, 64)).toBe(target);
+  });
+
+  it.each([
+    { name: 'a buffer smaller than the list', target: buffer(60, BUFFER.STORAGE) },
+    { name: 'a buffer without STORAGE', target: buffer(64, BUFFER.COPY_DST) },
+    { name: 'a texture', target: texture() },
+  ])('rejects $name', ({ target }) => {
+    expect(() => unwrapStorageTarget(target as GPUBuffer, 64)).toThrow(
       expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
     );
   });

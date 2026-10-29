@@ -12,6 +12,7 @@ import {
   uploadF32,
   warmUp,
   writeF32,
+  type F32Buffer,
   type LazyStateDict,
 } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
@@ -22,6 +23,14 @@ export interface Classifier {
   readonly inputSize: number;
   readonly numClasses: number;
   run(pixels: Float32Array): Promise<Float32Array>;
+  /** Records one forward into `encoder`. `fill` records what writes the
+   *  `[3, size, size]` input, `read` what reads the `[numClasses]` logits.
+   *  Nothing is submitted. */
+  encode(
+    encoder: GPUCommandEncoder,
+    fill: (input: F32Buffer) => void,
+    read: (logits: F32Buffer) => void,
+  ): void;
   dispose(): void;
 }
 
@@ -84,8 +93,14 @@ export async function createClassifier(
       queue = job.catch(() => undefined);
       return job;
     };
+    const encode: Classifier['encode'] = (encoder, fill, read) => {
+      fill(buffer);
+      cap.encodeReplay(encoder);
+      // forward() ends in astype(..., 'f32'), so the logits are f32.
+      read(cap.targets.buffer as F32Buffer);
+    };
     await warmUp(root.device, () => run(new Float32Array(3 * size * size)));
-    return { inputSize: size, numClasses: cfg.numClasses, run, dispose };
+    return { inputSize: size, numClasses: cfg.numClasses, run, encode, dispose };
   } catch (err) {
     dispose();
     throw err;

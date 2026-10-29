@@ -1,7 +1,17 @@
 /** Image classification task: an image in, the classes it shows out, best
  *  first. Runs MobileNetV4 on the initRunntime() device. */
 
-import { createResourceScope, RunntimeError, supportsF16 } from '../../../core/index.ts';
+import { d } from 'typegpu';
+import {
+  classScore,
+  classScoreList,
+  createImageToChw,
+  createResourceScope,
+  createSoftmaxTopK,
+  defaultRoot,
+  RunntimeError,
+  supportsF16,
+} from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import { createClassifier } from '../../mobilenetv4/classifier.ts';
@@ -15,6 +25,14 @@ import { type Classification, decodeTopK } from '../../mobilenetv4/pipeline.ts';
 import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
+import {
+  encodeWith,
+  unwrapSource,
+  unwrapStorageTarget,
+  type EncodeOptions,
+  type GpuImage,
+  type GpuTensor,
+} from '../gpu.ts';
 
 /** What to load. With no config, MobileNetV4-Conv-S from the Hugging Face
  *  Hub with the ImageNet class names. */
@@ -35,16 +53,48 @@ export interface ClassifyOptions {
   readonly topk?: number;
 }
 
+/** The model input as a GPU buffer: normalized RGB, `[channel][row][column]`
+ *  f32, `inputSize` wide and high. */
+export type ClassifyInput = d.WgslArray<d.WgslArray<d.WgslArray<d.F32>>>;
+
+/** What encodeClassify writes: the best classes, best first, each a
+ *  `classId` into `labels` and its `confidence`, 0 to 1, as classify()
+ *  returns them. */
+export type ClassificationList = d.WgslArray<typeof classScore>;
+
+export interface EncodeClassifyOptions extends EncodeOptions<
+  GpuImage | GpuTensor<ClassifyInput>,
+  GpuTensor<ClassificationList>
+> {
+  /** How many classes to write, best first. Default: as many as the target
+   *  holds, up to every class. */
+  readonly topk?: number;
+}
+
 export interface ImageClassifier {
   /** The class names, by class index. */
   readonly labels: readonly string[];
   /** Width and height of the model input in pixels. */
   readonly inputSize: number;
+  /** Buffer layouts for encodeClassify, at this runner's size: the model
+   *  input, and the list with room for `topk` classes. Pass one to
+   *  `root.createBuffer` to make a buffer of the right type and size. */
+  readonly schemas: {
+    readonly input: ClassifyInput;
+    readonly output: (topk: number) => ClassificationList;
+  };
   /** Image in, its most likely classes out, best first. */
   classify(
     image: ImageBuffer,
     options?: ClassifyOptions,
   ): Promise<(Classification & { label: string })[]>;
+  /** Records a classification from GPU memory into GPU memory, with no CPU
+   *  copy. A texture source is fitted like an ImageBuffer; a buffer source
+   *  is the model input as-is. The target gets the best classes, ranked on
+   *  the GPU. Work submitted after it sees the result.
+   *  @throws RunntimeError `INVALID_ARGUMENT` for a resource of the wrong
+   *  format, usage or size, or a `topk` out of range. */
+  encodeClassify(options: EncodeClassifyOptions): void;
   /** Frees the weights and every GPU buffer the runner holds. */
   dispose(): void;
 }
@@ -101,6 +151,15 @@ export async function createImageClassifier(
     );
     // One scratch array, rewritten each call; the classifier copies it to the GPU.
     const pixels = new Float32Array(3 * inputSize * inputSize);
+    const root = defaultRoot();
+    const imageToChw = scope.track(createImageToChw(root));
+    const softmaxTopK = createSoftmaxTopK(root);
+    const schemas = {
+      input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),
+      output: classScoreList,
+    };
+    const inputBytes = d.sizeOf(schemas.input);
+    const scoreBytes = d.sizeOf(classScore);
 
     let disposed = false;
     // Calls run one after another: the next preprocess overwrites the scratch
@@ -109,6 +168,7 @@ export async function createImageClassifier(
     return {
       labels,
       inputSize,
+      schemas,
       async classify(image, options = {}) {
         if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'image classifier is disposed');
         const { topk = numClasses } = options;
@@ -127,6 +187,37 @@ export async function createImageClassifier(
             confidence,
           }),
         );
+      },
+      encodeClassify(options) {
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'image classifier is disposed');
+        const { source, target, encoder } = options;
+        const src = unwrapSource(source, inputBytes);
+        const out = unwrapStorageTarget(target, scoreBytes);
+        const capacity = Math.min(Math.floor(out.size / scoreBytes), numClasses);
+        const { topk = capacity } = options;
+        if (!Number.isInteger(topk) || topk < 1 || topk > capacity) {
+          throw new RunntimeError(
+            'INVALID_ARGUMENT',
+            `encodeClassify: topk must be an integer from 1 to ${capacity}, what the target holds, got ${topk}`,
+          );
+        }
+        try {
+          encodeWith(encoder, (enc) =>
+            classifier.encode(
+              enc,
+              (input) => {
+                if ('tensor' in src) {
+                  enc.copyBufferToBuffer(src.tensor, 0, root.unwrap(input), 0, inputBytes);
+                } else {
+                  imageToChw.encode(enc, src.image, input, preprocessor.gpuArgs);
+                }
+              },
+              (logits) => softmaxTopK.encode(enc, logits, out, { n: numClasses, k: topk }),
+            ),
+          );
+        } catch (err) {
+          rethrowRunError(err);
+        }
       },
       dispose() {
         disposed = true;

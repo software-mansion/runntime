@@ -28,6 +28,16 @@ export { ACC_F16, ACC_F32, getMatmulAccum, setMatmulAccum } from './kernels/matm
 export type { F16Buffer, F32Buffer, KernelHandle, U32Buffer, V4Buffer } from './kernels/common.ts';
 export { createImageToChw, type FitMode, type ImageToChwArgs } from './kernels/image/imageToChw.ts';
 export { createMapToTexture } from './kernels/image/mapToTexture.ts';
+export {
+  createDecodeDetections,
+  detectionList,
+  instanceSegmentation,
+  keypointDetection,
+  objectDetection,
+  type DecodeTask,
+  type DetectionList,
+} from './kernels/detect/decodeDetections.ts';
+export { classScore, classScoreList, createSoftmaxTopK } from './kernels/reduce/softmaxTopK.ts';
 // --- Eager runtime ---
 import './graph/methods.ts'; // attaches the torch-style method forms to Value
 export { Value, c4of, elemBytes, hwc4Meta, materialized, matrix, tensor3d } from './graph/value.ts';

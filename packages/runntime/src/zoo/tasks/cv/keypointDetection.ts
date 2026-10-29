@@ -1,11 +1,16 @@
 /** Keypoint detection task: an image in, the people in it out, each with a
  *  box and 17 COCO landmarks. Runs YOLO26 pose on the initRunntime() device. */
 
-import { createResourceScope, RunntimeError } from '../../../core/index.ts';
+import {
+  createResourceScope,
+  keypointDetection,
+  RunntimeError,
+  type DetectionList,
+} from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
-import { createDetector, POSE_KEYPOINTS } from '../../yolo26/detector.ts';
+import { createDetector, POSE_KEYPOINTS, type Yolo26Input } from '../../yolo26/detector.ts';
 import {
   COCO_LANDMARKS,
   COCO_SKELETON,
@@ -16,7 +21,9 @@ import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { decodeBox, scaleBox, type BoundingBox } from './ops/box.ts';
 import { scalePoint, type Point } from './ops/point.ts';
+import { createDetectionEncoder } from './utils/encodeDetections.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
+import type { EncodeOptions, GpuImage, GpuTensor } from '../gpu.ts';
 
 /** What to load. Every field is optional; a missing `modelPath` comes from
  *  models.keypointDetection.YOLO26_POSE.DEFAULT. */
@@ -57,16 +64,52 @@ export interface KeypointDetection {
   readonly landmarks: Readonly<Record<CocoLandmark, Landmark>>;
 }
 
+/** One person as encodeDetectKeypoints writes it: `box` in pixels of the
+ *  source image, `confidence` 0 to 1, and the 17 `landmarks` in
+ *  `landmarkNames` order, each `x`, `y` in image pixels and `confidence`. */
+export type KeypointDetectionData = ReturnType<typeof keypointDetection>;
+
+/** What encodeDetectKeypoints writes: `count` people, best first, then
+ *  unused room. */
+export type KeypointDetectionList = DetectionList<KeypointDetectionData>;
+
+export interface EncodeDetectKeypointsOptions extends EncodeOptions<
+  GpuImage | GpuTensor<Yolo26Input>,
+  GpuTensor<KeypointDetectionList>
+> {
+  /** Drops people scored below this, 0 to 1. Default 0.3. */
+  readonly confidenceThreshold?: number;
+  /** At most this many people, best first. Default: as many as the target
+   *  holds. */
+  readonly maxDetections?: number;
+}
+
 export interface KeypointDetector {
   /** The landmark names, in `COCO_LANDMARKS` order. */
   readonly landmarkNames: readonly CocoLandmark[];
   /** Pairs of landmark names to draw as limbs. */
   readonly skeleton: readonly (readonly [CocoLandmark, CocoLandmark])[];
+  /** Width and height of the model input in pixels. */
+  readonly inputSize: number;
+  /** Buffer layouts for encodeDetectKeypoints, at this runner's size: the
+   *  model input, and the list with room for `maxDetections` people. Pass
+   *  one to `root.createBuffer` to make a buffer of the right type and size. */
+  readonly schemas: {
+    readonly input: Yolo26Input;
+    readonly output: (maxDetections: number) => KeypointDetectionList;
+  };
   /** Image in, the people in it out, best first. */
   detectKeypoints(
     image: ImageBuffer,
     options?: DetectKeypointsOptions,
   ): Promise<KeypointDetection[]>;
+  /** Records a detection from GPU memory into GPU memory, with no CPU
+   *  copy. A texture source is fitted like an ImageBuffer; a buffer source
+   *  is the model input as-is. The target gets the list of people, decoded on
+   *  the GPU. Work submitted after it sees the result.
+   *  @throws RunntimeError `INVALID_ARGUMENT` for a resource of the wrong
+   *  format, usage or size, or an option out of range. */
+  encodeDetectKeypoints(options: EncodeDetectKeypointsOptions): void;
   /** Frees the weights and every GPU buffer the runner holds. */
   dispose(): void;
 }
@@ -110,6 +153,13 @@ export async function createKeypointDetector(
     );
     // One scratch array, rewritten each call; the detector copies it to the GPU.
     const pixels = new Float32Array(3 * inputSize * inputSize);
+    const encoder = scope.track(
+      createDetectionEncoder(detector, preprocessor, keypointDetection(POSE_KEYPOINTS), {
+        numExtra: POSE_KEYPOINTS,
+        maskSize: 0,
+      }),
+    );
+    const schemas = { input: detector.schemas.input, output: encoder.schema };
 
     let disposed = false;
     // Calls run one after another: the next preprocess overwrites the scratch
@@ -118,6 +168,8 @@ export async function createKeypointDetector(
     return {
       landmarkNames: COCO_LANDMARKS,
       skeleton: COCO_SKELETON.map(([a, b]) => [COCO_LANDMARKS[a]!, COCO_LANDMARKS[b]!] as const),
+      inputSize,
+      schemas,
       async detectKeypoints(image, options = {}) {
         if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'keypoint detector is disposed');
         const { confidenceThreshold = 0.3, maxDetections = 300 } = options;
@@ -149,6 +201,10 @@ export async function createKeypointDetector(
             landmarks,
           };
         });
+      },
+      encodeDetectKeypoints(options) {
+        if (disposed) throw new RunntimeError('RESOURCE_DISPOSED', 'keypoint detector is disposed');
+        encoder.encode(options);
       },
       dispose() {
         disposed = true;
