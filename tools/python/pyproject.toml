@@ -1,0 +1,37 @@
+[project]
+name = "runntime-tools"
+version = "0.1.0"
+description = "Quantizes safetensors checkpoints to runntime's int8/int4 weight format."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.0"]
+
+[project.scripts]
+runntime = "runntime_tools.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.24,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+    "safetensors>=0.8.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RET", "PL", "PERF", "RUF"]
+ignore = ["PLR2004", "PLR0911"]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+strict = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
