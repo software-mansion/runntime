@@ -23,15 +23,15 @@ Seconds of audio transcribed per second. **Higher is better.**
 
 <BenchBars
   rows={[
-    { label: 'ruNNtime tiny', value: 89, unit: '×', ours: true },
-    { label: 'ruNNtime tiny, tjs plugin', value: 92, unit: '×', ours: true },
-    { label: 'transformers.js tiny fp32', value: 33, unit: '×' },
-    { label: 'transformers.js tiny q4', value: 34, unit: '×' },
-    { label: 'ruNNtime base', value: 52, unit: '×', ours: true },
-    { label: 'ruNNtime base, tjs plugin', value: 53, unit: '×', ours: true },
-    { label: 'transformers.js base fp32', value: 24, unit: '×' },
-    { label: 'transformers.js base q4', value: 26, unit: '×' },
-    { label: 'ruNNtime streaming tiny', value: 87, unit: '×', ours: true },
+    { label: 'ruNNtime tiny', value: 137, unit: '×', ours: true },
+    { label: 'ruNNtime tiny, tjs plugin', value: 139, unit: '×', ours: true },
+    { label: 'transformers.js tiny fp32', value: 20, unit: '×' },
+    { label: 'transformers.js tiny q4', value: 20, unit: '×' },
+    { label: 'ruNNtime base', value: 78, unit: '×', ours: true },
+    { label: 'ruNNtime base, tjs plugin', value: 78, unit: '×', ours: true },
+    { label: 'transformers.js base fp32', value: 15, unit: '×' },
+    { label: 'transformers.js base q4', value: 15, unit: '×' },
+    { label: 'ruNNtime streaming tiny', value: 123, unit: '×', ours: true },
   ]}
 />
 
@@ -42,31 +42,31 @@ Decode time per generated token. **Lower is better.**
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime tiny', value: 2.8, unit: ' ms', ours: true },
-    { label: 'ruNNtime tiny, tjs plugin', value: 2.7, unit: ' ms', ours: true },
-    { label: 'transformers.js tiny fp32', value: 7.2, unit: ' ms' },
-    { label: 'transformers.js tiny q4', value: 6.9, unit: ' ms' },
-    { label: 'ruNNtime base', value: 4.9, unit: ' ms', ours: true },
-    { label: 'ruNNtime base, tjs plugin', value: 4.8, unit: ' ms', ours: true },
-    { label: 'transformers.js base fp32', value: 9.6, unit: ' ms' },
-    { label: 'transformers.js base q4', value: 9.0, unit: ' ms' },
-    { label: 'ruNNtime streaming tiny', value: 2.9, unit: ' ms', ours: true },
+    { label: 'ruNNtime tiny', value: 1.8, unit: ' ms', ours: true },
+    { label: 'ruNNtime tiny, tjs plugin', value: 1.7, unit: ' ms', ours: true },
+    { label: 'transformers.js tiny fp32', value: 12.1, unit: ' ms' },
+    { label: 'transformers.js tiny q4', value: 12.3, unit: ' ms' },
+    { label: 'ruNNtime base', value: 2.6, unit: ' ms', ours: true },
+    { label: 'ruNNtime base, tjs plugin', value: 2.6, unit: ' ms', ours: true },
+    { label: 'transformers.js base fp32', value: 16.3, unit: ' ms' },
+    { label: 'transformers.js base q4', value: 15.9, unit: ' ms' },
+    { label: 'ruNNtime streaming tiny', value: 1.9, unit: ' ms', ours: true },
   ]}
 />
 
 ### All numbers
 
-| Model          | Engine               | Precision | × realtime | ms per token | 66 min of audio in |
-| -------------- | -------------------- | --------- | ---------- | ------------ | ------------------ |
-| tiny           | ruNNtime             | f16       | 89         | 2.8          | 43 s               |
-| tiny           | ruNNtime, tjs plugin | f16       | 92         | 2.7          | 42 s               |
-| tiny           | transformers.js      | fp32      | 33         | 7.2          | 120 s              |
-| tiny           | transformers.js      | q4        | 34         | 6.9          | 118 s              |
-| base           | ruNNtime             | f16       | 52         | 4.9          | 75 s               |
-| base           | ruNNtime, tjs plugin | f16       | 53         | 4.8          | 73 s               |
-| base           | transformers.js      | fp32      | 24         | 9.6          | 167 s              |
-| base           | transformers.js      | q4        | 26         | 9.0          | 157 s              |
-| streaming tiny | ruNNtime             | f16       | 87         | 2.9          | 48 s               |
+| Model          | Engine               | Precision | × realtime | ms per token |
+| -------------- | -------------------- | --------- | ---------- | ------------ |
+| tiny           | ruNNtime             | f16       | 137        | 1.8          |
+| tiny           | ruNNtime, tjs plugin | f16       | 139        | 1.7          |
+| tiny           | transformers.js      | fp32      | 20         | 12.1         |
+| tiny           | transformers.js      | q4        | 20         | 12.3         |
+| base           | ruNNtime             | f16       | 78         | 2.6          |
+| base           | ruNNtime, tjs plugin | f16       | 78         | 2.6          |
+| base           | transformers.js      | fp32      | 15         | 16.3         |
+| base           | transformers.js      | q4        | 15         | 15.9         |
+| streaming tiny | ruNNtime             | f16       | 123        | 1.9          |
 
 ## Text embedding
 
@@ -84,23 +84,11 @@ fp16 and q4 exports.
 
 <BenchBars
   rows={[
-    { label: 'ruNNtime', value: 351, unit: '/s', ours: true },
-    { label: 'ruNNtime, tjs plugin', value: 190, unit: '/s', ours: true },
-    { label: 'transformers.js fp32', value: 81, unit: '/s' },
-    { label: 'transformers.js fp16', value: 117, unit: '/s' },
-    { label: 'transformers.js q4', value: 91, unit: '/s' },
-  ]}
-/>
-
-#### Batch of 8
-
-<BenchBars
-  rows={[
-    { label: 'ruNNtime', value: 303, unit: '/s', ours: true },
-    { label: 'ruNNtime, tjs plugin', value: 191, unit: '/s', ours: true },
-    { label: 'transformers.js fp32', value: 117, unit: '/s' },
-    { label: 'transformers.js fp16', value: 156, unit: '/s' },
-    { label: 'transformers.js q4', value: 120, unit: '/s' },
+    { label: 'ruNNtime', value: 596, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 230, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 87, unit: '/s' },
+    { label: 'transformers.js fp16', value: 128, unit: '/s' },
+    { label: 'transformers.js q4', value: 93, unit: '/s' },
   ]}
 />
 
@@ -110,12 +98,159 @@ Milliseconds per paragraph.
 
 | Engine               | Precision | Batch 1 | Batch 8 | Batch 32 |
 | -------------------- | --------- | ------- | ------- | -------- |
-| ruNNtime             | f16       | 7.0     | 3.1     | 2.7      |
-| ruNNtime             | f32       | 6.2     | 4.1     | 4.5      |
-| ruNNtime, tjs plugin | f16       | 9.1     | 4.8     | 5.2      |
-| transformers.js      | fp32      | 7.7     | 7.6     | 11.3     |
-| transformers.js      | fp16      | 6.6     | 5.9     | 8.3      |
-| transformers.js      | q4        | 7.7     | 7.1     | 10.9     |
+| ruNNtime             | f16       | 3.4     | 1.8     | 1.6      |
+| ruNNtime             | f32       | 4.1     | 2.5     | 2.3      |
+| ruNNtime, tjs plugin | f16       | 5.5     | 3.5     | 4.2      |
+| transformers.js      | fp32      | 7.8     | 7.0     | 10.8     |
+| transformers.js      | fp16      | 6.8     | 5.0     | 7.9      |
+| transformers.js      | q4        | 6.9     | 7.0     | 10.6     |
+
+## Embedding (EmbeddingGemma 2)
+
+[EmbeddingGemma 2](/zoo/embedding/) on text, images, audio and video.
+ruNNtime runs the f16 weights in half precision, its default, and the f32
+weights. transformers.js runs the fp32 ONNX export, its WebGPU default, plus
+the fp16, q4 and q4f16 exports. The model is not in the plugin, so there is
+no plugin row.
+
+### Text
+
+1000 paragraphs in batches of 1, 8 and 32 paragraphs per call.
+
+#### Paragraphs per second, batch of 32
+
+**Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime', value: 40.5, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 10.2, unit: '/s' },
+    { label: 'transformers.js q4', value: 9.2, unit: '/s' },
+  ]}
+/>
+
+#### Paragraphs per second, batch of 1
+
+**Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime', value: 27.6, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 17.7, unit: '/s' },
+    { label: 'transformers.js fp16', value: 23.7, unit: '/s' },
+    { label: 'transformers.js q4', value: 17.1, unit: '/s' },
+    { label: 'transformers.js q4f16', value: 20.5, unit: '/s' },
+  ]}
+/>
+
+#### All numbers
+
+Paragraphs per second.
+
+| Engine          | Precision | Batch 1 | Batch 8 | Batch 32 |
+| --------------- | --------- | ------- | ------- | -------- |
+| ruNNtime        | f16       | 27.6    | 39.8    | 40.5     |
+| ruNNtime        | f32       | 20.5    | 26.0    | 26.6     |
+| transformers.js | fp32      | 17.7    | 14.3    | 10.2     |
+| transformers.js | fp16      | 23.7    | 21.9    | 16.2     |
+| transformers.js | q4        | 17.1    | 12.9    | 9.2      |
+| transformers.js | q4f16     | 20.5    | 18.7    | 13.9     |
+
+At batch 32, the transformers.js fp16 and q4f16 vectors do not match
+ruNNtime's, so those two cells are not in the chart.
+
+### Images
+
+The first 100 COCO photos, one photo per call.
+
+#### Images per second
+
+**Higher is better.**
+
+<BenchBars
+  digits={2}
+  rows={[
+    { label: 'ruNNtime', value: 1.73, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 1.01, unit: '/s' },
+    { label: 'transformers.js fp16', value: 1.52, unit: '/s' },
+    { label: 'transformers.js q4', value: 0.95, unit: '/s' },
+    { label: 'transformers.js q4f16', value: 1.35, unit: '/s' },
+  ]}
+/>
+
+#### All numbers
+
+| Engine          | Precision | ms per image | Images per second |
+| --------------- | --------- | ------------ | ----------------- |
+| ruNNtime        | f16       | 576          | 1.73              |
+| ruNNtime        | f32       | 789          | 1.27              |
+| transformers.js | fp32      | 985          | 1.01              |
+| transformers.js | fp16      | 656          | 1.52              |
+| transformers.js | q4        | 1044         | 0.95              |
+| transformers.js | q4f16     | 739          | 1.35              |
+
+### Audio
+
+500 LibriSpeech clips, 66 minutes of speech, one clip per call.
+
+#### × realtime
+
+Seconds of audio embedded per second. **Higher is better.**
+
+<BenchBars
+  digits={1}
+  rows={[
+    { label: 'ruNNtime', value: 69.5, unit: '×', ours: true },
+    { label: 'transformers.js fp32', value: 42.9, unit: '×' },
+    { label: 'transformers.js fp16', value: 61.9, unit: '×' },
+    { label: 'transformers.js q4', value: 42.3, unit: '×' },
+    { label: 'transformers.js q4f16', value: 52.8, unit: '×' },
+  ]}
+/>
+
+#### All numbers
+
+| Engine          | Precision | ms per clip | Clips per second | × realtime |
+| --------------- | --------- | ----------- | ---------------- | ---------- |
+| ruNNtime        | f16       | 94.9        | 8.81             | 69.5       |
+| ruNNtime        | f32       | 134.7       | 6.43             | 50.8       |
+| transformers.js | fp32      | 159.3       | 5.44             | 42.9       |
+| transformers.js | fp16      | 109.0       | 7.84             | 61.9       |
+| transformers.js | q4        | 157.4       | 5.36             | 42.3       |
+| transformers.js | q4f16     | 131.0       | 6.68             | 52.8       |
+
+### Video
+
+40 Wikimedia Commons clips, 4 to 14 s each, one frame per second, one
+clip per call.
+
+#### Clips per second
+
+**Higher is better.**
+
+<BenchBars
+  digits={2}
+  rows={[
+    { label: 'ruNNtime', value: 0.45, unit: '/s', ours: true },
+    { label: 'transformers.js fp32', value: 0.23, unit: '/s' },
+    { label: 'transformers.js fp16', value: 0.34, unit: '/s' },
+    { label: 'transformers.js q4', value: 0.2, unit: '/s' },
+    { label: 'transformers.js q4f16', value: 0.31, unit: '/s' },
+  ]}
+/>
+
+#### All numbers
+
+| Engine          | Precision | ms per clip | Clips per second |
+| --------------- | --------- | ----------- | ---------------- |
+| ruNNtime        | f16       | 2286        | 0.45             |
+| ruNNtime        | f32       | 3335        | 0.30             |
+| transformers.js | fp32      | 4261        | 0.23             |
+| transformers.js | fp16      | 3062        | 0.34             |
+| transformers.js | q4        | 5119        | 0.20             |
+| transformers.js | q4f16     | 3329        | 0.31             |
 
 ## Image classification
 
@@ -132,10 +267,10 @@ image preprocessing, which is most of that row's time.
 <BenchBars
   rows={[
     { label: 'ruNNtime', value: 407, unit: ' fps', ours: true },
-    { label: 'ruNNtime, tjs plugin', value: 103, unit: ' fps', ours: true },
-    { label: 'transformers.js fp32', value: 87, unit: ' fps' },
-    { label: 'transformers.js fp16', value: 86, unit: ' fps' },
-    { label: 'transformers.js q4', value: 83, unit: ' fps' },
+    { label: 'ruNNtime, tjs plugin', value: 109, unit: ' fps', ours: true },
+    { label: 'transformers.js fp32', value: 95, unit: ' fps' },
+    { label: 'transformers.js fp16', value: 96, unit: ' fps' },
+    { label: 'transformers.js q4', value: 96, unit: ' fps' },
   ]}
 />
 
@@ -144,10 +279,10 @@ image preprocessing, which is most of that row's time.
 | Engine               | Precision | ms per image | FPS |
 | -------------------- | --------- | ------------ | --- |
 | ruNNtime             | f16       | 2.4          | 407 |
-| ruNNtime, tjs plugin | f16       | 9.4          | 103 |
-| transformers.js      | fp32      | 10.9         | 87  |
-| transformers.js      | fp16      | 11.2         | 86  |
-| transformers.js      | q4        | 11.7         | 83  |
+| ruNNtime, tjs plugin | f16       | 9.0          | 109 |
+| transformers.js      | fp32      | 10.1         | 95  |
+| transformers.js      | fp16      | 9.9          | 96  |
+| transformers.js      | q4        | 10.0         | 96  |
 
 ## Depth estimation
 
@@ -163,8 +298,8 @@ image preprocessing, which is most of that row's time.
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime', value: 51, unit: ' fps', ours: true },
-    { label: 'ruNNtime, tjs plugin', value: 20, unit: ' fps', ours: true },
+    { label: 'ruNNtime', value: 74, unit: ' fps', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 23, unit: ' fps', ours: true },
   ]}
 />
 
@@ -172,8 +307,8 @@ image preprocessing, which is most of that row's time.
 
 | Engine               | Precision | ms per image | FPS |
 | -------------------- | --------- | ------------ | --- |
-| ruNNtime             | f16       | 19.3         | 51  |
-| ruNNtime, tjs plugin | f16       | 50.1         | 20  |
+| ruNNtime             | f16       | 13.3         | 74  |
+| ruNNtime, tjs plugin | f16       | 41.4         | 23  |
 
 ## Object detection
 
@@ -190,21 +325,21 @@ Through the plugin, ruNNtime keeps transformers.js's image preprocessing.
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime n', value: 61.0, unit: ' fps', ours: true },
-    { label: 'ruNNtime n, tjs plugin', value: 27.1, unit: ' fps', ours: true },
-    { label: 'transformers.js n fp32', value: 22.8, unit: ' fps' },
-    { label: 'transformers.js n fp16', value: 24.0, unit: ' fps' },
-    { label: 'transformers.js n q4', value: 22.2, unit: ' fps' },
-    { label: 'ruNNtime s', value: 32.1, unit: ' fps', ours: true },
-    { label: 'ruNNtime s, tjs plugin', value: 20.0, unit: ' fps', ours: true },
-    { label: 'transformers.js s fp32', value: 17.4, unit: ' fps' },
-    { label: 'transformers.js s fp16', value: 19.4, unit: ' fps' },
-    { label: 'transformers.js s q4', value: 17.3, unit: ' fps' },
-    { label: 'ruNNtime m', value: 13.6, unit: ' fps', ours: true },
-    { label: 'ruNNtime m, tjs plugin', value: 11.1, unit: ' fps', ours: true },
-    { label: 'transformers.js m fp32', value: 11.2, unit: ' fps' },
-    { label: 'transformers.js m fp16', value: 13.7, unit: ' fps' },
-    { label: 'transformers.js m q4', value: 11.3, unit: ' fps' },
+    { label: 'ruNNtime n', value: 77.1, unit: ' fps', ours: true },
+    { label: 'ruNNtime n, tjs plugin', value: 64.7, unit: ' fps', ours: true },
+    { label: 'transformers.js n fp32', value: 24.7, unit: ' fps' },
+    { label: 'transformers.js n fp16', value: 25.9, unit: ' fps' },
+    { label: 'transformers.js n q4', value: 24.3, unit: ' fps' },
+    { label: 'ruNNtime s', value: 43.6, unit: ' fps', ours: true },
+    { label: 'ruNNtime s, tjs plugin', value: 43.1, unit: ' fps', ours: true },
+    { label: 'transformers.js s fp32', value: 19.5, unit: ' fps' },
+    { label: 'transformers.js s fp16', value: 21.1, unit: ' fps' },
+    { label: 'transformers.js s q4', value: 19.9, unit: ' fps' },
+    { label: 'ruNNtime m', value: 25.1, unit: ' fps', ours: true },
+    { label: 'ruNNtime m, tjs plugin', value: 24.9, unit: ' fps', ours: true },
+    { label: 'transformers.js m fp32', value: 11.8, unit: ' fps' },
+    { label: 'transformers.js m fp16', value: 14.3, unit: ' fps' },
+    { label: 'transformers.js m q4', value: 11.9, unit: ' fps' },
   ]}
 />
 
@@ -212,21 +347,26 @@ Through the plugin, ruNNtime keeps transformers.js's image preprocessing.
 
 | Model | Engine               | Precision | ms per image | FPS  |
 | ----- | -------------------- | --------- | ------------ | ---- |
-| n     | ruNNtime             | f16       | 16.3         | 61.0 |
-| n     | ruNNtime, tjs plugin | f16       | 34.5         | 27.1 |
-| n     | transformers.js      | fp32      | 42.5         | 22.8 |
-| n     | transformers.js      | fp16      | 37.9         | 24.0 |
-| n     | transformers.js      | q4        | 46.4         | 22.2 |
-| s     | ruNNtime             | f16       | 31.0         | 32.1 |
-| s     | ruNNtime, tjs plugin | f16       | 48.5         | 20.0 |
-| s     | transformers.js      | fp32      | 56.6         | 17.4 |
-| s     | transformers.js      | fp16      | 50.6         | 19.4 |
-| s     | transformers.js      | q4        | 57.7         | 17.3 |
-| m     | ruNNtime             | f16       | 73.0         | 13.6 |
-| m     | ruNNtime, tjs plugin | f16       | 89.6         | 11.1 |
-| m     | transformers.js      | fp32      | 88.6         | 11.2 |
-| m     | transformers.js      | fp16      | 72.4         | 13.7 |
-| m     | transformers.js      | q4        | 88.6         | 11.3 |
+| n     | ruNNtime             | f16       | 12.9         | 77.1 |
+| n     | ruNNtime, tjs plugin | f16       | 15.1         | 64.7 |
+| n     | transformers.js      | fp32      | 40.9         | 24.7 |
+| n     | transformers.js      | fp16      | 38.1         | 25.9 |
+| n     | transformers.js      | q4        | 42.1         | 24.3 |
+| s     | ruNNtime             | f16       | 22.7         | 43.6 |
+| s     | ruNNtime, tjs plugin | f16       | 23.2         | 43.1 |
+| s     | transformers.js      | fp32      | 48.9         | 19.5 |
+| s     | transformers.js      | fp16      | 43.4         | 21.1 |
+| s     | transformers.js      | q4        | 49.1         | 19.9 |
+| m     | ruNNtime             | f16       | 39.8         | 25.1 |
+| m     | ruNNtime, tjs plugin | f16       | 39.8         | 24.9 |
+| m     | transformers.js      | fp32      | 84.9         | 11.8 |
+| m     | transformers.js      | fp16      | 69.5         | 14.3 |
+| m     | transformers.js      | q4        | 83.7         | 11.9 |
+
+The transformers.js rows run the same model and the same compute, but
+their boxes are wrong: the ONNX export's config makes transformers.js score
+classes with softmax instead of sigmoid, so it keeps about 96 boxes per
+image where ruNNtime finds 4.5.
 
 ## Pose and instance segmentation
 
@@ -243,9 +383,9 @@ there is no row to compare with.
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime n', value: 53.6, unit: ' fps', ours: true },
-    { label: 'ruNNtime s', value: 29.3, unit: ' fps', ours: true },
-    { label: 'ruNNtime m', value: 12.8, unit: ' fps', ours: true },
+    { label: 'ruNNtime n', value: 72.0, unit: ' fps', ours: true },
+    { label: 'ruNNtime s', value: 44.0, unit: ' fps', ours: true },
+    { label: 'ruNNtime m', value: 24.6, unit: ' fps', ours: true },
   ]}
 />
 
@@ -256,9 +396,9 @@ there is no row to compare with.
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime n', value: 43.0, unit: ' fps', ours: true },
-    { label: 'ruNNtime s', value: 20.1, unit: ' fps', ours: true },
-    { label: 'ruNNtime m', value: 7.2, unit: ' fps', ours: true },
+    { label: 'ruNNtime n', value: 60.3, unit: ' fps', ours: true },
+    { label: 'ruNNtime s', value: 34.1, unit: ' fps', ours: true },
+    { label: 'ruNNtime m', value: 16.4, unit: ' fps', ours: true },
   ]}
 />
 
@@ -268,17 +408,17 @@ Pose:
 
 | Model | Engine   | Precision | ms per image | FPS  |
 | ----- | -------- | --------- | ------------ | ---- |
-| n     | ruNNtime | f16       | 18.5         | 53.6 |
-| s     | ruNNtime | f16       | 34.0         | 29.3 |
-| m     | ruNNtime | f16       | 77.9         | 12.8 |
+| n     | ruNNtime | f16       | 13.6         | 72.0 |
+| s     | ruNNtime | f16       | 22.7         | 44.0 |
+| m     | ruNNtime | f16       | 40.6         | 24.6 |
 
 Instance segmentation:
 
 | Model | Engine   | Precision | ms per image | FPS  |
 | ----- | -------- | --------- | ------------ | ---- |
-| n     | ruNNtime | f16       | 23.0         | 43.0 |
-| s     | ruNNtime | f16       | 49.3         | 20.1 |
-| m     | ruNNtime | f16       | 138          | 7.2  |
+| n     | ruNNtime | f16       | 16.4         | 60.3 |
+| s     | ruNNtime | f16       | 29.1         | 34.1 |
+| m     | ruNNtime | f16       | 60.9         | 16.4 |
 
 ## Privacy filter
 
@@ -296,10 +436,10 @@ Through the plugin, ruNNtime keeps transformers.js's tokenizer.
 <BenchBars
   digits={1}
   rows={[
-    { label: 'ruNNtime', value: 32.3, unit: '/s', ours: true },
-    { label: 'ruNNtime, tjs plugin', value: 32.2, unit: '/s', ours: true },
-    { label: 'transformers.js q4', value: 11.7, unit: '/s' },
-    { label: 'transformers.js q4f16', value: 15.0, unit: '/s' },
+    { label: 'ruNNtime', value: 61.4, unit: '/s', ours: true },
+    { label: 'ruNNtime, tjs plugin', value: 62.1, unit: '/s', ours: true },
+    { label: 'transformers.js q4', value: 13.3, unit: '/s' },
+    { label: 'transformers.js q4f16', value: 14.0, unit: '/s' },
   ]}
 />
 
@@ -307,17 +447,17 @@ Through the plugin, ruNNtime keeps transformers.js's tokenizer.
 
 | Engine               | Precision | ms per text | Texts per second |
 | -------------------- | --------- | ----------- | ---------------- |
-| ruNNtime             | int8      | 31.8        | 32.3             |
-| ruNNtime, tjs plugin | int8      | 31.8        | 32.2             |
-| transformers.js      | q4        | 85.9        | 11.7             |
-| transformers.js      | q4f16     | 67.5        | 15.0             |
+| ruNNtime             | int8      | 16.4        | 61.4             |
+| ruNNtime, tjs plugin | int8      | 16.2        | 62.1             |
+| transformers.js      | q4        | 76.4        | 13.3             |
+| transformers.js      | q4f16     | 72.0        | 14.0             |
 
 ## How we measure
 
-- **Machine**: MacBook Pro, Apple M2 Pro, 16 GB, Chromium 148, WebGPU on
-  Metal.
+- **Machine**: MacBook Pro, Apple M2 Pro, 16 GB, headless Chromium 156,
+  WebGPU on Metal. Measured October 27 and 28, 2026.
 - **Setup**: ruNNtime as in [Getting started](/zoo/getting-started/), with
-  `subgroups` and `shader-f16`, the hosted weights. transformers.js 4.2.0,
+  `subgroups` and `shader-f16`, the hosted weights. transformers.js 4.3.1,
   `device: 'webgpu'`, the `onnx-community`, `Xenova` and `openai` ONNX
   exports at the row's `dtype`.
 - **Timing**: one engine loaded at a time, every input runs once untimed
@@ -336,6 +476,11 @@ Through the plugin, ruNNtime keeps transformers.js's tokenizer.
   whole set over the time it took. ms per paragraph is the median call
   time over the batch size. Every vector is checked against the ruNNtime f32
   output.
+- **EmbeddingGemma 2**: text as above, the first 100 COCO val2017 photos,
+  the 500 LibriSpeech clips from speech to text, and 40 Wikimedia Commons
+  clips of 4 to 14 s sampled at one frame per second, the same inputs for
+  every engine. One input per call for images, audio and video. Every
+  vector is checked against ruNNtime's.
 - **Vision tasks**: image classification, depth estimation, object
   detection, pose and instance segmentation run on the first 500
   [COCO](https://cocodataset.org/) val2017 photos under a license that
