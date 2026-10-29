@@ -85,6 +85,10 @@ uploads or warms up.
 The full list of codes is exported as `RUNNTIME_ERROR_CODES`, and the
 type of one code as `RunntimeErrorCode`.
 
+A [text generation](/zoo/text-generation/#stopping-early) call that you
+stop with its own `signal` is the one exception: `generate()` rejects with
+the signal's reason, like `fetch()` does, not with a code.
+
 ## Cancelling a load
 
 Every `create` call takes an `AbortSignal`. Use it when the user leaves the

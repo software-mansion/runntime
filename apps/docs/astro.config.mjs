@@ -145,6 +145,7 @@ export default defineConfig({
                   label: 'Models',
                   items: [
                     { label: 'Embedding', slug: 'zoo/embedding' },
+                    { label: 'Text generation', slug: 'zoo/text-generation' },
                     { label: 'Speech to text', slug: 'zoo/speech-to-text' },
                     { label: 'Privacy filter', slug: 'zoo/privacy-filter' },
                     { label: 'Object detection', slug: 'zoo/object-detection' },
