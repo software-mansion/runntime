@@ -1,7 +1,7 @@
 /** Dispatch specs for the convolution kernels (kernels/conv). */
 
 import { elemFor } from '../../kernels/elem.ts';
-import { conv1dHandle, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
+import { conv1dHandle, conv1dLoadA, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
 import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
 import {
   createMatmulTiledVec4Pipeline,
@@ -59,8 +59,8 @@ export const conv1dSpec = defineSpec({
     const cIn = node.pending!.inputs[0]!.shape.dims![1]!;
     const cOut = node.shape.dims![1]!;
     // An output frame reads kernel·cIn inputs, so the conv runs as the tiled
-    // matmul. Unpadded and undilated they are contiguous; otherwise the kernel
-    // maps each tap to its input frame.
+    // matmul. Unpadded and undilated they are contiguous; otherwise
+    // conv1dLoadA maps each tap to its input frame.
     const gemm = cIn % 4 === 0 && matmulTiledVec4Eligible(attrs.kernel * cIn, cOut);
     const mapped = attrs.padLeft > 0 || attrs.padRight > 0 || attrs.dilation > 1;
     return {
@@ -86,17 +86,9 @@ export const conv1dSpec = defineSpec({
             hasAdd: 0,
             act: cfg.act,
             aStride: cfg.stride * cfg.cIn,
-            conv:
-              cfg.gemm === 2
-                ? {
-                    cIn: cfg.cIn,
-                    stride: cfg.stride,
-                    dilation: cfg.dilation,
-                    padLeft: cfg.padLeft,
-                  }
-                : undefined,
           },
           elemFor(dtype),
+          cfg.gemm === 2 ? conv1dLoadA(elemFor(dtype), cfg) : undefined,
         )
       : createConv1dPipeline(root, cfg, elemFor(dtype)),
   encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
