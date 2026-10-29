@@ -55,8 +55,9 @@ The model runs in half precision, so the device needs `shader-f16`.
 
 ## Try it yourself
 
-Your camera, frame by frame through `estimateDepth()` on your GPU. The map
-is colored near to far, warm to cold, and stretched over the frame. No
+Your camera, frame by frame through `encodeEstimateDepth()` on your GPU, as
+in [GPU in, GPU out](#gpu-in-gpu-out): the frame never leaves the GPU and the
+map is drawn straight into the canvas, nearest black, farthest white. No
 camera? The sample picture goes through the same call.
 
 <Depth client:only="react" />
