@@ -1,5 +1,6 @@
 import { imageBufferFromImageData, type ImageBuffer } from 'runntime/zoo';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { initEngine } from './engine.ts';
 
 /** Shipped with the docs, for readers without a camera. `BASE_URL` is what
  *  the site is served under, so the path holds up under /runntime/ too. */
@@ -10,28 +11,35 @@ const FRAME_WIDTH = 640;
 
 type Facing = 'user' | 'environment';
 
+type CameraDemoProps<T> =
+  | {
+      run: (frame: ImageBuffer) => Promise<T>;
+      /** Paints the results over the frame. Left out by a model whose results
+       *  are not a picture, like a list of class names. */
+      draw?: (ctx: CanvasRenderingContext2D, results: T) => void;
+      /** Rendered under the frame, for results that read better as markup. */
+      below?: (results: T) => ReactNode;
+      /** Rendered in the footer next to the frame rate. */
+      stats: (results: T) => string;
+    }
+  | {
+      /** Records the model from the frame into the canvas texture, with no
+       *  CPU copy. Replaces `run` and `draw`. */
+      encode: (source: GPUExternalTexture, target: GPUTexture) => void;
+      /** Rendered in the footer next to the frame rate. */
+      stats: string;
+    };
+
 /** A camera loop, or the sample picture, with a model's results drawn over
  *  every frame. `run` calls the model, `draw` paints its results after the
- *  frame. Frames wait for the previous run, so the loop never queues up. */
-export function CameraDemo<T>({
-  run,
-  draw,
-  below,
-  stats,
-}: {
-  run: (frame: ImageBuffer) => Promise<T>;
-  /** Paints the results over the frame. Left out by a model whose results
-   *  are not a picture, like a list of class names. */
-  draw?: (ctx: CanvasRenderingContext2D, results: T) => void;
-  /** Rendered under the frame, for results that read better as markup. */
-  below?: (results: T) => ReactNode;
-  /** Rendered in the footer next to the frame rate. */
-  stats: (results: T) => string;
-}) {
+ *  frame; `encode` does both on the GPU. Frames wait for the previous run,
+ *  so the loop never queues up. */
+export function CameraDemo<T>(props: CameraDemoProps<T>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Off the DOM: the page styles every video element visible.
   const videoRef = useRef<HTMLVideoElement>(null);
   const grabRef = useRef<OffscreenCanvas>(null);
+  const contextRef = useRef<GPUCanvasContext>(null);
   const stopRef = useRef<() => void>(null);
   const [source, setSource] = useState<'idle' | 'camera' | 'sample'>('idle');
   const [results, setResults] = useState<T>();
@@ -51,12 +59,42 @@ export function CameraDemo<T>({
 
   /** One frame from `image` through the model and onto the canvas. */
   const step = useCallback(
-    async (image: CanvasImageSource, width: number, height: number, mirror: boolean) => {
+    async (
+      image: HTMLVideoElement | VideoFrame,
+      width: number,
+      height: number,
+      mirror: boolean,
+    ) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const scale = FRAME_WIDTH / width;
       const w = FRAME_WIDTH;
       const h = Math.round(height * scale);
+      if ('encode' in props) {
+        const { device } = await initEngine();
+        // Resizing drops the canvas texture, so only on a new frame size.
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        if (!contextRef.current) {
+          contextRef.current = canvas.getContext('webgpu')!;
+          contextRef.current.configure({
+            device,
+            format: navigator.gpu.getPreferredCanvasFormat(),
+          });
+        }
+        const context = contextRef.current;
+        // The map of a mirrored frame is the mirrored map.
+        canvas.style.transform = mirror ? 'scaleX(-1)' : '';
+        const start = performance.now();
+        props.encode(device.importExternalTexture({ source: image }), context.getCurrentTexture());
+        await device.queue.onSubmittedWorkDone();
+        setRunMs(performance.now() - start);
+        setSummary(props.stats);
+        return;
+      }
+      const { run, draw, stats } = props;
       const grab = (grabRef.current ??= new OffscreenCanvas(w, h));
       grab.width = w;
       grab.height = h;
@@ -79,7 +117,7 @@ export function CameraDemo<T>({
       setResults(results);
       setSummary(stats(results));
     },
-    [run, draw, stats],
+    [props],
   );
 
   const startCamera = useCallback(
@@ -136,7 +174,14 @@ export function CameraDemo<T>({
     setError(undefined);
     try {
       const bitmap = await createImageBitmap(await (await fetch(SAMPLE_IMAGE)).blob());
-      await step(bitmap, bitmap.width, bitmap.height, false);
+      // A VideoFrame, so the GPU path can import it like a camera frame.
+      const frame = new VideoFrame(bitmap, { timestamp: 0 });
+      bitmap.close();
+      try {
+        await step(frame, frame.displayWidth, frame.displayHeight, false);
+      } finally {
+        frame.close();
+      }
       setSource('sample');
     } catch (err) {
       setError((err as Error).message);
@@ -177,7 +222,7 @@ export function CameraDemo<T>({
       </div>
 
       <canvas ref={canvasRef} className="demo-canvas" hidden={source === 'idle'} />
-      {source !== 'idle' && results !== undefined && below?.(results)}
+      {source !== 'idle' && results !== undefined && 'below' in props && props.below?.(results)}
       {source === 'idle' && !error && (
         <p className="demo-note">Start the camera to see live results, or try the sample.</p>
       )}
