@@ -163,6 +163,24 @@ describe('conv1d kernel', () => {
       name: 'dilation 2 with stride 2 (mapped gemm)',
       c: { tIn: 33, cIn: 8, cOut: 12, kernelSize: 8, stride: 2, dilation: 2, padLeft: 3 },
     },
+    {
+      name: 'dilation 3, no padding (mapped gemm)',
+      c: { tIn: 40, cIn: 16, cOut: 16, kernelSize: 4, stride: 1, dilation: 3 },
+    },
+    // C_in 4 puts two taps in one 8-wide K step.
+    {
+      name: 'two taps per K step, C_in 4 (mapped gemm)',
+      c: {
+        tIn: 30,
+        cIn: 4,
+        cOut: 8,
+        kernelSize: 16,
+        stride: 1,
+        dilation: 2,
+        padLeft: 5,
+        padRight: 7,
+      },
+    },
     // direct: dilation with C_in % 4 != 0
     {
       name: 'dilation 2, odd C_in (direct)',
