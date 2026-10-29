@@ -98,8 +98,8 @@ function Search({ embedder, modelSelect }: { embedder: Embedder; modelSelect: Re
 
   return (
     <div className="demo not-content">
-      <form className="demo-row" onSubmit={onSubmit}>
-        {modelSelect}
+      {modelSelect}
+      <form className="demo-row demo-row-actions" onSubmit={onSubmit}>
         <input
           className="demo-input"
           value={query}
