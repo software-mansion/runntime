@@ -93,6 +93,16 @@ abSuite('elementwise', [
   unary('tanh [512,640]', 512, 640, 'f32', (version, x) => version.lib.tanh(x)),
   unary('asinh, streaming frontend [500,80]', 500, 80, 'f32', (version, x) => version.lib.asinh(x)),
   {
+    name: 'elu, Higgs semantic encoder [250,768]',
+    build: (version) => {
+      const x = randMat(version, 250, 768);
+      const call = () => version.lib.elu(x);
+      // Built once here, so a base without elu throws and skips the case.
+      call();
+      return call;
+    },
+  },
+  {
     name: 'rsqrt [512,640]',
     build: (version) => {
       const x = version.upload(

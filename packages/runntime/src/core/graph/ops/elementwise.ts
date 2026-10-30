@@ -172,6 +172,11 @@ export function silu(x: Value): Value {
   return pending({ ...x.shape }, 'silu', [x]);
 }
 
+/** out = x for x > 0, eˣ − 1 otherwise, elementwise. torch's ELU, alpha 1. */
+export function elu(x: Value): Value {
+  return pending({ ...x.shape }, 'elu', [x]);
+}
+
 /** out = asinh(x) = ln(x + √(x²+1)), elementwise. */
 export function asinh(x: Value): Value {
   return pending({ ...x.shape }, 'asinh', [x]);

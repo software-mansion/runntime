@@ -42,6 +42,7 @@ export {
   conv1d,
   conv2d,
   convTranspose2d,
+  elu,
   gatherRows,
   gatherRowsFrom,
   gelu,
