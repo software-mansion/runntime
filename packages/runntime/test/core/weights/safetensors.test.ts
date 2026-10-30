@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WeightCache } from '../../../src/core/weights/cache.ts';
+import { f16ToF32 } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
   chunkedSource,
@@ -543,6 +545,39 @@ describe('fromSafetensors', () => {
         w_scale: { dtype: 'F16', shape: [2, 2], bytes: new Uint8Array(8) },
       } satisfies Record<string, TensorSpec>;
       await expect(open(tensors, int4Setting)).rejects.toThrow(/is I8, but int4 is stored as U8/);
+    });
+  });
+
+  // Files written by `runntime quantize` (tools/python), whose tests check
+  // the same bytes, so the writer and this reader cannot drift apart.
+  describe('with files from the Python quantizer', () => {
+    const golden = (file: string) =>
+      fromSafetensors(
+        bufferSource(
+          readFileSync(
+            new URL(`../../../../../tools/python/tests/golden/${file}`, import.meta.url),
+          ),
+        ),
+      );
+
+    it.for([4, 8])('reads int%i weights within half a step of the float source', async (bits) => {
+      const source = await golden('tiny.safetensors');
+      const sd = await golden(`tiny.int${bits}.safetensors`);
+      const w = sd.tensors.get('layer.weight')!;
+      if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
+      expect(w).toMatchObject({ shape: [8, 64], bits, groupSize: 32 });
+      const ints = await w.ints();
+      const halves = await w.scales();
+      const scales = halves instanceof Float32Array ? halves : f16ToF32(halves);
+      const want = await source.tensors.get('layer.weight')!.f32();
+      want.forEach((v, i) => {
+        const scale = scales[Math.floor(i / 32)]!;
+        expect(Math.abs(ints[i]! * scale - v)).toBeLessThanOrEqual(scale / 2 + 1e-6);
+      });
+      // The tensors it leaves alone keep their bytes.
+      for (const name of ['embed.weight', 'layer.bias', 'norm.weight']) {
+        expect(await sd.tensors.get(name)!.f32()).toEqual(await source.tensors.get(name)!.f32());
+      }
     });
   });
 
