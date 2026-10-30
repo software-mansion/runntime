@@ -64,6 +64,7 @@ export {
   sigmoid,
   silu,
   slice,
+  snake,
   softmax,
   split,
   sub,

@@ -66,6 +66,7 @@ export type OpName =
   | 'gelu'
   | 'silu'
   | 'asinh'
+  | 'snake'
   // matmul
   | 'matmul'
   | 'matmulQuantW'

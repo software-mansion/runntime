@@ -1,7 +1,7 @@
 /** Dispatch specs for the convolution kernels (kernels/conv). */
 
 import { elemFor } from '../../kernels/elem.ts';
-import { conv1dHandle, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
+import { conv1dHandle, conv1dLoadA, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
 import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
 import {
   createMatmulTiledVec4Pipeline,
@@ -44,7 +44,8 @@ import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 
 export const conv1dSpec = defineSpec({
   attrs: (p) => {
-    const [kernel, stride, padLeft, padRight, hasBias, act] = p.attrs as [
+    const [kernel, stride, padLeft, padRight, hasBias, act, dilation] = p.attrs as [
+      number,
       number,
       number,
       number,
@@ -52,27 +53,26 @@ export const conv1dSpec = defineSpec({
       number,
       number,
     ];
-    return { kernel, stride, padLeft, padRight, hasBias, act };
+    return { kernel, stride, padLeft, padRight, hasBias, act, dilation };
   },
   cfg: (node, attrs) => {
     const cIn = node.pending!.inputs[0]!.shape.dims![1]!;
     const cOut = node.shape.dims![1]!;
-    // Without padding, each output frame reads kernel·cIn contiguous inputs,
-    // stride·cIn after the previous one, so the conv runs as the tiled matmul.
-    const gemm =
-      attrs.padLeft === 0 &&
-      attrs.padRight === 0 &&
-      cIn % 4 === 0 &&
-      matmulTiledVec4Eligible(attrs.kernel * cIn, cOut);
+    // An output frame reads kernel·cIn inputs, so the conv runs as the tiled
+    // matmul. Unpadded and undilated they are contiguous; otherwise
+    // conv1dLoadA maps each tap to its input frame.
+    const gemm = cIn % 4 === 0 && matmulTiledVec4Eligible(attrs.kernel * cIn, cOut);
+    const mapped = attrs.padLeft > 0 || attrs.padRight > 0 || attrs.dilation > 1;
     return {
       kernel: attrs.kernel,
       stride: attrs.stride,
+      dilation: attrs.dilation,
       cIn,
       cOut,
       padLeft: attrs.padLeft,
       hasBias: attrs.hasBias,
       act: attrs.act,
-      gemm: gemm ? 1 : 0,
+      gemm: gemm ? (mapped ? 2 : 1) : 0,
     };
   },
   pipeline: (root, dtype, cfg) =>
@@ -88,6 +88,7 @@ export const conv1dSpec = defineSpec({
             aStride: cfg.stride * cfg.cIn,
           },
           elemFor(dtype),
+          cfg.gemm === 2 ? conv1dLoadA(elemFor(dtype), cfg) : undefined,
         )
       : createConv1dPipeline(root, cfg, elemFor(dtype)),
   encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
@@ -109,6 +110,7 @@ export const conv1dSpec = defineSpec({
             out: narrowFloat(out, dtype),
           },
           elemFor(dtype),
+          tIn,
         ),
       ];
     }

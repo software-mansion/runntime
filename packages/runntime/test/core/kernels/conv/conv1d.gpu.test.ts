@@ -13,23 +13,25 @@ interface Case {
   cOut: number;
   kernelSize: number;
   stride: number;
+  dilation?: number;
   padLeft?: number;
   padRight?: number;
   bias?: boolean;
   activation?: SlotAct;
 }
 
-/** out[t, co] = act(bias[co] + Σ x[t·stride + tap − padLeft, ci] ·
+/** out[t, co] = act(bias[co] + Σ x[t·stride + tap·dilation − padLeft, ci] ·
  *  w[tap·C_in + ci, co]) over taps inside x, time-major, in f64. */
 function conv1dRef(x: Float32Array, w: Float32Array, c: Case, bias?: Float32Array): Float64Array {
-  const { tIn, cIn, cOut, kernelSize, stride, padLeft = 0, padRight = 0 } = c;
-  const tOut = Math.floor((tIn + padLeft + padRight - kernelSize) / stride) + 1;
+  const { tIn, cIn, cOut, kernelSize, stride, dilation = 1, padLeft = 0, padRight = 0 } = c;
+  const span = dilation * (kernelSize - 1) + 1;
+  const tOut = Math.floor((tIn + padLeft + padRight - span) / stride) + 1;
   const out = new Float64Array(tOut * cOut);
   for (let t = 0; t < tOut; t++) {
     for (let co = 0; co < cOut; co++) {
       let sum = bias ? bias[co]! : 0;
       for (let tap = 0; tap < kernelSize; tap++) {
-        const ti = t * stride + tap - padLeft;
+        const ti = t * stride + tap * dilation - padLeft;
         if (ti < 0 || ti >= tIn) continue;
         for (let ci = 0; ci < cIn; ci++)
           sum += x[ti * cIn + ci]! * w[(tap * cIn + ci) * cOut + co]!;
@@ -53,6 +55,7 @@ async function checkConv1d(c: Case, dtype: 'f32' | 'f16') {
       {
         kernelSize: c.kernelSize,
         stride: c.stride,
+        dilation: c.dilation,
         padLeft: c.padLeft,
         padRight: c.padRight,
         bias: bias && upload(root, bias, meta(1, c.cOut)),
@@ -69,7 +72,8 @@ async function checkConv1d(c: Case, dtype: 'f32' | 'f16') {
 describe('conv1d kernel', () => {
   // Routes are picked in gpu/dispatch/conv.ts.
   const SHAPES: { name: string; c: Case }[] = [
-    // direct: padding, so a window can run past either end
+    // direct: padded, with C_in % 4 != 0 or K under the tiled minimum, so a
+    // window can run past either end
     {
       name: 'same padding (direct)',
       c: { tIn: 9, cIn: 3, cOut: 8, kernelSize: 3, stride: 1, padLeft: 1, padRight: 1 },
@@ -102,7 +106,8 @@ describe('conv1d kernel', () => {
       c: { tIn: 30, cIn: 4, cOut: 8, kernelSize: 15, stride: 1 },
     },
     { name: '1×1 out (direct)', c: { tIn: 1, cIn: 1, cOut: 1, kernelSize: 1, stride: 1 } },
-    // gemm: no padding, C_in % 4 == 0, kernelSize·C_in >= 64 and % 4 == 0, C_out % 4 == 0
+    // gemm: unpadded and undilated, C_in % 4 == 0, kernelSize·C_in >= 64 and
+    // % 4 == 0, C_out % 4 == 0
     {
       name: 'at the tiled minimum K (gemm)',
       c: { tIn: 30, cIn: 4, cOut: 8, kernelSize: 16, stride: 1 },
@@ -118,17 +123,93 @@ describe('conv1d kernel', () => {
       name: 'gemm shape with C_out % 4 != 0 (direct)',
       c: { tIn: 70, cIn: 16, cOut: 35, kernelSize: 4, stride: 2 },
     },
-    // direct: a gemm shape with one condition broken at a time. tIn 71 makes
-    // padRight add an output frame; stride 1 keeps the C_in 18 row stride off
-    // a multiple of 4.
+    // mapped gemm: padding or dilation, so the tiled matmul maps each tap's
+    // frame itself. tIn 71 makes padRight add an output frame.
     {
-      name: 'gemm shape with padLeft (direct)',
+      name: 'gemm shape with padLeft (mapped gemm)',
       c: { tIn: 70, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, padLeft: 1 },
     },
     {
-      name: 'gemm shape with padRight (direct)',
+      name: 'gemm shape with padRight (mapped gemm)',
       c: { tIn: 71, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, padRight: 1 },
     },
+    {
+      name: 'dilation 3, same padding (mapped gemm)',
+      c: {
+        tIn: 50,
+        cIn: 16,
+        cOut: 16,
+        kernelSize: 7,
+        stride: 1,
+        dilation: 3,
+        padLeft: 9,
+        padRight: 9,
+      },
+    },
+    {
+      name: 'dilation 9 past both ends (mapped gemm)',
+      c: {
+        tIn: 40,
+        cIn: 32,
+        cOut: 32,
+        kernelSize: 7,
+        stride: 1,
+        dilation: 9,
+        padLeft: 27,
+        padRight: 27,
+      },
+    },
+    {
+      name: 'dilation 2 with stride 2 (mapped gemm)',
+      c: { tIn: 33, cIn: 8, cOut: 12, kernelSize: 8, stride: 2, dilation: 2, padLeft: 3 },
+    },
+    {
+      name: 'dilation 3, no padding (mapped gemm)',
+      c: { tIn: 40, cIn: 16, cOut: 16, kernelSize: 4, stride: 1, dilation: 3 },
+    },
+    // C_in 4 puts two taps in one 8-wide K step.
+    {
+      name: 'two taps per K step, C_in 4 (mapped gemm)',
+      c: {
+        tIn: 30,
+        cIn: 4,
+        cOut: 8,
+        kernelSize: 16,
+        stride: 1,
+        dilation: 2,
+        padLeft: 5,
+        padRight: 7,
+      },
+    },
+    // direct: dilation with C_in % 4 != 0
+    {
+      name: 'dilation 2, odd C_in (direct)',
+      c: {
+        tIn: 30,
+        cIn: 3,
+        cOut: 8,
+        kernelSize: 3,
+        stride: 1,
+        dilation: 2,
+        padLeft: 2,
+        padRight: 2,
+      },
+    },
+    {
+      name: 'dilation 3, C_out % 4 != 0 (direct)',
+      c: {
+        tIn: 25,
+        cIn: 3,
+        cOut: 7,
+        kernelSize: 3,
+        stride: 1,
+        dilation: 3,
+        padLeft: 3,
+        padRight: 3,
+      },
+    },
+    // direct: a gemm shape with C_in % 4 != 0; stride 1 keeps the C_in 18 row
+    // stride off a multiple of 4.
     {
       name: 'gemm shape with C_in % 4 != 0 (direct)',
       c: { tIn: 70, cIn: 18, cOut: 36, kernelSize: 4, stride: 1 },
@@ -142,7 +223,7 @@ describe('conv1d kernel', () => {
     },
   );
 
-  // Every epilogue on both routes: act(conv + bias).
+  // Every epilogue on every route: act(conv + bias).
   const EPILOGUES = [
     { name: 'bias', bias: true },
     ...(['tanh', 'gelu', 'silu', 'relu', 'geluTanh'] as const).map((activation) => ({
@@ -162,6 +243,20 @@ describe('conv1d kernel', () => {
         },
         // gemm: unpadded, C_in and C_out % 4 == 0, K = 64
         { route: 'gemm', c: { tIn: 40, cIn: 16, cOut: 12, kernelSize: 4, stride: 2 } },
+        // mapped gemm: padded and dilated
+        {
+          route: 'mapped gemm',
+          c: {
+            tIn: 40,
+            cIn: 16,
+            cOut: 12,
+            kernelSize: 4,
+            stride: 1,
+            dilation: 2,
+            padLeft: 3,
+            padRight: 3,
+          },
+        },
       ].flatMap((r) => EPILOGUES.map((e) => ({ dtype, ...r, ...e }))),
     ),
   )('$dtype $route with $name', async ({ dtype, c, bias, activation }, ctx) => {
@@ -205,7 +300,7 @@ describe('conv1d kernel', () => {
     {
       name: 'a pad as wide as the kernel',
       opts: { ...base, padLeft: 3 },
-      err: /padLeft 3 must be an integer in \[0, kernelSize\)/,
+      err: /padLeft 3 must be an integer in \[0, 3\), the window span/,
     },
     {
       name: 'padding and padLeft together',
@@ -232,7 +327,7 @@ describe('conv1d kernel', () => {
   it('refuses an input shorter than the kernel', () => {
     const x = upload(root, new Float32Array(4), [2, 2]);
     const w = upload(root, new Float32Array(6 * 4), [6, 4]);
-    expect(() => conv1d(x, w, base)).toThrow(/padded frames 2\+0\+0 < kernelSize 3/);
+    expect(() => conv1d(x, w, base)).toThrow(/padded frames 2\+0\+0 < window span 3/);
   });
 
   it('refuses a weight in another dtype', (ctx) => {

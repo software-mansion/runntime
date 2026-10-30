@@ -4,6 +4,8 @@
  *  f32.
  *
  *  Rows of a can be further apart than K, which lets conv1d run on this kernel.
+ *  A pipeline can also plug in its own loader for a, which reads each vec4 of
+ *  a's logical [M, K] from wherever it lives.
  *
  *  Based on webgpu-kernels/ai.onnx.MatMul (matmul-notrans-vec4-tiled-reg). */
 
@@ -14,7 +16,7 @@ import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
-const Dims = d.struct({ m: d.u32 });
+const Dims = d.struct({ m: d.u32, aRows: d.u32 });
 
 function makeLayout(elem: Elem) {
   return tgpu.bindGroupLayout({
@@ -44,6 +46,11 @@ const WGC = 8;
 const WGR = 8;
 const BK = 8;
 
+/** Reads vec4 k4 of row `row` of a. The kernel calls it only inside [M, K]. */
+export type LoadA = (row: number, k4: number) => d.v4f;
+
+const loadASlot = tgpu.slot<LoadA>();
+
 /** Below this K there is too little to reuse. */
 const MIN_K = 64;
 
@@ -64,6 +71,23 @@ export interface MatmulTiledVec4Cfg {
   aStride?: number;
 }
 
+/** The layout every pipeline of this kernel binds, so a loader can read a and
+ *  aRows. */
+export function matmulTiledVec4Layout(elem: Elem): ReturnType<typeof makeLayout> {
+  return layoutFor(elem);
+}
+
+/** Reads row `row` of a at aStride. */
+function stridedLoadA(elem: Elem, aStride: number): LoadA {
+  const layout = layoutFor(elem);
+  const storeVec4 = elem.vec4;
+  const aStride4 = aStride / 4;
+  return (row: number, k4: number) => {
+    'use gpu';
+    return storeVec4(layout.$.a[row * aStride4 + k4]!);
+  };
+}
+
 function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
   const { k, n, hasBias, hasAdd } = cfg;
   const layout = layoutFor(elem);
@@ -73,7 +97,6 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
   const bk4 = BK / 4;
   const bn4 = BN / 4;
   const k4 = k / 4;
-  const aStride4 = (cfg.aStride ?? k) / 4;
   const n4 = n / 4;
   const aVecs = (BM * bk4) / lanes;
   const bVecs = (BK * bn4) / lanes;
@@ -100,7 +123,7 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
         const ak4 = t * bk4 + (e % bk4);
         let v = storeVec4();
         if (am < m && ak4 < k4) {
-          v = storeVec4(layout.$.a[am * aStride4 + ak4]!);
+          v = storeVec4(loadASlot.$(am, ak4));
         }
         tileA.$[e] = storeVec4(v);
       }
@@ -149,18 +172,22 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
   });
 }
 
-/** One pipeline per dtype, K, N, row stride, epilogue and activation. */
+/** One pipeline per dtype, K, N, loader, epilogue and activation. `loadA`
+ *  replaces the strided read of a. */
 export function createMatmulTiledVec4Pipeline(
   root: TgpuRoot,
   cfg: MatmulTiledVec4Cfg,
   elem: Elem = F32_ELEM,
+  loadA: LoadA = stridedLoadA(elem, cfg.aStride ?? cfg.k),
 ) {
   return root
     .with(actSlot, activationFor(cfg.act))
+    .with(loadASlot, loadA)
     .createComputePipeline({ compute: makeMatmulTiledVec4Kernel(cfg, elem) });
 }
 
-/** One workgroup per 32×32 output tile. */
+/** One workgroup per 32×32 output tile. aRows is how many rows a's buffer
+ *  holds, for loaders that bound-check it. */
 export function matmulTiledVec4Handle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createMatmulTiledVec4Pipeline>,
@@ -174,8 +201,9 @@ export function matmulTiledVec4Handle(
     addend?: FloatBuffer;
   },
   elem: Elem = F32_ELEM,
+  aRows = m,
 ): KernelHandle {
-  const dims = cachedUniform(root, Dims, { m });
+  const dims = cachedUniform(root, Dims, { m, aRows });
   // Absent epilogue operands alias `a`; those pipelines never read them.
   const bindGroup = cachedBindGroup(root, layoutFor(elem), {
     ...buffers,

@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
@@ -10,8 +10,9 @@ import {
 } from '../common.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
+import { type LoadA, matmulTiledVec4Layout } from '../matmul/matmulTiledVec4.ts';
 
-/** Direct strided 1-D convolution, time-major.
+/** Direct strided, dilated 1-D convolution, time-major.
  *
  *  One thread per (output frame, 4-channel unit) holds a vec4 accumulator, so
  *  each x value is loaded once and feeds four output channels. The last unit
@@ -31,6 +32,7 @@ const Dims = d.struct({ tIn: d.u32, tOut: d.u32 });
 const Config = d.struct({
   kernel: d.u32,
   stride: d.u32,
+  dilation: d.u32,
   cIn: d.u32,
   cOut: d.u32,
   c4c: d.u32, // ceil(cOut/4) — channel units per frame (tail unit may be partial)
@@ -40,6 +42,7 @@ const Config = d.struct({
 const config = tgpu.accessor(Config, {
   kernel: 1,
   stride: 1,
+  dilation: 1,
   cIn: 1,
   cOut: 1,
   c4c: 1,
@@ -78,8 +81,8 @@ function makeConv1dVariant(elem: Elem) {
     if (ch0 + 4 <= C.cOut) {
       let acc = d.vec4f();
       for (let tap = d.u32(0); tap < C.kernel; tap++) {
-        if (windowStart + tap >= C.padLeft) {
-          const xFrame = windowStart + tap - C.padLeft;
+        if (windowStart + tap * C.dilation >= C.padLeft) {
+          const xFrame = windowStart + tap * C.dilation - C.padLeft;
           if (xFrame < tIn) {
             const xBase = xFrame * C.cIn;
             const wBase = tap * C.cIn * C.cOut;
@@ -134,8 +137,8 @@ function makeConv1dVariant(elem: Elem) {
     for (let ch = ch0; ch < C.cOut; ch++) {
       let acc = d.f32(0);
       for (let tap = d.u32(0); tap < C.kernel; tap++) {
-        if (windowStart + tap >= C.padLeft) {
-          const xFrame = windowStart + tap - C.padLeft;
+        if (windowStart + tap * C.dilation >= C.padLeft) {
+          const xFrame = windowStart + tap * C.dilation - C.padLeft;
           if (xFrame < tIn) {
             const xBase = xFrame * C.cIn;
             const wBase = tap * C.cIn * C.cOut;
@@ -170,6 +173,7 @@ export function createConv1dPipeline(
   cfg: {
     kernel: number;
     stride: number;
+    dilation?: number;
     cIn: number;
     cOut: number;
     padLeft: number;
@@ -182,6 +186,7 @@ export function createConv1dPipeline(
     .with(config, {
       kernel: cfg.kernel,
       stride: cfg.stride,
+      dilation: cfg.dilation ?? 1,
       cIn: cfg.cIn,
       cOut: cfg.cOut,
       c4c: Math.ceil(cfg.cOut / 4),
@@ -212,4 +217,27 @@ export function conv1dHandle(
     bindGroup,
     Math.ceil((args.tOut * Math.ceil(args.cOut / 4)) / WORKGROUP_SIZE),
   );
+}
+
+/** Runs a padded or dilated conv1d on the tiled matmul: row i of a is output
+ *  frame i's window over the [aRows, cIn] input, and tap j of it reads frame
+ *  i·stride + j·dilation − padLeft, zero outside the input. */
+export function conv1dLoadA(
+  elem: Elem,
+  geom: { cIn: number; stride: number; dilation: number; padLeft: number },
+): LoadA {
+  const layout = matmulTiledVec4Layout(elem);
+  const storeVec4 = elem.vec4;
+  const cIn4 = geom.cIn / 4;
+  const { stride, dilation, padLeft } = geom;
+  return (row: number, k4: number) => {
+    'use gpu';
+    const tap = std.intdiv(k4, cIn4);
+    const pos = d.i32(row * stride + tap * dilation) - padLeft;
+    let v = storeVec4();
+    if (pos >= 0 && pos < d.i32(layout.$.dims.aRows)) {
+      v = storeVec4(layout.$.a[d.u32(pos) * cIn4 + (k4 % cIn4)]!);
+    }
+    return v;
+  };
 }

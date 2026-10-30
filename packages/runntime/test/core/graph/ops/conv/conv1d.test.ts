@@ -34,7 +34,21 @@ describe('conv1d', () => {
     const bias = input([COUT]);
     const c = conv1d(x, w, { kernelSize: 3, stride: 1, bias, activation: 'gelu' });
     expect(c.pending?.inputs).toEqual([x, w, bias]);
-    expect(c.pending?.attrs?.slice(4)).toEqual([1, ACT_CODE.gelu]);
+    // attrs: kernel, stride, padLeft, padRight, hasBias, act, dilation
+    expect(c.pending?.attrs?.slice(4)).toEqual([1, ACT_CODE.gelu, 1]);
+  });
+
+  it('widens the window by the dilation', () => {
+    const c = conv1d(input([20, CIN]), weight(3), { kernelSize: 3, stride: 1, dilation: 4 });
+    expect(c.shape).toEqual(meta([12, COUT]));
+    const same = conv1d(input([20, CIN]), weight(3), {
+      kernelSize: 3,
+      stride: 1,
+      dilation: 4,
+      padding: 'same',
+    });
+    expect(same.shape).toEqual(meta([20, COUT]));
+    expect(same.pending?.attrs?.slice(2, 4)).toEqual([4, 4]);
   });
 
   it('gives one frame when the padded input is exactly one kernel long', () => {
@@ -63,7 +77,7 @@ describe('conv1d', () => {
     {
       name: 'padding as large as the kernel',
       opts: { padding: 3 },
-      error: /padding 3 must be an integer in \[0, kernelSize\)/,
+      error: /padding 3 must be an integer in \[0, 3\), the window span/,
     },
     { name: 'a negative pad', opts: { padRight: -1 }, error: /padRight -1 must be an integer/ },
     {
@@ -82,9 +96,14 @@ describe('conv1d', () => {
       error: /bias must be f32 \[C_out\] = 6 elems/,
     },
     {
+      name: 'a dilation of 0',
+      opts: { dilation: 0 },
+      error: /dilation 0 must be a positive integer/,
+    },
+    {
       name: 'an input shorter than the kernel',
       x: input([2, CIN]),
-      error: /padded frames 2\+0\+0 < kernelSize 3/,
+      error: /padded frames 2\+0\+0 < window span 3/,
     },
   ])('rejects $name', ({ x: xIn = x, opts = {}, w = weight(3), error }) => {
     expect(() => conv1d(xIn, w, { kernelSize: 3, stride: 1, ...opts })).toThrow(error);

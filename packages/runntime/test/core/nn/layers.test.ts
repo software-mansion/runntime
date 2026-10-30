@@ -4,6 +4,7 @@ import {
   BatchNorm2d,
   Conv1d,
   Conv2d,
+  ConvTranspose1d,
   ConvTranspose2d,
   Embedding,
   GroupNorm,
@@ -11,6 +12,7 @@ import {
   Linear,
   MultiHeadAttention,
   RMSNorm,
+  Snake,
 } from '../../../src/core/nn/layers.ts';
 import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/module.ts';
 import { memoryStateDict } from '../../../src/core/weights/safetensors.ts';
@@ -100,6 +102,77 @@ describe('Conv1d', () => {
     expect(() => new Conv1d(1, 2, 2).transformStateDict(sd, 'c')).toThrow(
       expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
     );
+  });
+
+  it('widens the window by the dilation', () => {
+    const conv = (padding?: 'same') =>
+      fakeLoad(new Conv1d(4, 6, 3, { dilation: 2, padding })).forward(input([10, 4])).shape;
+    expect(conv()).toEqual(meta([6, 6]));
+    expect(conv('same')).toEqual(meta([10, 6]));
+  });
+});
+
+describe('ConvTranspose1d', () => {
+  it('stores the weight as [taps·in, stride·out] and the bias once per frame', () => {
+    expect(shapes(new ConvTranspose1d(4, 6, 4, { stride: 2 }))).toEqual({
+      weight: meta([8, 12]),
+      bias: meta([12]),
+    });
+  });
+
+  it('maps [T, in] to [(T − 1)·stride − 2·padding + kernel + outputPadding, out]', () => {
+    const conv = new ConvTranspose1d(4, 8, 6, { stride: 3, padding: 2, outputPadding: 1 });
+    expect(fakeLoad(conv).forward(input([10, 4])).shape).toEqual(meta([30, 8]));
+    const unpadded = new ConvTranspose1d(4, 8, 3, { stride: 3 });
+    expect(fakeLoad(unpadded).forward(input([10, 4])).shape).toEqual(meta([30, 8]));
+  });
+
+  it('reorders a torch [in, out, k] weight and repeats the bias at load', async () => {
+    const sd = memoryStateDict({
+      'c.weight': { data: new Float32Array([1, 2, 3, 4]), shape: [1, 1, 4] },
+      'c.bias': new Float32Array([5]),
+    });
+    new ConvTranspose1d(1, 1, 4, { stride: 2 }).transformStateDict(sd, 'c');
+    // Tap 0 reads the later frame, so it takes kernel positions 2 and 3.
+    expect(await sd.tensors.get('c.weight')!.f32()).toEqual(new Float32Array([3, 4, 1, 2]));
+    expect(await sd.tensors.get('c.bias')!.f32()).toEqual(new Float32Array([5, 5]));
+  });
+
+  it('rejects a weight in another layout', () => {
+    const sd = memoryStateDict({ 'c.weight': { data: new Float32Array(4), shape: [1, 4, 1] } });
+    expect(() => new ConvTranspose1d(1, 1, 4, { stride: 2 }).transformStateDict(sd, 'c')).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
+    );
+  });
+
+  it.each([
+    { name: 'a kernel that is not a multiple of the stride', k: 5, opts: { stride: 2 } },
+    {
+      name: 'an outputPadding above the padding',
+      k: 4,
+      opts: { stride: 2, padding: 0, outputPadding: 1 },
+    },
+  ])('rejects $name', ({ k, opts }) => {
+    expect(() => new ConvTranspose1d(2, 2, k, opts)).toThrow(/ConvTranspose1d/);
+  });
+});
+
+describe('Snake', () => {
+  it('declares a pinned f32 [2, channels] weight', () => {
+    const s = new Snake(8);
+    expect(shapes(s)).toEqual({ weight: meta([2, 8]) });
+    expect(s.weight.pinned).toBe(true);
+  });
+
+  it('turns a torch alpha [1, C, 1] into alpha and 1 / (alpha + 1e-9) at load', async () => {
+    const sd = memoryStateDict({
+      's.alpha': { data: new Float32Array([0.5, 2]), shape: [1, 2, 1] },
+    });
+    new Snake(2).transformStateDict(sd, 's');
+    expect(sd.tensors.has('s.alpha')).toBe(false);
+    const w = sd.tensors.get('s.weight')!;
+    expect(w.shape).toEqual([2, 2]);
+    expect(await w.f32()).toEqual(new Float32Array([0.5, 2, 1 / (0.5 + 1e-9), 1 / (2 + 1e-9)]));
   });
 });
 

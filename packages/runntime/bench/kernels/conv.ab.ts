@@ -69,6 +69,7 @@ function conv1d(
   k: number,
   stride: number,
   act?: 'tanh' | 'gelu',
+  geometry: { padLeft?: number; padRight?: number; dilation?: number } = {},
 ): AbCase {
   return {
     name,
@@ -82,7 +83,11 @@ function conv1d(
           dims: [k * cIn, cOut],
         },
       );
-      return () => version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act });
+      const call = () =>
+        version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act, ...geometry });
+      // Built once here, so a base that refuses the geometry skips the case.
+      call();
+      return call;
     },
   };
 }
@@ -235,6 +240,60 @@ abSuite('conv', [
   conv1d('conv1d + tanh, Moonshine-tiny stem 1→288 k127 s64', 16000, 1, 288, 127, 64, 'tanh'),
   conv1d('conv1d + gelu, Moonshine-tiny conv2 288→576 k7 s3', 249, 288, 576, 7, 3, 'gelu'),
   conv1d('conv1d, cOut not a multiple of 4, 32→6 k3', 500, 32, 6, 3, 1),
+  // Padded or dilated conv1d: the tiled matmul maps each tap to its input frame.
+  conv1d(
+    'conv1d causal, Moonshine-streaming conv1 320→640 k5 s2, 1 s',
+    200,
+    320,
+    640,
+    5,
+    2,
+    undefined,
+    {
+      padLeft: 4,
+    },
+  ),
+  conv1d(
+    'conv1d causal, Moonshine-streaming conv1 320→640 k5 s2, 15 s',
+    3000,
+    320,
+    640,
+    5,
+    2,
+    undefined,
+    {
+      padLeft: 4,
+    },
+  ),
+  conv1d(
+    'conv1d causal, Moonshine-streaming medium conv2 1240→620 k5 s2',
+    1500,
+    1240,
+    620,
+    5,
+    2,
+    undefined,
+    {
+      padLeft: 4,
+    },
+  ),
+  conv1d('conv1d same, Higgs conv_in 256→1024 k7, 10 s', 250, 256, 1024, 7, 1, undefined, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1d('conv1d same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 1, undefined, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1d('conv1d dilated, Higgs residual 64ch k7 d9, 10 s', 80000, 64, 64, 7, 1, undefined, {
+    padLeft: 27,
+    padRight: 27,
+    dilation: 9,
+  }),
+  conv1d('conv1d, Higgs upsampling 1024→8·512 as 2 taps, 10 s', 250, 1024, 4096, 2, 1, undefined, {
+    padLeft: 1,
+    padRight: 1,
+  }),
 
   // gluConv1d: its own kernel.
   gluConv1d('gluConv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5', 750, 1024, 5, 'f32'),
