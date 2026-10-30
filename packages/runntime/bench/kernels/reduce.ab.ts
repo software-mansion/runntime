@@ -1,8 +1,8 @@
-/** The row reductions (softmax, layerNorm, mean, topk) and the norms composed
- *  from them (rmsNorm, groupNorm). softmax and rmsNorm pick vec4 when the row
- *  width (rmsNorm: the group) is a multiple of 4, scalar otherwise, each with
- *  and without subgroups. The rest pick no route; the cases vary dtype, row
- *  count and row width. */
+/** The row reductions (softmax, layerNorm, mean, topk, logitStats) and the
+ *  norms composed from them (rmsNorm, groupNorm). softmax and rmsNorm pick
+ *  vec4 when the row width (rmsNorm: the group) is a multiple of 4, scalar
+ *  otherwise, each with and without subgroups. The rest pick no route; the
+ *  cases vary dtype, row count and row width. */
 import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
 import { randMat } from './inputs.ts';
@@ -37,6 +37,19 @@ const rmsNorm = (name: string, m: number, n: number, dtype: Float) =>
   rows(name, m, n, dtype, (version, x) => {
     const w = randMat(version, 1, n, dtype);
     return () => version.lib.rmsNorm(x, w, 1e-5);
+  });
+
+/** Echo's sampler: `blocks` codebooks of 1025 logits per row, then 2 padding
+ *  columns. The last logit of each codebook is the mask, which the argmax
+ *  skips. */
+const logitStats = (name: string, m: number, blocks: number, guided: boolean): AbCase =>
+  rows(name, m, blocks * 1025 + 2, 'f16', (version, x) => {
+    const guide = guided ? randMat(version, m, blocks * 1025 + 2, 'f16') : undefined;
+    const call = () =>
+      version.lib.logitStats(x, { blocks, block: 1025, argmaxCols: 1024, guide, guideWeight: 1.5 });
+    // Built once here, so a base without logitStats skips the case.
+    call();
+    return call;
   });
 
 /** The same route on a device without subgroups. */
@@ -77,6 +90,9 @@ abSuite('reduce', [
     (version, x) => () => version.lib.topk(x, 4),
   ),
   rows('topk 4 f16, router [64,128]', 64, 128, 'f16', (version, x) => () => version.lib.topk(x, 4)),
+
+  logitStats('logitStats f16, Echo coarse pass [335,2052], 2 × 1025', 335, 2, false),
+  logitStats('logitStats f16 + guide, Echo fine pass [335,6152], 6 × 1025', 335, 6, true),
 
   rmsNorm('rmsNorm, privacy-filter [512,640]', 512, 640, 'f32'),
   rmsNorm('rmsNorm f16, privacy-filter [512,640]', 512, 640, 'f16'),

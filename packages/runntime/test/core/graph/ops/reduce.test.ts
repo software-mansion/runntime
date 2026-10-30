@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { layerNorm, mean, rmsNorm, softmax, topk } from '../../../../src/core/graph/ops.ts';
+import {
+  layerNorm,
+  logitStats,
+  mean,
+  rmsNorm,
+  softmax,
+  topk,
+} from '../../../../src/core/graph/ops.ts';
 import { input, meta } from '../values.ts';
 
 describe('reductions over the last dim', () => {
@@ -200,5 +207,43 @@ describe('topk', () => {
     },
   ])('rejects $name', ({ x, k, error }) => {
     expect(() => topk(x, k)).toThrow(error);
+  });
+});
+
+describe('logitStats', () => {
+  const opts = { blocks: 2, block: 5, argmaxCols: 4 };
+
+  it('gives an argmax and a log-probability per block of each row, block-major, as f32', () => {
+    const y = logitStats(input([3, 12], 'f16'), opts);
+    expect(y.shape).toEqual(meta([6, 2]));
+    expect(y.pending?.attrs).toEqual([2, 5, 4, 0, 0]);
+  });
+
+  it('takes a guide as a second input', () => {
+    const x = input([3, 10]);
+    const guide = input([3, 10]);
+    const y = logitStats(x, { ...opts, guide, guideWeight: 0.5 });
+    expect(y.pending?.inputs).toEqual([x, guide]);
+    expect(y.pending?.attrs).toEqual([2, 5, 4, 1, 0.5]);
+  });
+
+  it.each([
+    { name: 'zero blocks', o: { blocks: 0 }, error: /must be positive, argmaxCols <= block/ },
+    { name: 'a fractional block', o: { block: 2.5 }, error: /must be positive/ },
+    { name: 'argmaxCols past the block', o: { argmaxCols: 6 }, error: /argmaxCols <= block/ },
+    { name: 'blocks past the row', o: { blocks: 3 }, error: /3 blocks of 5 exceed 12 cols/ },
+    {
+      name: 'a guide of another shape',
+      o: { guide: input([3, 10]) },
+      error: /guide must be f32 \[3, 12\] like x/,
+    },
+    {
+      name: 'a guide of another dtype',
+      o: { guide: input([3, 12], 'f16') },
+      error: /guide must be f32 \[3, 12\] like x/,
+    },
+    { name: 'a guide weight that is not finite', o: { guideWeight: Infinity }, error: /finite/ },
+  ])('rejects $name', ({ o, error }) => {
+    expect(() => logitStats(input([3, 12]), { ...opts, ...o })).toThrow(error);
   });
 });

@@ -109,6 +109,18 @@ abSuite('shape', [
     (version, [x, idx]) => version.lib.gatherRowsFrom(x!, idx!),
     true,
   ),
+  {
+    name: 'gatherRowsFrom f16, groups of 8, Echo frame embedding, 335 of [8200,1024]',
+    needs: ['shader-f16'],
+    build: (version) => {
+      const x = randMat(version, 8200, 1024, 'f16');
+      const idx = version.upload(ids(335 * 8, 8200), mat(335 * 8, 1));
+      const call = () => version.lib.gatherRowsFrom(x, idx, 8);
+      // A base without groups gives one row per index, so the case skips there.
+      if (call().shape.dims![0] !== 335) throw new Error('gatherRowsFrom takes no group');
+      return call;
+    },
+  },
   // Output past 2^24 values, where the row needs an integer division.
   on(
     'gatherRowsFrom f16, EmbeddingGemma 2 audio 30 s im2col, 216000 of [96001,128]',

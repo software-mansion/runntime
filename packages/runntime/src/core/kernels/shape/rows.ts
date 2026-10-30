@@ -89,14 +89,28 @@ export function concatRowsVariant(elem: Elem): ReturnType<typeof makeConcatRowsV
 
 const GatherFromMeta = d.struct({ total: d.u32, cols: d.u32 });
 
-function makeGatherFromVariant(elem: Elem) {
-  const layout = tgpu.bindGroupLayout({
+const makeGatherFromLayout = (elem: Elem) =>
+  tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
     idx: { storage: d.arrayOf(d.f32), access: 'readonly' },
     out: { storage: d.arrayOf(elem.scalar), access: 'mutable' },
     meta: { uniform: GatherFromMeta },
   });
-  const kernel = tgpu.computeFn({
+
+const gatherFromLayouts = new Map<string, ReturnType<typeof makeGatherFromLayout>>();
+function gatherFromLayoutFor(elem: Elem): ReturnType<typeof makeGatherFromLayout> {
+  let l = gatherFromLayouts.get(elem.key);
+  if (!l) {
+    l = makeGatherFromLayout(elem);
+    gatherFromLayouts.set(elem.key, l);
+  }
+  return l;
+}
+
+/** Built per group, so group 1 stays a plain copy. */
+function makeGatherFromKernel(elem: Elem, group: number) {
+  const layout = gatherFromLayoutFor(elem);
+  return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
     workgroupSize: [WORKGROUP_SIZE],
   })(({ gid }) => {
@@ -109,20 +123,19 @@ function makeGatherFromVariant(elem: Elem) {
     // Integer division: an f32 quotient loses rows past 2^24 elements.
     const r = std.intdiv(i, meta.cols);
     const c = i % meta.cols;
-    const srcRow = d.u32(layout.$.idx[r]!);
-    layout.$.out[i] = layout.$.x[srcRow * meta.cols + c]!;
+    if (group === 1) {
+      const srcRow = d.u32(layout.$.idx[r]!);
+      layout.$.out[i] = layout.$.x[srcRow * meta.cols + c]!;
+    } else {
+      // Output row r sums the `group` rows indexed from r·group.
+      let acc = d.f32(0);
+      for (const g of std.range(group)) {
+        const srcRow = d.u32(layout.$.idx[r * group + g]!);
+        acc += d.f32(layout.$.x[srcRow * meta.cols + c]!);
+      }
+      layout.$.out[i] = elem.scalar(acc);
+    }
   });
-  return { layout, kernel };
-}
-
-const gatherFromVariants = new Map<string, ReturnType<typeof makeGatherFromVariant>>();
-export function gatherRowsFromVariant(elem: Elem): ReturnType<typeof makeGatherFromVariant> {
-  let v = gatherFromVariants.get(elem.key);
-  if (!v) {
-    v = makeGatherFromVariant(elem);
-    gatherFromVariants.set(elem.key, v);
-  }
-  return v;
 }
 
 const WriteMeta = d.struct({ total: d.u32, offset: d.u32 });
@@ -209,8 +222,8 @@ export function createGatherRowsPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) 
 export function createWriteRowsPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) {
   return root.createComputePipeline({ compute: writeRowsVariant(elem).kernel });
 }
-export function createGatherRowsFromPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) {
-  return root.createComputePipeline({ compute: gatherRowsFromVariant(elem).kernel });
+export function createGatherRowsFromPipeline(root: TgpuRoot, group: number, elem: Elem = F32_ELEM) {
+  return root.createComputePipeline({ compute: makeGatherFromKernel(elem, group) });
 }
 export function sliceRowsHandle(
   root: TgpuRoot,
@@ -244,7 +257,7 @@ export function gatherRowsFromHandle(
   elem: Elem = F32_ELEM,
 ): KernelHandle {
   const meta = cachedUniform(root, GatherFromMeta, args);
-  const bindGroup = cachedBindGroup(root, gatherRowsFromVariant(elem).layout, { ...buffers, meta });
+  const bindGroup = cachedBindGroup(root, gatherFromLayoutFor(elem), { ...buffers, meta });
   return makeHandle(pipeline, 'gatherRowsFrom', bindGroup, Math.ceil(args.total / WORKGROUP_SIZE));
 }
 

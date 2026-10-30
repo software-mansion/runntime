@@ -56,6 +56,7 @@ export const attnSpec = defineSpec({
       hasSegs: a[7] ?? 0,
       maxSegment: a[8] ?? 0,
       qkvPacked: a[9] ?? 0,
+      keyBias: a[10] === 1 ? { start: a[11]!, end: a[12]!, value: a[13]! } : undefined,
     };
   },
   cfg: (node, attrs, ctx) => {
@@ -98,6 +99,7 @@ export const attnSpec = defineSpec({
       hasSinks: attrs.hasSinks,
       hasSegs: attrs.hasSegs,
       qkvPacked: attrs.qkvPacked,
+      hasKeyBias: attrs.keyBias ? 1 : 0,
       route,
     };
   },
@@ -146,7 +148,13 @@ export const attnSpec = defineSpec({
     const optBase = packed ? 1 : 3;
     const sinks = attrs.hasSinks === 1 ? narrow(inputs[optBase]!, 'f32') : undefined;
     const segs = attrs.hasSegs === 1 ? narrow(inputs[optBase + attrs.hasSinks]!, 'f32') : undefined;
-    const args = { qLen, kvLen, qPosOffset: attrs.qPosOffset, qHeads: attrs.qHeads };
+    const args = {
+      qLen,
+      kvLen,
+      qPosOffset: attrs.qPosOffset,
+      qHeads: attrs.qHeads,
+      keyBias: attrs.keyBias,
+    };
     const bufs = { q, k, v, out: narrowFloat(out, dtype), sinks, segs, dummyF32: ctx.dummy('f32') };
     switch (pipeline.route) {
       case 'decode':

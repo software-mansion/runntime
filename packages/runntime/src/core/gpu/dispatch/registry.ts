@@ -21,7 +21,14 @@ import {
   swigluSpec,
   tanhSpec,
 } from './elementwise.ts';
-import { layerNormSpec, meanSpec, rmsNormSpec, softmaxSpec, topkSpec } from './reduce.ts';
+import {
+  layerNormSpec,
+  logitStatsSpec,
+  meanSpec,
+  rmsNormSpec,
+  softmaxSpec,
+  topkSpec,
+} from './reduce.ts';
 import { attnSpec, localAttentionSpec, ropeSpec } from './attention.ts';
 import {
   avgPool2dHwc4Spec,
@@ -116,6 +123,7 @@ export const specs = {
   layerNorm: layerNormSpec,
   rmsNorm: rmsNormSpec,
   topk: topkSpec,
+  logitStats: logitStatsSpec,
   // shape
   astype: astypeSpec,
   transpose: transposeSpec,
