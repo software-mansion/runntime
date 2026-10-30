@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ACT_CODE } from '../../../src/core/graph/ops/shared.ts';
 import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
 import {
   BatchNorm2d,
@@ -24,8 +25,9 @@ import {
   memoryStateDict,
   type LazyStateDict,
 } from '../../../src/core/weights/safetensors.ts';
+import { scaleWeight } from '../../../src/core/weights/transforms.ts';
 import { hwc4Input, input, meta } from '../graph/values.ts';
-import { safetensorsFile } from '../weights/checkpoint.ts';
+import { contents, quantFile, safetensorsFile, type QuantEntry } from '../weights/checkpoint.ts';
 
 /** Binds every parameter to a stand-in of its declared shape, so forward()
  *  can build its graph without real weights. */
@@ -240,6 +242,178 @@ describe('Linear', () => {
       expect(bitsOf(got)).toEqual(bitsOf(want));
     },
   );
+});
+
+/** A quantized file of `entries` as a lazy state dict. */
+const quantCheckpoint = (bits: 4 | 8, groupSize: number, entries: Record<string, QuantEntry>) =>
+  fromSafetensors(bufferSource(quantFile(bits, groupSize, entries)), { chunkBytes: 0 });
+
+describe('Linear with a quantized weight', () => {
+  // torch [out 4, in 8], value o·8 + i, so a kernel column (one torch row)
+  // holds o·8 + 0..7 and its 4-row chunks are 4 consecutive bytes.
+  const numbered = Array.from({ length: 32 }, (_, i) => i);
+  // f16-exact scales [out 4, in/4 = 2]: o + g/2
+  const scales = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
+  const entry: QuantEntry = { ints: numbered, scales, shape: [4, 8] };
+
+  // int4 packs out features 8 to a word, so it takes [out 8, in 8].
+  const int4Entry: QuantEntry = {
+    ints: Array.from({ length: 64 }, (_, i) => (i % 16) - 8),
+    scales: Array.from({ length: 16 }, (_, i) => i / 2),
+    shape: [8, 8],
+  };
+
+  it.each([
+    { name: 'int8', bits: 8 as const, quant: entry, words: 8 },
+    { name: 'int4', bits: 4 as const, quant: int4Entry, words: 8 },
+  ])('retypes the weight to $name quantW and adds f32 scales', async ({ bits, quant, words }) => {
+    const out = quant.shape[0];
+    const layer = new Linear(8, out);
+    const sd = await quantCheckpoint(bits, 4, { 'fc.weight': quant });
+    layer.transformStateDict(sd, 'fc');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: words, dtype: 'quantW', dims: [8, out] },
+      bias: meta([out]),
+      weightScale: meta([2, out]),
+    });
+    expect(layer.weightScale!.pinned).toBe(true);
+    expect([...sd.tensors.keys()]).toEqual(['fc.weight', 'fc.weightScale']);
+    expect(sd.tensors.get('fc.weight')!.shape).toEqual([8, out]);
+  });
+
+  it('packs the torch [out, in] int8 ints as kernel [in, out] tiles', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: entry });
+    new Linear(8, 4).transformStateDict(sd, '');
+    // Tile (unit 0, rows 0..3) then (unit 0, rows 4..7); column c of a tile
+    // is torch row c, so its word holds bytes c·8 + 4·k4 + 0..3.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x03020100, 0x0b0a0908, 0x13121110, 0x1b1a1918, 0x07060504, 0x0f0e0d0c, 0x17161514,
+      0x1f1e1d1c,
+    ]);
+  });
+
+  it('packs int4 ints two columns to a word', async () => {
+    const sd = await quantCheckpoint(4, 4, { weight: int4Entry });
+    new Linear(8, 8).transformStateDict(sd, '');
+    // Column c is torch row c: i - 8 for an even row, i for an odd one. A
+    // word holds an even column's 4 nibbles, then an odd one's.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x3210ba98,
+      0x3210ba98,
+      0x7654fedc,
+      0x7654fedc, // columns 0..3: rows 0..3, rows 4..7
+      0x3210ba98,
+      0x3210ba98,
+      0x7654fedc,
+      0x7654fedc, // columns 4..7
+    ]);
+  });
+
+  it('transposes the scales to [in / groupSize, out]', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: entry });
+    new Linear(8, 4).transformStateDict(sd, '');
+    const scale = sd.tensors.get('weightScale')!;
+    expect(scale.shape).toEqual([2, 4]);
+    expect(await contents(scale)).toEqual({
+      type: 'f32',
+      values: [0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5],
+    });
+  });
+
+  it('takes f32 scales from scaleWeight as they are', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: entry });
+    sd.tensors.set('weight', scaleWeight(sd.tensors.get('weight')!, [1, 2, 3, 4]));
+    new Linear(8, 4).transformStateDict(sd, '');
+    // torch row o times o + 1, then transposed
+    expect(await contents(sd.tensors.get('weightScale')!)).toEqual({
+      type: 'f32',
+      values: [0, 2, 6, 12, 0.5, 3, 7.5, 14],
+    });
+  });
+
+  it('puts the scales right after the weight, so binding keeps file order', async () => {
+    const sd = await quantCheckpoint(8, 4, { 'fc.weight': entry });
+    const float = derivedTensor([4], () => Promise.resolve(new Float32Array(4)));
+    sd.tensors = new Map([
+      ['first', float],
+      ['fc.weight', sd.tensors.get('fc.weight')!],
+      ['fc.bias', float],
+    ]);
+    new Linear(8, 4).transformStateDict(sd, 'fc');
+    expect([...sd.tensors.keys()]).toEqual(['first', 'fc.weight', 'fc.weightScale', 'fc.bias']);
+  });
+
+  it('gives the words the bytes of the ints and scales, and the scales none', async () => {
+    const sd = await quantCheckpoint(4, 4, { weight: int4Entry });
+    const total = sd.totalBytes();
+    new Linear(8, 8).transformStateDict(sd, '');
+    expect(sd.tensors.get('weight')!.byteLength).toBe(32 + 32); // 64 nibbles, 16 f16 scales
+    expect(sd.tensors.get('weightScale')!.byteLength).toBe(0);
+    expect(sd.totalBytes()).toBe(total);
+  });
+
+  it('keeps the bias of a half() layer f16 and the scales f32', async () => {
+    const layer = new Linear(8, 4).half();
+    layer.transformStateDict(await quantCheckpoint(8, 4, { weight: entry }), '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 8, dtype: 'quantW', dims: [8, 4] },
+      bias: meta([4], 'f16'),
+      weightScale: meta([2, 4]),
+    });
+  });
+
+  it.each([
+    { name: 'in features off the 8-row tiles', inF: 12, outF: 4, bits: 8 as const, groupSize: 4 },
+    { name: 'int4 out features off 8 per word', inF: 8, outF: 4, bits: 4 as const, groupSize: 4 },
+    { name: 'a group size off 4', inF: 16, outF: 4, bits: 8 as const, groupSize: 2 },
+  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ inF, outF, bits, groupSize }) => {
+    const sd = await quantCheckpoint(bits, groupSize, {
+      weight: {
+        ints: new Array(inF * outF).fill(0),
+        scales: new Array((inF * outF) / groupSize).fill(1),
+        shape: [outF, inF],
+      },
+    });
+    const layer = new Linear(inF, outF);
+    expect(() => layer.transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
+    );
+    expect(layer.weight.shape.dtype).toBe('f32');
+  });
+
+  it.each([
+    { name: 'f32', half: false },
+    { name: 'f16', half: true },
+  ])(
+    'runs the $name forward as a quantized matmul with bias and activation in the epilogue',
+    async ({ half }) => {
+      const layer = new Linear(8, 4, { activation: 'gelu' });
+      if (half) layer.half();
+      layer.transformStateDict(await quantCheckpoint(8, 4, { weight: entry }), '');
+      fakeLoad(layer);
+      const x = input([5, 8], half ? 'f16' : 'f32');
+      const addend = input([5, 4], half ? 'f16' : 'f32');
+      const y = layer.forward(x, { addend });
+      expect(y.shape).toEqual(meta([5, 4], half ? 'f16' : 'f32'));
+      expect(y.pending?.op).toBe('matmulQuantW');
+      expect(y.pending?.inputs).toEqual([
+        x,
+        layer.weight.value,
+        layer.weightScale!.value,
+        layer.bias!.value,
+        addend,
+      ]);
+      // baseRow, scaleBase, bits, groupSize, bias, addend, activation
+      expect(y.pending?.attrs).toEqual([0, 0, 8, 4, 1, 1, ACT_CODE.gelu]);
+    },
+  );
+
+  it('refuses a weight in [in, out] layout', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: { ints: numbered, scales, shape: [8, 4] } });
+    expect(() => new Linear(8, 4).transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
+    );
+  });
 });
 
 describe('Conv1d', () => {
