@@ -414,8 +414,8 @@ export class LayerNorm extends Module {
   }
 }
 
-/** GroupNorm over [M, numChannels], global statistics, per-channel affine.
- *  numGroups must be 1. */
+/** GroupNorm over [M, numChannels], statistics per group of adjacent
+ *  channels, per-channel affine. numGroups must divide numChannels. */
 export class GroupNorm extends Module {
   readonly weight: Parameter;
   readonly bias: Parameter;
@@ -425,8 +425,8 @@ export class GroupNorm extends Module {
     readonly eps = 1e-5,
   ) {
     super();
-    if (numGroups !== 1) {
-      throw new Error(`GroupNorm: only numGroups = 1 is supported, got ${numGroups}`);
+    if (!Number.isInteger(numGroups) || numGroups < 1 || numChannels % numGroups !== 0) {
+      throw new Error(`GroupNorm: numGroups ${numGroups} must divide the ${numChannels} channels`);
     }
     this.weight = new Parameter({ elems: numChannels, dtype: 'f32', dims: [numChannels] });
     this.bias = new Parameter({ elems: numChannels, dtype: 'f32', dims: [numChannels] });
