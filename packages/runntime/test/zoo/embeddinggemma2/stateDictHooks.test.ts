@@ -56,13 +56,14 @@ function mapAndCheck(
 }
 
 describe('transformEmbeddingGemma2StateDict', () => {
-  // One sliding layer: hidden 4, 2 q heads and 1 kv head of size 4.
-  // hidden^-½ = 0.5, so the PLE scale is exact in f16.
+  // A sliding layer, then a full one: hidden 4, 2 q heads and 1 kv head,
+  // head size 4 for sliding and 8 for full, so each layer type gets its own
+  // rope block. hidden^-½ = 0.5, so the PLE scale is exact in f16.
   const cfg: EmbeddingGemma2Config = {
     ...EMBEDDINGGEMMA2_TEXT,
     hidden: 4,
     heads: 2,
-    layerTypes: ['sliding'],
+    layerTypes: ['sliding', 'full'],
     attention: {
       sliding: { headDim: 4, kvHeads: 1, theta: 10000 },
       full: { headDim: 8, kvHeads: 1, theta: 10000 },
@@ -70,32 +71,48 @@ describe('transformEmbeddingGemma2StateDict', () => {
   };
 
   const S = 'language_model.';
-  const L = 'language_model.layers.0';
+  const L = (i: number) => `language_model.layers.${i}`;
+  const layerRenamed = (i: number): Record<string, string> => ({
+    [`${L(i)}.self_attn.o_proj.weight`]: `layers.${i}.o_proj.weight`,
+    [`${L(i)}.mlp.gate_proj.weight`]: `layers.${i}.gate_proj.weight`,
+    [`${L(i)}.mlp.up_proj.weight`]: `layers.${i}.up_proj.weight`,
+    [`${L(i)}.mlp.down_proj.weight`]: `layers.${i}.down_proj.weight`,
+    [`${L(i)}.ple_block.per_layer_input_gate.weight`]: `layers.${i}.per_layer_input_gate.weight`,
+    [`${L(i)}.ple_block.per_layer_projection.weight`]: `layers.${i}.per_layer_projection.weight`,
+    [`${L(i)}.ple_block.post_per_layer_input_norm.weight`]: `layers.${i}.post_per_layer_input_norm.scale`,
+    [`${L(i)}.input_layernorm.weight`]: `layers.${i}.input_layernorm.scale`,
+    [`${L(i)}.post_attention_layernorm.weight`]: `layers.${i}.post_attention_layernorm.scale`,
+    [`${L(i)}.pre_feedforward_layernorm.weight`]: `layers.${i}.pre_feedforward_layernorm.scale`,
+    [`${L(i)}.post_feedforward_layernorm.weight`]: `layers.${i}.post_feedforward_layernorm.scale`,
+  });
   const RENAMED: Record<string, string> = {
-    [`${L}.self_attn.o_proj.weight`]: 'layers.0.o_proj.weight',
-    [`${L}.mlp.gate_proj.weight`]: 'layers.0.gate_proj.weight',
-    [`${L}.mlp.up_proj.weight`]: 'layers.0.up_proj.weight',
-    [`${L}.mlp.down_proj.weight`]: 'layers.0.down_proj.weight',
-    [`${L}.ple_block.per_layer_input_gate.weight`]: 'layers.0.per_layer_input_gate.weight',
-    [`${L}.ple_block.per_layer_projection.weight`]: 'layers.0.per_layer_projection.weight',
-    [`${L}.ple_block.post_per_layer_input_norm.weight`]: 'layers.0.post_per_layer_input_norm.scale',
-    [`${L}.input_layernorm.weight`]: 'layers.0.input_layernorm.scale',
-    [`${L}.post_attention_layernorm.weight`]: 'layers.0.post_attention_layernorm.scale',
-    [`${L}.pre_feedforward_layernorm.weight`]: 'layers.0.pre_feedforward_layernorm.scale',
-    [`${L}.post_feedforward_layernorm.weight`]: 'layers.0.post_feedforward_layernorm.scale',
+    ...layerRenamed(0),
+    ...layerRenamed(1),
     [`${S}ple.per_layer_projection_norm.weight`]: 'ple.per_layer_projection_norm.scale',
     [`${S}embed_tokens.weight`]: 'embed_tokens.weight',
     [`${S}norm.weight`]: 'norm.scale',
     [`${S}embedding_projection.weight`]: 'embedding_projection.weight',
   };
+  /** Layer `i`'s attention: q over `heads` heads of `d` rows, k and v over
+   *  one, norms 1 … d and d + 1 … 2d. */
+  const attention = (i: number, d: number): Record<string, Entry> => ({
+    [`${L(i)}.self_attn.q_proj.weight`]: grid(0, 2 * d, 4),
+    [`${L(i)}.self_attn.k_proj.weight`]: grid(100, d, 4),
+    [`${L(i)}.self_attn.v_proj.weight`]: grid(200, d, 4),
+    [`${L(i)}.self_attn.q_norm.weight`]: {
+      values: Array.from({ length: d }, (_, r) => r + 1),
+      shape: [d],
+    },
+    [`${L(i)}.self_attn.k_norm.weight`]: {
+      values: Array.from({ length: d }, (_, r) => d + r + 1),
+      shape: [d],
+    },
+    [`${L(i)}.layer_scalar`]: { values: [0.25], shape: [1] },
+  });
   const CHECKPOINT: Record<string, Entry> = {
     ...Object.fromEntries(Object.keys(RENAMED).map((name) => [name, ZERO])),
-    [`${L}.self_attn.q_proj.weight`]: grid(0, 8, 4),
-    [`${L}.self_attn.k_proj.weight`]: grid(100, 4, 4),
-    [`${L}.self_attn.v_proj.weight`]: grid(200, 4, 4),
-    [`${L}.self_attn.q_norm.weight`]: { values: [1, 2, 3, 4], shape: [4] },
-    [`${L}.self_attn.k_norm.weight`]: { values: [5, 6, 7, 8], shape: [4] },
-    [`${L}.layer_scalar`]: { values: [0.25], shape: [1] },
+    ...attention(0, 4),
+    ...attention(1, 8),
     [`${S}ple.per_layer_model_projection.weight`]: grid(0, 2, 4),
   };
 
@@ -106,37 +123,54 @@ describe('transformEmbeddingGemma2StateDict', () => {
       'layers.0.qkv.weight',
       'layers.0.qkv_norm',
       'layers.0.layer_scalar',
+      'layers.1.qkv.weight',
+      'layers.1.qkv_norm',
+      'layers.1.layer_scalar',
       'ple.per_layer_model_projection.weight',
     ]);
 
-    // Rope pairs (p, p + 2) of each 4-row head become rows (2p, 2p + 1):
-    // rows 0 2 1 3 of each head. v keeps its order.
-    const qkv = get('layers.0.qkv.weight');
-    expect(qkv.shape).toEqual([16, 4]);
-    expect(qkv.byteLength).toBe(64 * elemBytes);
-    expect(await contents(qkv)).toEqual({
-      type,
-      values: [
-        ...gridRows(0, [0, 2, 1, 3, 4, 6, 5, 7], 4),
-        ...gridRows(100, [0, 2, 1, 3], 4),
-        ...gridRows(200, [0, 1, 2, 3], 4),
-      ],
-    });
+    // Rope pairs (p, p + d/2) of each d-row head become rows (2p, 2p + 1):
+    // rows 0 2 1 3 of a 4-row head, 0 4 1 5 2 6 3 7 of an 8-row one. The
+    // layer's type picks d, so the full layer must not reorder like the
+    // sliding one. v keeps its order.
+    const layers: [i: number, d: number, head: number[]][] = [
+      [0, 4, [0, 2, 1, 3]],
+      [1, 8, [0, 4, 1, 5, 2, 6, 3, 7]],
+    ];
+    for (const [i, d, head] of layers) {
+      const qkv = get(`layers.${i}.qkv.weight`);
+      expect(qkv.shape).toEqual([4 * d, 4]);
+      expect(qkv.byteLength).toBe(16 * d * elemBytes);
+      expect(await contents(qkv)).toEqual({
+        type,
+        values: [
+          ...gridRows(0, [...head, ...head.map((r) => r + d)], 4),
+          ...gridRows(100, head, 4),
+          ...gridRows(
+            200,
+            Array.from({ length: d }, (_, r) => r),
+            4,
+          ),
+        ],
+      });
 
-    // q_norm reordered like q, once per q head; k_norm once; ones for v.
-    // Each norm's bytes count once.
-    const norm = get('layers.0.qkv_norm');
-    expect(norm.shape).toEqual([16]);
-    expect(norm.byteLength).toBe(8 * elemBytes);
-    expect(await contents(norm)).toEqual({
-      type,
-      values: [1, 3, 2, 4, 1, 3, 2, 4, 5, 7, 6, 8, ...ones(4)],
-    });
+      // q_norm reordered like q, once per q head; k_norm once; ones for v.
+      // Each norm's bytes count once.
+      const norm = get(`layers.${i}.qkv_norm`);
+      expect(norm.shape).toEqual([4 * d]);
+      expect(norm.byteLength).toBe(2 * d * elemBytes);
+      const qn = head.map((r) => r + 1);
+      const kn = head.map((r) => d + r + 1);
+      expect(await contents(norm)).toEqual({
+        type,
+        values: [...qn, ...qn, ...kn, ...ones(d)],
+      });
 
-    // The CPU parameter reads f32 whatever the checkpoint holds.
-    const scalar = get('layers.0.layer_scalar');
-    expect(scalar.byteLength).toBe(elemBytes);
-    expect(await contents(scalar)).toEqual({ type: 'f32', values: [0.25] });
+      // The CPU parameter reads f32 whatever the checkpoint holds.
+      const scalar = get(`layers.${i}.layer_scalar`);
+      expect(scalar.byteLength).toBe(elemBytes);
+      expect(await contents(scalar)).toEqual({ type: 'f32', values: [0.25] });
+    }
 
     // Scaled, so f32 on every checkpoint.
     const ple = get('ple.per_layer_model_projection.weight');
