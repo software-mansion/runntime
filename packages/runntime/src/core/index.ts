@@ -139,6 +139,7 @@ export { createOpfsCache } from './weights/opfsCache.ts';
 export { foldBnIntoConv } from './weights/foldBn.ts';
 export {
   concatRows,
+  permuteRows,
   reshapeWeight,
   scaleWeight,
   splitCols,
