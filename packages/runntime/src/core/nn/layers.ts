@@ -26,10 +26,10 @@ import {
   packConvWinogradF16,
   packDwHwc4F16,
   permuteConvTransposeF16,
-  transposeF32,
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
 import { derivedTensor, type LazyStateDict } from '../weights/safetensors.ts';
+import { readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -135,14 +135,7 @@ export class Linear extends Module {
           `expected torch layout [${this.outFeatures}, ${this.inFeatures}]`,
       );
     }
-    sd.tensors.set(
-      name,
-      derivedTensor(
-        [this.inFeatures, this.outFeatures],
-        async () => transposeF32(await tensor.f32(), this.outFeatures, this.inFeatures),
-        tensor.byteLength,
-      ),
-    );
+    sd.tensors.set(name, transposeWeight(tensor));
   }
   forward(x: Value, call: { addend?: Value } = {}): Value {
     return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
@@ -216,7 +209,12 @@ export class Conv1d extends Module {
       derivedTensor(
         [this.kernelSize * this.inChannels, this.outChannels],
         async () =>
-          convToTapMajor(await tensor.f32(), this.outChannels, this.inChannels, this.kernelSize),
+          convToTapMajor(
+            await readFloats('Conv1d', tensor),
+            this.outChannels,
+            this.inChannels,
+            this.kernelSize,
+          ),
         tensor.byteLength,
       ),
     );

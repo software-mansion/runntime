@@ -18,10 +18,17 @@ const numel = (shape: readonly number[]): number => shape.reduce((a, b) => a * b
 const mismatch = (helper: string, why: string) =>
   new RunntimeError('CHECKPOINT_MISMATCH', `${helper}: ${why}`);
 
-async function readFloats(helper: string, t: LazyTensor): Promise<Floats> {
+/** Reads `t` as f16 halfwords when it holds F16 and as f32 otherwise. Throws
+ *  CHECKPOINT_MISMATCH, naming `helper`, on packed u32 words or on a derived
+ *  tensor whose data does not fill its shape. A file tensor's length is
+ *  checked by the header parser. */
+export async function readFloats(helper: string, t: LazyTensor): Promise<Floats> {
   if (t.kind === 'file') return t.dtype === 'F16' ? t.u16() : t.f32();
   const data = await t.data();
   if (data instanceof Uint32Array) throw mismatch(helper, 'source holds packed u32 words');
+  if (data.length !== numel(t.shape)) {
+    throw mismatch(helper, `source holds ${data.length} values for shape [${t.shape.join(', ')}]`);
+  }
   return data;
 }
 

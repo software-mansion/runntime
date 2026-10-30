@@ -12,7 +12,6 @@ import {
   packConvWinogradF16,
   packDwHwc4F16,
   permuteConvTransposeF16,
-  transposeF32,
 } from '../../../src/core/weights/convert.ts';
 
 // f16 is 1 sign bit, 5 exponent bits, 10 mantissa bits. Every value here is
@@ -185,23 +184,6 @@ describe('array conversion edge cases', () => {
 
 // Weight values here are just labels (1, 2, 3...) so you can follow where each
 // one lands. The layout comments use [outer, ..., inner] order.
-describe('transposeF32', () => {
-  it.each([
-    { name: '2x3', rows: 2, cols: 3, src: [1, 2, 3, 4, 5, 6], want: [1, 4, 2, 5, 3, 6] },
-    { name: '1x1', rows: 1, cols: 1, src: [7], want: [7] },
-    { name: 'a single row', rows: 1, cols: 3, src: [1, 2, 3], want: [1, 2, 3] },
-    { name: 'a single column', rows: 3, cols: 1, src: [1, 2, 3], want: [1, 2, 3] },
-    { name: 'empty', rows: 0, cols: 3, src: [], want: [] },
-  ])('$name', ({ rows, cols, src, want }) => {
-    expect(transposeF32(new Float32Array(src), rows, cols)).toEqual(new Float32Array(want));
-  });
-
-  it('rejects a wrong length', () => {
-    expect(() => transposeF32(new Float32Array(5), 2, 3)).toThrow(/length 5/);
-    expect(() => transposeF32(new Float32Array(1), 0, 0)).toThrow(/length 1/);
-  });
-});
-
 describe('convToTapMajor', () => {
   // [cOut, cIn, k] -> [k, cIn, cOut]
   it.each([
@@ -218,6 +200,14 @@ describe('convToTapMajor', () => {
     { name: 'empty', cOut: 0, cIn: 0, k: 0, src: [], want: [] },
   ])('$name', ({ cOut, cIn, k, src, want }) => {
     expect(convToTapMajor(new Float32Array(src), cOut, cIn, k)).toEqual(new Float32Array(want));
+  });
+
+  it('moves f16 halfwords as they are', () => {
+    // 2 out, 1 in, 2 taps, as above: 1 2 3 4 -> 1 3 2 4.
+    const [one, two, three, four] = [0x3c00, 0x4000, 0x4200, 0x4400];
+    expect(convToTapMajor(new Uint16Array([one, two, three, four]), 2, 1, 2)).toEqual(
+      new Uint16Array([one, three, two, four]),
+    );
   });
 
   it('rejects a wrong length', () => {

@@ -14,8 +14,16 @@ import {
   RMSNorm,
   Snake,
 } from '../../../src/core/nn/layers.ts';
+import { loadLazyStateDict } from '../../../src/core/nn/loadStateDict.ts';
 import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/module.ts';
-import { memoryStateDict } from '../../../src/core/weights/safetensors.ts';
+import { f16ToF32, f32ArrayToF16Bits } from '../../../src/core/weights/convert.ts';
+import {
+  bufferSource,
+  derivedTensor,
+  fromSafetensors,
+  memoryStateDict,
+  type LazyStateDict,
+} from '../../../src/core/weights/safetensors.ts';
 import { hwc4Input, input, meta } from '../graph/values.ts';
 
 /** Binds every parameter to a stand-in of its declared shape, so forward()
@@ -28,6 +36,65 @@ function fakeLoad<M extends AnyModule>(m: M): M {
 /** name → declared shape, for comparing whole layers at once. */
 const shapes = (m: AnyModule) =>
   Object.fromEntries([...m.namedParameters()].map(([n, p]) => [n, p.shape]));
+
+/** A state dict with one F16 tensor named `weight`, read from a real
+ *  safetensors file built from the format spec: an 8-byte little-endian
+ *  header length, the JSON header, then the payload. memoryStateDict reads a
+ *  Uint16Array as BF16, so F16 needs the file. */
+function f16Checkpoint(bits: Uint16Array, shape: number[]): Promise<LazyStateDict> {
+  const header = new TextEncoder().encode(
+    JSON.stringify({ weight: { dtype: 'F16', shape, data_offsets: [0, bits.byteLength] } }),
+  );
+  const file = new Uint8Array(8 + header.length + bits.byteLength);
+  new DataView(file.buffer).setBigUint64(0, BigInt(header.length), true);
+  file.set(header, 8);
+  file.set(new Uint8Array(bits.buffer, bits.byteOffset, bits.byteLength), 8 + header.length);
+  return fromSafetensors(bufferSource(file), { chunkBytes: 0 });
+}
+
+/** A state dict whose `weight` is a derived tensor holding `data`, as a zoo
+ *  hook hands one over: a Uint16Array means f16 halfwords, a Uint32Array
+ *  packed words. */
+function derivedCheckpoint(data: Uint16Array | Uint32Array, shape: number[]): LazyStateDict {
+  const tensor = derivedTensor(shape, () => Promise.resolve(data), data.byteLength);
+  return {
+    metadata: {},
+    tensors: new Map([['weight', tensor]]),
+    totalBytes: () => data.byteLength,
+  };
+}
+
+/** bf16 bits: the top half of the f32 pattern. */
+const bf16 = (values: number[]) =>
+  Uint16Array.from(values, (v) => new Uint32Array(new Float32Array([v]).buffer)[0]! >>> 16);
+
+/** Loads `sd` into a layer with only a weight and returns what reached its
+ *  upload. */
+async function uploadedWeight(layer: AnyModule, sd: LazyStateDict) {
+  const upload = vi.fn((_data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) =>
+    pending(shape, 'reshape', []),
+  );
+  await loadLazyStateDict(layer, sd, { upload });
+  return upload.mock.calls[0]![0];
+}
+
+/** The array type and raw bit patterns, so -0, subnormals and infinities
+ *  compare exactly. */
+function bitsOf(data: Float32Array | Uint32Array | Uint16Array) {
+  if (data instanceof Float32Array) return { type: 'f32', bits: [...new Uint32Array(data.buffer)] };
+  if (data instanceof Uint16Array) return { type: 'f16', bits: [...data] };
+  return { type: 'u32', bits: [...data] };
+}
+
+/** f16 bits a widening to f32 could disturb: 1, −0, the smallest and largest
+ *  subnormals, the largest finite value, −inf. */
+const EDGE_BITS = [0x3c00, 0x8000, 0x0001, 0x03ff, 0x7bff, 0xfc00] as const;
+
+/** Every f16 bit pattern but NaN. f16 → f32 → f16 maps each of these back to
+ *  itself; NaN payloads collapse to one quiet NaN on that trip. */
+const ALL_F16 = Uint16Array.from({ length: 1 << 16 }, (_, i) => i).filter(
+  (b) => (b & 0x7c00) !== 0x7c00 || (b & 0x3ff) === 0,
+);
 
 describe('Linear', () => {
   it('stores the weight as [in, out] and the bias as [out]', () => {
@@ -71,6 +138,115 @@ describe('Linear', () => {
     new Linear(3, 2).transformStateDict(sd, '');
     expect(sd.tensors.get('weight')!.shape).toEqual([3, 2]);
   });
+
+  // torch [2, 3] rows [a b c], [d e f] load as [3, 2]: a d, b e, c f.
+  const [a, b, c, d, e, f] = EDGE_BITS;
+  it.each([
+    {
+      name: 'F16 into an f16 layer uploads the halfwords transposed',
+      checkpoint: () => f16Checkpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: true,
+      want: { type: 'f16', bits: [a, d, b, e, c, f] },
+    },
+    {
+      name: 'F16 into an f32 layer decodes the transposed halfwords',
+      checkpoint: () => f16Checkpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: false,
+      // a d b e c f = 1, (1023/1024)·2^-14, -0, 65504, 2^-24, -inf
+      want: bitsOf(new Float32Array([1, (1023 / 1024) * 2 ** -14, -0, 65504, 2 ** -24, -Infinity])),
+    },
+    {
+      name: 'F32 into an f32 layer uploads f32 transposed',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: false,
+      want: bitsOf(new Float32Array([1, 4, 2, 5, 3, 6])),
+    },
+    {
+      name: 'F32 into an f16 layer narrows the transposed f32',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: true,
+      // f16 bits of 1, 4, 2, 5, 3, 6
+      want: { type: 'f16', bits: [0x3c00, 0x4400, 0x4000, 0x4500, 0x4200, 0x4600] },
+    },
+    {
+      name: 'BF16 into an f32 layer decodes, then transposes',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: false,
+      want: bitsOf(new Float32Array([1, 4, 2, 5, 3, 6])),
+    },
+    {
+      name: 'BF16 into an f16 layer decodes, transposes, then narrows',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: true,
+      // f16 bits of 1, 4, 2, 5, 3, 6
+      want: { type: 'f16', bits: [0x3c00, 0x4400, 0x4000, 0x4500, 0x4200, 0x4600] },
+    },
+    {
+      name: 'derived halfwords into an f16 layer upload transposed',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: true,
+      want: { type: 'f16', bits: [a, d, b, e, c, f] },
+    },
+    {
+      name: 'derived halfwords into an f32 layer decode transposed',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: false,
+      want: bitsOf(new Float32Array([1, (1023 / 1024) * 2 ** -14, -0, 65504, 2 ** -24, -Infinity])),
+    },
+  ])('$name', async ({ checkpoint, half, want }) => {
+    const layer = new Linear(3, 2, { bias: false });
+    if (half) layer.half();
+    expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('rejects derived packed words', async () => {
+    const sd = derivedCheckpoint(new Uint32Array(6), [2, 3]);
+    await expect(uploadedWeight(new Linear(3, 2, { bias: false }), sd)).rejects.toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'transposeWeight: source holds packed u32 words',
+      }),
+    );
+  });
+
+  it('transposes F16 halfwords without decoding them to f32', async () => {
+    const sd = await f16Checkpoint(new Uint16Array(EDGE_BITS), [2, 3]);
+    const f32 = vi.spyOn(sd.tensors.get('weight')!, 'f32');
+    new Linear(3, 2, { bias: false }).transformStateDict(sd, '');
+    const w = sd.tensors.get('weight')!;
+    if (w.kind !== 'derived') throw new Error('expected a derived tensor');
+    expect(await w.data()).toBeInstanceOf(Uint16Array);
+    expect(w.byteLength).toBe(12);
+    expect(f32).not.toHaveBeenCalled();
+  });
+
+  // The reference is the f32 round trip: decode, transpose in f32, then
+  // narrow for an f16 layer.
+  it.each([
+    { name: 'an f16 layer', half: true },
+    { name: 'an f32 layer', half: false },
+  ])(
+    'loads every F16 value into $name with the same bits as the f32 round trip',
+    async ({ half }) => {
+      // 63490 values as 70 × 907.
+      const rows = 70;
+      const cols = ALL_F16.length / rows;
+      const values = f16ToF32(ALL_F16);
+      const transposed = new Float32Array(values.length);
+      for (let r = 0; r < rows; r++) {
+        for (let col = 0; col < cols; col++) transposed[col * rows + r] = values[r * cols + col]!;
+      }
+      const want = half ? f32ArrayToF16Bits(transposed).data : transposed;
+      const layer = new Linear(cols, rows, { bias: false });
+      if (half) layer.half();
+      const got = await uploadedWeight(layer, await f16Checkpoint(ALL_F16, [rows, cols]));
+      expect(bitsOf(got)).toEqual(bitsOf(want));
+    },
+  );
 });
 
 describe('Conv1d', () => {
@@ -103,6 +279,113 @@ describe('Conv1d', () => {
       expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
     );
   });
+
+  // torch [out 2, in 3, k 2] holding elements 0..11 loads tap-major as
+  // 0 6 2 8 4 10 1 7 3 9 5 11 (row tap·in + i, column out), as in the f32
+  // case above.
+  const TAP_MAJOR = [0, 6, 2, 8, 4, 10, 1, 7, 3, 9, 5, 11];
+  // EDGE_BITS, then each with its sign flipped.
+  const halves = [...EDGE_BITS, ...EDGE_BITS.map((b) => b ^ 0x8000)];
+  const reordered = new Uint16Array(TAP_MAJOR.map((i) => halves[i]!));
+  const f32Values = Array.from({ length: 12 }, (_, i) => i + 1);
+  it.each([
+    {
+      name: 'F16 into an f16 layer uploads the halfwords reordered',
+      checkpoint: () => f16Checkpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: true,
+      want: bitsOf(reordered),
+    },
+    {
+      name: 'F16 into an f32 layer decodes the reordered halfwords',
+      checkpoint: () => f16Checkpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: false,
+      want: bitsOf(f16ToF32(reordered)),
+    },
+    {
+      name: 'F32 into an f32 layer uploads f32 reordered',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array(f32Values), shape: [2, 3, 2] } }),
+      half: false,
+      want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
+    },
+    {
+      name: 'BF16 into an f32 layer decodes, then reorders',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16(f32Values), shape: [2, 3, 2] } }),
+      half: false,
+      want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
+    },
+    {
+      name: 'BF16 into an f16 layer decodes, reorders, then narrows',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16(f32Values), shape: [2, 3, 2] } }),
+      half: true,
+      want: bitsOf(f32ArrayToF16Bits(new Float32Array(TAP_MAJOR.map((i) => i + 1))).data),
+    },
+    {
+      name: 'derived halfwords into an f16 layer upload reordered',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: true,
+      want: bitsOf(reordered),
+    },
+    {
+      name: 'derived halfwords into an f32 layer decode reordered',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: false,
+      want: bitsOf(f16ToF32(reordered)),
+    },
+  ])('$name', async ({ checkpoint, half, want }) => {
+    const layer = new Conv1d(3, 2, 2, { bias: false });
+    if (half) layer.half();
+    expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('rejects derived packed words', async () => {
+    const sd = derivedCheckpoint(new Uint32Array(12), [2, 3, 2]);
+    await expect(uploadedWeight(new Conv1d(3, 2, 2, { bias: false }), sd)).rejects.toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'Conv1d: source holds packed u32 words',
+      }),
+    );
+  });
+
+  it('reorders F16 halfwords without decoding them to f32', async () => {
+    const sd = await f16Checkpoint(new Uint16Array(halves), [2, 3, 2]);
+    const f32 = vi.spyOn(sd.tensors.get('weight')!, 'f32');
+    new Conv1d(3, 2, 2, { bias: false }).transformStateDict(sd, '');
+    const w = sd.tensors.get('weight')!;
+    if (w.kind !== 'derived') throw new Error('expected a derived tensor');
+    expect(await w.data()).toBeInstanceOf(Uint16Array);
+    expect(w.byteLength).toBe(24);
+    expect(f32).not.toHaveBeenCalled();
+  });
+
+  // The reference is the f32 round trip: decode, reorder in f32, then narrow
+  // for an f16 layer.
+  it.each([
+    { name: 'an f16 layer', half: true },
+    { name: 'an f32 layer', half: false },
+  ])(
+    'loads every F16 value into $name with the same bits as the f32 round trip',
+    async ({ half }) => {
+      // 63490 values as out 10, in 907, k 7.
+      const [cOut, cIn, k] = [10, 907, 7];
+      const values = f16ToF32(ALL_F16);
+      const tapMajor = new Float32Array(values.length);
+      for (let o = 0; o < cOut; o++) {
+        for (let i = 0; i < cIn; i++) {
+          for (let t = 0; t < k; t++)
+            tapMajor[(t * cIn + i) * cOut + o] = values[(o * cIn + i) * k + t]!;
+        }
+      }
+      const want = half ? f32ArrayToF16Bits(tapMajor).data : tapMajor;
+      const layer = new Conv1d(cIn, cOut, k, { bias: false });
+      if (half) layer.half();
+      const got = await uploadedWeight(layer, await f16Checkpoint(ALL_F16, [cOut, cIn, k]));
+      expect(bitsOf(got)).toEqual(bitsOf(want));
+    },
+  );
 
   it('widens the window by the dilation', () => {
     const conv = (padding?: 'same') =>

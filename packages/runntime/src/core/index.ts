@@ -10,7 +10,6 @@ export {
   packConvHwc4F16,
   packDwHwc4F16,
   permuteConvTransposeF16,
-  transposeF32,
 } from './weights/convert.ts';
 export {
   createStorageFor,
