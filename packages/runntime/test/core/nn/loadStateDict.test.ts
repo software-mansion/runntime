@@ -14,6 +14,7 @@ import {
   derivedTensor,
   fromSafetensors,
   memoryStateDict,
+  quantTensor,
   type LazyStateDict,
   type LazyTensor,
   type MemoryStateDict,
@@ -237,6 +238,40 @@ describe('binding', () => {
     expect(upload.mock.calls.map(([, shape]) => shape.dtype)).toEqual(['f16', 'f16']);
     expect(upload.mock.calls[1]![0]).toEqual(new Uint16Array([F16[1], F16['-1.5']]));
     expect(m.scale.loaded).toBe(true);
+  });
+});
+
+describe('a quantized tensor', () => {
+  // A [2, 2] int8 weight in groups of 2; the loader must refuse it before
+  // reading either part.
+  const ints = vi.fn(async () => new Int8Array([1, 2, 3, 4]));
+  const scales = vi.fn(async () => new Float32Array([1, 2]));
+  const quant = quantTensor({
+    name: 'w',
+    shape: [2, 2],
+    bits: 8,
+    groupSize: 2,
+    byteLength: 8,
+    ints,
+    scales,
+  });
+
+  it.each([
+    { name: 'an f32 parameter', param: () => new Parameter(meta([2, 2])), dtype: 'f32' },
+    { name: 'an f16 parameter', param: () => new Parameter(meta([2, 2], 'f16')), dtype: 'f16' },
+    { name: 'a CpuParameter', param: () => new CpuParameter(meta([2, 2])), dtype: 'f32' },
+  ])('is refused by $name with CHECKPOINT_MISMATCH', async ({ param, dtype }) => {
+    class Linear extends Module {
+      weight = param();
+    }
+    const upload = recorder();
+    await expect(load(new Linear(), { weight: quant }, upload)).rejects.toMatchObject({
+      code: 'CHECKPOINT_MISMATCH',
+      message: `loadStateDict: 'weight' is quantized (int8), but the parameter holds ${dtype}`,
+    });
+    expect(upload).not.toHaveBeenCalled();
+    expect(ints).not.toHaveBeenCalled();
+    expect(scales).not.toHaveBeenCalled();
   });
 });
 
