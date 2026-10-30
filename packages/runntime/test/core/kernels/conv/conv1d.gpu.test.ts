@@ -226,7 +226,7 @@ describe('conv1d kernel', () => {
   // Every epilogue on every route: act(conv + bias).
   const EPILOGUES = [
     { name: 'bias', bias: true },
-    ...(['tanh', 'gelu', 'silu', 'relu', 'geluTanh'] as const).map((activation) => ({
+    ...(['tanh', 'gelu', 'silu', 'relu', 'geluTanh', 'elu'] as const).map((activation) => ({
       name: `bias and ${activation}`,
       bias: true,
       activation,

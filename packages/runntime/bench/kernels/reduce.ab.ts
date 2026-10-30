@@ -107,4 +107,12 @@ abSuite('reduce', [
     const b = randMat(version, 1, 288);
     return () => version.lib.groupNorm(x, 1, w, b);
   }),
+  rows('groupNorm per channel, HuBERT conv0 [3199,512]', 3199, 512, 'f32', (version, x) => {
+    const w = randMat(version, 1, 512);
+    const b = randMat(version, 1, 512);
+    const call = () => version.lib.groupNorm(x, 512, w, b);
+    // Built once here, so a base with one group only throws and skips the case.
+    call();
+    return call;
+  }),
 ]);

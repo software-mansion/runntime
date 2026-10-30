@@ -9,6 +9,7 @@ import {
   addSpec,
   asinhSpec,
   clampScalarSpec,
+  eluSpec,
   geluSpec,
   mulScalarSpec,
   mulSpec,
@@ -86,6 +87,7 @@ export const specs = {
   gelu: geluSpec,
   silu: siluSpec,
   asinh: asinhSpec,
+  elu: eluSpec,
   snake: snakeSpec,
   // matmul
   matmul: matmulSpec,
