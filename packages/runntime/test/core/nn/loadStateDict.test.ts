@@ -19,6 +19,7 @@ import {
   type MemoryStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { meta } from '../graph/values.ts';
+import { safetensorsFile } from '../weights/checkpoint.ts';
 
 /** Records every upload and hands back a stand-in of the slot's shape. */
 const recorder = () =>
@@ -250,14 +251,7 @@ describe('materializing an f16 slot', () => {
   };
 
   it('narrows f32 from a file', async () => {
-    // A safetensors file built from the spec: 8-byte header length, JSON, payload.
-    const header = new TextEncoder().encode(
-      JSON.stringify({ w: { dtype: 'F32', shape: [2], data_offsets: [0, 8] } }),
-    );
-    const file = new Uint8Array(8 + header.length + 8);
-    new DataView(file.buffer).setBigUint64(0, BigInt(header.length), true);
-    file.set(header, 8);
-    file.set(new Uint8Array(new Float32Array([1, 2]).buffer), 8 + header.length);
+    const file = safetensorsFile({ w: { data: new Float32Array([1, 2]), shape: [2] } });
     expect(await bits(await fromSafetensors(bufferSource(file)))).toEqual(
       new Uint16Array([F16[1], F16[2]]),
     );
