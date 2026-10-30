@@ -270,4 +270,20 @@ describe('weight helpers', () => {
       message: `${name}: source holds packed u32 words`,
     });
   });
+
+  it.for([
+    { name: 'concatRows', run: (t: LazyTensor) => concatRows([t]) },
+    { name: 'splitRows', run: (t: LazyTensor) => splitRows(t, [2])[0]! },
+    { name: 'splitCols', run: (t: LazyTensor) => splitCols(t, [3])[0]! },
+    { name: 'scaleWeight', run: (t: LazyTensor) => scaleWeight(t, 2) },
+    { name: 'transposeWeight', run: (t: LazyTensor) => transposeWeight(t) },
+  ])('$name rejects a derived source whose data does not fill its shape', async ({ name, run }) => {
+    // A hook bug: shape [2, 3] says 6 values, data holds 5. A file tensor
+    // cannot get here, its header check rejects the length mismatch.
+    const short = derivedTensor([2, 3], async () => new Float32Array([1, 2, 3, 4, 5]));
+    await expect(contents(run(short))).rejects.toMatchObject({
+      code: 'CHECKPOINT_MISMATCH',
+      message: `${name}: source holds 5 values for shape [2, 3]`,
+    });
+  });
 });
