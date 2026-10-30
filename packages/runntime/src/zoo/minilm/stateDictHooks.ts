@@ -6,11 +6,19 @@
  *  across the q and k parts, so the scale-free kernel still computes
  *  q·kᵀ/√headDim.
  *
- *  Weights stay in torch layout for the core Linear hook to transpose. Derived
- *  byteLengths carry the source file bytes, so load progress still sums to the
- *  checkpoint size. */
+ *  Weights stay in torch layout for the core Linear hook to transpose. The
+ *  fused q/k/v and the position sum are f32 even from an F16 checkpoint, so
+ *  an f32 model loads exact values and an f16 model rounds once in the
+ *  loader. Derived byteLengths carry the source file bytes, so load progress
+ *  still sums to the checkpoint size. */
 
-import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import {
+  concatRows,
+  derivedTensor,
+  scaleWeight,
+  type LazyStateDict,
+  type LazyTensor,
+} from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
 import type { MinilmConfig } from './config.ts';
 
@@ -65,46 +73,19 @@ export function transformMinilmStateDict(
     const hf = (name: string) => q(`encoder.layer.${i}.${name}`);
     const ours = (name: string) => q(`layers.${i}.${name}`);
 
-    // q|k|v → one torch-layout [3·hidden, hidden] weight: the three [out, in]
-    // blocks stacked row-wise, q/k parts pre-scaled.
-    const parts = (['query', 'key', 'value'] as const).map((p) => ({
-      weight: take(sd, hf(`attention.self.${p}.weight`)),
-      bias: take(sd, hf(`attention.self.${p}.bias`)),
-      scale: p === 'value' ? 1 : qkScale,
-    }));
-    const H = cfg.hidden;
-    sd.tensors.set(
-      ours('qkv.weight'),
-      derivedTensor(
-        [3 * H, H],
-        async () => {
-          const out = new Float32Array(3 * H * H);
-          for (let p = 0; p < 3; p++) {
-            const { weight, scale } = parts[p]!;
-            const w = await weight.f32();
-            for (let i = 0; i < H * H; i++) out[p * H * H + i] = w[i]! * scale;
-          }
-          return out;
-        },
-        parts.reduce((sum, p) => sum + p.weight.byteLength, 0),
-      ),
-    );
-    sd.tensors.set(
-      ours('qkv.bias'),
-      derivedTensor(
-        [3 * H],
-        async () => {
-          const out = new Float32Array(3 * H);
-          for (let p = 0; p < 3; p++) {
-            const { bias, scale } = parts[p]!;
-            const b = await bias.f32();
-            for (let c = 0; c < H; c++) out[p * H + c] = b[c]! * scale;
-          }
-          return out;
-        },
-        parts.reduce((sum, p) => sum + p.bias.byteLength, 0),
-      ),
-    );
+    // q|k|v → one torch-layout [3·hidden, hidden] weight and [3·hidden] bias:
+    // the three parts stacked row-wise, q/k pre-scaled.
+    for (const suffix of ['weight', 'bias']) {
+      const part = (p: string) => take(sd, hf(`attention.self.${p}.${suffix}`));
+      sd.tensors.set(
+        ours(`qkv.${suffix}`),
+        concatRows([
+          scaleWeight(part('query'), qkScale),
+          scaleWeight(part('key'), qkScale),
+          part('value'),
+        ]),
+      );
+    }
 
     move(sd, hf('attention.output.dense.weight'), ours('out.weight'));
     move(sd, hf('attention.output.dense.bias'), ours('out.bias'));

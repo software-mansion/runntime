@@ -99,6 +99,19 @@ describe('transform hooks', () => {
     expect(upload.mock.calls[0]![0]).toEqual(new Float32Array([1, 2]));
     expect(m.w.loaded).toBe(true);
   });
+
+  it('reads a derived tensor once and leaves it holding nothing', async () => {
+    const compute = vi.fn(async () => new Float32Array([1, 2]));
+    const w = derivedTensor([2], compute);
+    class One extends Module {
+      w = new Parameter(meta([2]));
+    }
+    await load(new One(), { w });
+    expect(compute).toHaveBeenCalledOnce();
+    // A second read computes again: the loader's copy was the only one.
+    await w.f32();
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('strict key check', () => {

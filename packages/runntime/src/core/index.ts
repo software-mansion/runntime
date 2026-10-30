@@ -138,6 +138,13 @@ export {
 export { cachedRangeSource } from './weights/cachedSource.ts';
 export { createOpfsCache } from './weights/opfsCache.ts';
 export { foldBnIntoConv } from './weights/foldBn.ts';
+export {
+  concatRows,
+  scaleWeight,
+  splitCols,
+  splitRows,
+  transposeWeight,
+} from './weights/transforms.ts';
 export type {
   RangeSource,
   SafeDtype,

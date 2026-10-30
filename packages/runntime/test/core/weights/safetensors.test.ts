@@ -644,11 +644,18 @@ describe('memoryStateDict', () => {
 });
 
 describe('derivedTensor', () => {
-  it('computes once, however often it is read', async () => {
+  it('computes on every read and holds nothing between reads', async () => {
     const compute = vi.fn(async () => new Float32Array([0.25]));
     const t = derivedTensor([1], compute);
-    await Promise.all([t.f32(), t.f32(), t.data()]);
-    expect(compute).toHaveBeenCalledOnce();
+    expect(await t.f32()).toEqual(new Float32Array([0.25]));
+    expect(await t.data()).toEqual(new Float32Array([0.25]));
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it('decodes f16 halfwords for f32()', async () => {
+    // 0x3c00 = 1, 0xc000 = -2, 0x3800 = 0.5 in f16.
+    const t = derivedTensor([3], async () => new Uint16Array([0x3c00, 0xc000, 0x3800]));
+    expect(await t.f32()).toEqual(new Float32Array([1, -2, 0.5]));
   });
 
   it('rejects an accessor that does not match what compute made', async () => {
