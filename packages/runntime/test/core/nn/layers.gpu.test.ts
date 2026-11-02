@@ -22,6 +22,9 @@ interface Case {
   bias: boolean;
   addend?: boolean;
   activation?: SlotAct;
+  /** Takes the tiled kernel, which stages the dequantized weight in f16
+   *  workgroup memory for an f16 input. */
+  tiled?: boolean;
 }
 
 /** A Linear loaded from a quantized file matches a CPU loop of
@@ -56,9 +59,8 @@ async function checkQuantizedLinear(c: Case, bits: 4 | 8, dtype: 'f32' | 'f16') 
   const call = c.addend ? { addend: upload(root, addend, { ...matrix(m, outF), dtype }) } : {};
   const got = await toArray(layer.forward(x, call), ex);
 
-  // The f16 kernel stages the dequantized weight in f16 workgroup memory.
   const dequant = Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);
-  const weight = dtype === 'f16' ? roundF16(dequant) : dequant;
+  const weight = dtype === 'f16' && c.tiled ? roundF16(dequant) : dequant;
   const want = new Float64Array(m * outF);
   for (let i = 0; i < m; i++) {
     for (let o = 0; o < outF; o++) {
@@ -77,26 +79,15 @@ async function checkQuantizedLinear(c: Case, bits: 4 | 8, dtype: 'f32' | 'f16') 
 }
 
 describe('Linear with a quantized weight', () => {
-  // A quantized Linear takes the plain quantW kernel only for an f32 input
-  // under 8 rows with no epilogue; anything else takes the tiled kernel.
+  // A quantized Linear takes matmulQuantW below 48·1024 output values (m ·
+  // outF) and the tiled kernel from there, for either dtype and any epilogue.
   const CASES: (Case & { name: string; dtypes: ('f32' | 'f16')[] })[] = [
-    // plain: f32, m < 8, no bias
-    { name: 'plain, 1 row', m: 1, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32'] },
-    { name: 'plain, 7 rows', m: 7, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32'] },
-    // tiled: m >= 8
-    { name: 'tiled, 8 rows', m: 8, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32'] },
-    // tiled: a bias, an activation or an addend is an epilogue, whatever m
+    // matmulQuantW: m · outF < 48·1024
+    { name: '1 row', m: 1, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32', 'f16'] },
+    { name: '8 rows', m: 8, inF: 64, outF: 48, groupSize: 16, bias: false, dtypes: ['f32'] },
+    { name: 'bias, 7 rows', m: 7, inF: 64, outF: 48, groupSize: 16, bias: true, dtypes: ['f32'] },
     {
-      name: 'tiled by its bias, 7 rows',
-      m: 7,
-      inF: 64,
-      outF: 48,
-      groupSize: 16,
-      bias: true,
-      dtypes: ['f32'],
-    },
-    {
-      name: 'tiled by its activation, 3 rows',
+      name: 'activation, 3 rows',
       m: 3,
       inF: 64,
       outF: 48,
@@ -106,7 +97,7 @@ describe('Linear with a quantized weight', () => {
       dtypes: ['f32', 'f16'],
     },
     {
-      name: 'tiled by its addend, 2 rows',
+      name: 'addend, 2 rows',
       m: 2,
       inF: 64,
       outF: 48,
@@ -114,6 +105,15 @@ describe('Linear with a quantized weight', () => {
       bias: false,
       addend: true,
       dtypes: ['f32', 'f16'],
+    },
+    {
+      name: 'bias, 5 rows',
+      m: 5,
+      inF: 64,
+      outF: 48,
+      groupSize: 16,
+      bias: true,
+      dtypes: ['f16'],
     },
     {
       name: 'bias, gelu and addend, 37 rows',
@@ -126,41 +126,36 @@ describe('Linear with a quantized weight', () => {
       activation: 'gelu',
       dtypes: ['f32', 'f16'],
     },
-    // tiled: an f16 input, whatever m
     {
-      name: 'f16 input, 1 row',
-      m: 1,
-      inF: 64,
-      outF: 48,
-      groupSize: 16,
-      bias: false,
-      dtypes: ['f16'],
-    },
-    {
-      name: 'f16 input with bias, 5 rows',
-      m: 5,
-      inF: 64,
-      outF: 48,
-      groupSize: 16,
-      bias: true,
-      dtypes: ['f16'],
-    },
-    {
-      name: 'partial tiles with bias, 37 rows',
-      m: 37,
-      inF: 256,
-      outF: 136,
-      groupSize: 32,
-      bias: true,
-      dtypes: ['f32', 'f16'],
-    },
-    {
-      name: 'one group per row, 37 rows',
-      m: 37,
+      name: 'one group per row, 767 rows',
+      m: 767,
       inF: 128,
       outF: 64,
       groupSize: 128,
       bias: false,
+      dtypes: ['f32', 'f16'],
+    },
+    // tiled: m · outF >= 48·1024
+    {
+      name: 'one group per row, 768 rows',
+      m: 768,
+      inF: 128,
+      outF: 64,
+      groupSize: 128,
+      bias: false,
+      tiled: true,
+      dtypes: ['f32', 'f16'],
+    },
+    {
+      name: 'partial tiles with bias, gelu and addend, 400 rows',
+      m: 400,
+      inF: 256,
+      outF: 136,
+      groupSize: 32,
+      bias: true,
+      addend: true,
+      activation: 'gelu',
+      tiled: true,
       dtypes: ['f32', 'f16'],
     },
   ];

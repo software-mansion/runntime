@@ -97,8 +97,8 @@ export function matmul(a: Value, b: Value, opts: MatmulOpts = {}): Value {
 }
 
 /** matmul's quantW path. The result takes a's dtype. An f16 a, a bias, an
- *  addend or an activation need the tiled kernel: the whole weight (baseRow
- *  and scaleBase 0) and a shape it supports. */
+ *  addend or an activation need the whole weight (baseRow and scaleBase 0)
+ *  and a shape the tiled kernel supports, since large inputs take it. */
 function matmulQuantW(
   a: Value,
   w: Value,

@@ -147,6 +147,12 @@ export const matmulSpec = defineSpec({
   },
 });
 
+/** From this many output values (M·N) a whole quantW weight takes
+ *  matmulQuantTiled. Below it the tiled kernel has too few 32×32 tiles to fill
+ *  the GPU, and matmulQuantW, which splits K across lanes, is faster. Measured
+ *  on an Apple M4 Pro for N from 384 to 2048. */
+const QUANT_TILED_MIN_OUTPUTS = 48 * 1024;
+
 export const matmulQuantWSpec = defineSpec({
   attrs: (p) => {
     const [baseRow, scaleBase, bits, groupSize, hasBias, hasAdd, act] = p.attrs as [
@@ -164,16 +170,13 @@ export const matmulQuantWSpec = defineSpec({
     const [m, k] = node.pending!.inputs[0]!.shape.dims as [number, number];
     const n = node.shape.dims![1]!;
     const rows = node.pending!.inputs[1]!.shape.dims![0]!;
-    const epilogue = attrs.hasBias + attrs.hasAdd + attrs.act > 0;
-    // A whole weight goes to the tiled kernel from 8 rows, and always for an
-    // f16 input or an epilogue, which the plain kernel lacks. Expert views
-    // stay on the plain kernel.
+    // Expert views stay on matmulQuantW whatever m.
     const tiled =
       attrs.baseRow === 0 &&
       attrs.scaleBase === 0 &&
       rows === k &&
-      matmulQuantTiledEligible(k, n, attrs.groupSize) &&
-      (node.shape.dtype === 'f16' || epilogue || m >= MATMUL_TILED_MIN_M);
+      m * n >= QUANT_TILED_MIN_OUTPUTS &&
+      matmulQuantTiledEligible(k, n, attrs.groupSize);
     return {
       k,
       n,
@@ -188,41 +191,29 @@ export const matmulQuantWSpec = defineSpec({
   pipeline: (root, dtype, cfg) =>
     cfg.tiled
       ? createMatmulQuantTiledPipeline(root, cfg, elemFor(dtype))
-      : createMatmulQuantWPipeline(root, cfg),
+      : createMatmulQuantWPipeline(root, cfg, elemFor(dtype)),
   encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
     const m = node.pending!.inputs[0]!.shape.dims![0]!;
     const dtype = node.shape.dtype;
+    const addendAt = attrs.hasBias === 1 ? 4 : 3;
+    const buffers = {
+      a: narrowFloat(inputs[0]!, dtype),
+      w: narrow(inputs[1]!, 'u32'),
+      scales: narrow(inputs[2]!, 'f32'),
+      bias: attrs.hasBias === 1 ? narrowFloat(inputs[3]!, dtype) : undefined,
+      addend: attrs.hasAdd === 1 ? narrowFloat(inputs[addendAt]!, dtype) : undefined,
+      out: narrowFloat(out, dtype),
+    };
     if (cfg.tiled) {
-      const addendAt = attrs.hasBias === 1 ? 4 : 3;
-      return [
-        matmulQuantTiledHandle(
-          ctx.root,
-          pipeline,
-          m,
-          cfg.n,
-          {
-            a: narrowFloat(inputs[0]!, dtype),
-            w: narrow(inputs[1]!, 'u32'),
-            scales: narrow(inputs[2]!, 'f32'),
-            bias: attrs.hasBias === 1 ? narrowFloat(inputs[3]!, dtype) : undefined,
-            addend: attrs.hasAdd === 1 ? narrowFloat(inputs[addendAt]!, dtype) : undefined,
-            out: narrowFloat(out, dtype),
-          },
-          elemFor(dtype),
-        ),
-      ];
+      return [matmulQuantTiledHandle(ctx.root, pipeline, m, cfg.n, buffers, elemFor(dtype))];
     }
     return [
       matmulQuantWHandle(
         ctx.root,
         pipeline,
         { m, n: cfg.n, baseRow: attrs.baseRow, scaleBase: attrs.scaleBase },
-        {
-          a: narrow(inputs[0]!, 'f32'),
-          w: narrow(inputs[1]!, 'u32'),
-          scales: narrow(inputs[2]!, 'f32'),
-          out: narrow(out, 'f32'),
-        },
+        buffers,
+        elemFor(dtype),
       ),
     ];
   },
