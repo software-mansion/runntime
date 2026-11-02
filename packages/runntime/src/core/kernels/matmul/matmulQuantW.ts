@@ -11,18 +11,16 @@
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
-import {
-  type F32Buffer,
-  flatWorkgroupId,
-  type FloatBuffer,
-  type KernelHandle,
-  makeHandle,
-  type U32Buffer,
-} from '../common.ts';
+import { flatWorkgroupId, type KernelHandle, makeHandle } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
-import { columnWord, deqVec4 } from '../quantCommon.ts';
+import {
+  columnWord,
+  deqVec4,
+  type MatmulQuantBuffers,
+  type MatmulQuantCfg,
+} from '../quantCommon.ts';
 
 const Dims = d.struct({
   m: d.u32,
@@ -64,17 +62,7 @@ const SLICE_STRIDES = Array.from(
 
 const partial = tgpu.workgroupVar(d.arrayOf(d.vec4f, ROWS * LANES));
 
-export interface MatmulQuantWCfg {
-  k: number;
-  n: number;
-  bits: number;
-  groupSize: number;
-  hasBias: number;
-  hasAdd: number;
-  act?: number;
-}
-
-function makeMatmulQuantWKernel(cfg: MatmulQuantWCfg, elem: Elem) {
+function makeMatmulQuantWKernel(cfg: MatmulQuantCfg, elem: Elem) {
   const { k, n, bits, groupSize, hasBias, hasAdd } = cfg;
   const layout = layoutFor(elem);
   const storeVec4 = elem.vec4;
@@ -159,7 +147,7 @@ function makeMatmulQuantWKernel(cfg: MatmulQuantWCfg, elem: Elem) {
 /** One pipeline per dtype, K, N, bits, group size, epilogue and activation. */
 export function createMatmulQuantWPipeline(
   root: TgpuRoot,
-  cfg: MatmulQuantWCfg,
+  cfg: MatmulQuantCfg,
   elem: Elem = F32_ELEM,
 ) {
   return root
@@ -172,14 +160,7 @@ export function matmulQuantWHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createMatmulQuantWPipeline>,
   args: { m: number; n: number; baseRow: number; scaleBase: number },
-  buffers: {
-    a: FloatBuffer;
-    w: U32Buffer;
-    scales: F32Buffer;
-    out: FloatBuffer;
-    bias?: FloatBuffer;
-    addend?: FloatBuffer;
-  },
+  buffers: MatmulQuantBuffers,
   elem: Elem = F32_ELEM,
 ): KernelHandle {
   const dims = cachedUniform(root, Dims, {
