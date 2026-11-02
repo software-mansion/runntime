@@ -50,11 +50,16 @@ function layoutFor(elem: Elem): ReturnType<typeof makeLayout> {
   return l;
 }
 
+/** Rows of a per workgroup. Each lane keeps one f32 vec4 accumulator per row. */
 const ROWS = 4;
+/** Units per workgroup. A unit computes 4 output columns. */
 const UNITS = 8;
+/** Lanes that split one unit's K between them. */
 const SLICES = 16;
+/** Threads per workgroup. */
 const LANES = UNITS * SLICES;
 
+/** Steps of the tree that adds the slices: SLICES/2 down to 1. */
 const SLICE_STRIDES = Array.from(
   { length: Math.log2(SLICES) },
   (_, level) => SLICES >> (level + 1),
