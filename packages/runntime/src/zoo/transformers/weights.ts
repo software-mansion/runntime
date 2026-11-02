@@ -3,6 +3,7 @@ import {
   createOpfsCache,
   fromSafetensors,
   httpRangeSource,
+  isRunntimeError,
   type RangeSource,
 } from '../../core/index.ts';
 
@@ -34,7 +35,10 @@ export async function cachedWeightsSource(url: string, key: string): Promise<Ran
   let source = await fromCache();
   try {
     await fromSafetensors(source); // header parse only
-  } catch {
+  } catch (err) {
+    // A malformed quantized file is the same after a fresh download, so the
+    // user gets the mismatch itself, not a second download and a vaguer error.
+    if (isRunntimeError(err, 'CHECKPOINT_MISMATCH')) throw err;
     // A truncated cache entry (a write interrupted mid-download) fails the
     // header parse. Drop THIS entry — not the whole store, which holds every
     // other model — and reload from the network.
