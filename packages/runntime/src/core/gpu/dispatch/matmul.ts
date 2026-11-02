@@ -195,6 +195,7 @@ export const matmulQuantWSpec = defineSpec({
   encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
     const m = node.pending!.inputs[0]!.shape.dims![0]!;
     const dtype = node.shape.dtype;
+    const elem = elemFor(dtype);
     const addendAt = attrs.hasBias === 1 ? 4 : 3;
     const buffers = {
       a: narrowFloat(inputs[0]!, dtype),
@@ -205,7 +206,7 @@ export const matmulQuantWSpec = defineSpec({
       out: narrowFloat(out, dtype),
     };
     if (cfg.tiled) {
-      return [matmulQuantTiledHandle(ctx.root, pipeline, m, cfg.n, buffers, elemFor(dtype))];
+      return [matmulQuantTiledHandle(ctx.root, pipeline, m, cfg.n, buffers, elem)];
     }
     return [
       matmulQuantWHandle(
@@ -213,7 +214,7 @@ export const matmulQuantWSpec = defineSpec({
         pipeline,
         { m, n: cfg.n, baseRow: attrs.baseRow, scaleBase: attrs.scaleBase },
         buffers,
-        elemFor(dtype),
+        elem,
       ),
     ];
   },
