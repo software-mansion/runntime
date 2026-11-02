@@ -49,7 +49,8 @@ function quant(name: string, t: number, e: number, k: number, o: number, bits: 8
   };
 }
 
-/** [m, k] × a whole quantW weight [k, n]. */
+/** [m, k] × a whole quantW weight [k, n], with an optional bias [n], addend
+ *  [m, n] and activation. */
 function quantWhole(
   name: string,
   m: number,
@@ -57,13 +58,26 @@ function quantWhole(
   n: number,
   bits: 8 | 4,
   groupSize: number,
+  opts: { dtype?: Float; bias?: boolean; addend?: boolean; act?: Act } = {},
 ): AbCase {
+  const { dtype = 'f32' } = opts;
   return {
     name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
     build: (version) => {
-      const a = randMat(version, m, k);
+      const a = randMat(version, m, k, dtype);
       const { w, scales } = quantWeight(version, 1, k, n, bits, groupSize);
-      return () => version.lib.matmul(a, w, { scales, bits, groupSize });
+      const bias = opts.bias ? randMat(version, 1, n, dtype) : undefined;
+      const addend = opts.addend ? randMat(version, m, n, dtype) : undefined;
+      return () =>
+        version.lib.matmul(a, w, {
+          scales,
+          bits,
+          groupSize,
+          bias,
+          addend,
+          activation: opts.act,
+        });
     },
   };
 }
@@ -172,15 +186,78 @@ abSuite('matmul', [
   noSg(mm('tiledVec4, MiniLM qkv bucket 16 [16,384]×[384,1152]', 16, 384, 1152, { bias: true })),
   noSg(mm('plain, m = 4 [4,384]×[384,1152]', 4, 384, 1152)),
 
-  // Quantized weights, privacy-filter MoE expert.
+  // Quantized weights, privacy-filter MoE expert: matmulQuantW whatever m.
   quant('quantW int8, privacy-filter expert [32,640]×[640,640]', 32, 16, 640, 640, 8),
   quant('quantW int4, privacy-filter expert [32,640]×[640,640]', 32, 16, 640, 640, 4),
   quant('quantW int8, decode [1,640]×[640,640]', 1, 16, 640, 640, 8),
 
-  // Quantized weights, whole: the tiled route from 8 rows, plain below.
+  // Quantized weights, whole: the tiled route from 48·1024 outputs (m · n),
+  // matmulQuantW below.
   quantWhole('quantW int4 whole, q|k projection [256,1024]×[1024,2304]', 256, 1024, 2304, 4, 32),
   quantWhole('quantW int8 whole, per channel [256,2048]×[2048,1024]', 256, 2048, 1024, 8, 2048),
+  quantWhole(
+    'quantW int8 whole f16 + bias, MiniLM qkv 256 tokens [256,384]×[384,1152]',
+    256,
+    384,
+    1152,
+    8,
+    32,
+    {
+      dtype: 'f16',
+      bias: true,
+    },
+  ),
   quantWhole('quantW int4 whole, decode [1,1024]×[1024,2304]', 1, 1024, 2304, 4, 32),
+  quantWhole(
+    'quantW int8 whole f16 + bias, MiniLM qkv 16 tokens [16,384]×[384,1152]',
+    16,
+    384,
+    1152,
+    8,
+    32,
+    {
+      dtype: 'f16',
+      bias: true,
+    },
+  ),
+  quantWhole(
+    'quantW int4 whole f16 + gelu, MiniLM fc1 16 tokens [16,384]×[384,1536]',
+    16,
+    384,
+    1536,
+    4,
+    32,
+    {
+      dtype: 'f16',
+      bias: true,
+      act: 'gelu',
+    },
+  ),
+  quantWhole(
+    'quantW int8 whole f16 + addend, MiniLM fc2 16 tokens [16,1536]×[1536,384]',
+    16,
+    1536,
+    384,
+    8,
+    32,
+    {
+      dtype: 'f16',
+      bias: true,
+      addend: true,
+    },
+  ),
+  quantWhole(
+    'quantW int8 whole f16 + bias, LLM decode [1,2048]×[2048,2048]',
+    1,
+    2048,
+    2048,
+    8,
+    64,
+    {
+      dtype: 'f16',
+      bias: true,
+    },
+  ),
 
   // matmulGather: one expert per row.
   gather('matmulGather f32, privacy-filter [64,640], 16 experts', 64, 16, 640, 640),
