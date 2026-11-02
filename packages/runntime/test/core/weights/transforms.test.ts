@@ -8,6 +8,7 @@ import {
 } from '../../../src/core/weights/safetensors.ts';
 import {
   concatRows,
+  permuteRows,
   reshapeWeight,
   scaleWeight,
   splitCols,
@@ -150,6 +151,52 @@ describe('splitCols', () => {
   });
 });
 
+describe('permuteRows', () => {
+  // [[1, 2], [3, 4], [5, 6]] with order [2, 0, 1] → [[5, 6], [1, 2], [3, 4]]
+  it.for(DTYPES)('reorders the rows of $dtype', async ({ dtype, type }) => {
+    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [3, 2]);
+    const out = permuteRows(t, [2, 0, 1]);
+    expect(out.shape).toEqual([3, 2]);
+    expect(out.byteLength).toBe(t.byteLength);
+    expect(await contents(out)).toEqual({ type, values: [5, 6, 1, 2, 3, 4] });
+  });
+
+  it('moves whole blocks of a 3D tensor and single elements of a 1D one', async () => {
+    const blocks = permuteRows(await source('F32', [1, 2, 3, 4], [2, 1, 2]), [1, 0]);
+    expect(blocks.shape).toEqual([2, 1, 2]);
+    expect(await contents(blocks)).toEqual({ type: 'f32', values: [3, 4, 1, 2] });
+    const elems = permuteRows(await source('F16', [1, 2, 3, 4], [4]), [0, 2, 1, 3]);
+    expect(await contents(elems)).toEqual({ type: 'f16', values: [1, 3, 2, 4] });
+  });
+
+  it.for([
+    { name: 'too few rows', order: [0, 1] },
+    { name: 'too many rows', order: [0, 1, 2, 0] },
+    { name: 'a repeated row', order: [0, 0, 1] },
+    { name: 'a row past the end', order: [0, 1, 3] },
+    { name: 'a negative row', order: [0, 1, -1] },
+    { name: 'a fractional row', order: [0, 1, 1.5] },
+  ])('throws CHECKPOINT_MISMATCH for $name', async ({ order }) => {
+    const t = await source('F32', [1, 2, 3, 4, 5, 6], [3, 2]);
+    expect(() => permuteRows(t, order)).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'permuteRows: order is not a permutation of the 3 rows of shape [3, 2]',
+      }),
+    );
+  });
+
+  it('throws CHECKPOINT_MISMATCH for a scalar', async () => {
+    const t = await source('F32', [1], []);
+    expect(() => permuteRows(t, [])).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'permuteRows: cannot permute a scalar',
+      }),
+    );
+  });
+});
+
 describe('scaleWeight', () => {
   // 3 · 0.1 = 0.3, which f16 would round to 0.300048828125. The product is
   // f32 for every source, so an f32 model loads what it did before the helper.
@@ -241,6 +288,7 @@ describe('weight helpers', () => {
     const [top, bottom] = splitRows(t, [1, 1]);
     const [left, right] = splitCols(t, [1, 1]);
     concatRows([t, t]);
+    permuteRows(t, [1, 0]);
     scaleWeight(t, 2);
     transposeWeight(t);
     reshapeWeight(t, [4]);
@@ -271,6 +319,7 @@ describe('weight helpers', () => {
   it.for([
     { name: 'concatRows', run: (t: LazyTensor) => concatRows([t]) },
     { name: 'splitRows', run: (t: LazyTensor) => splitRows(t, [1])[0]! },
+    { name: 'permuteRows', run: (t: LazyTensor) => permuteRows(t, [0]) },
     { name: 'scaleWeight', run: (t: LazyTensor) => scaleWeight(t, 2) },
   ])('$name rejects packed u32 words with CHECKPOINT_MISMATCH', async ({ name, run }) => {
     const words = derivedTensor([1], async () => new Uint32Array([1]));
