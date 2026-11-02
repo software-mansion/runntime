@@ -51,6 +51,15 @@ describe('groupNorm', () => {
       groups: 512,
       tol: { atol: 1e-4, rtol: 1e-3 },
     },
+    // 65536 rows of 512 f32 fill a 128 MiB binding, the largest the default
+    // limit allows.
+    {
+      name: 'a group per channel, [65536,512]',
+      m: 65536,
+      c: 512,
+      groups: 512,
+      tol: { atol: 1e-4, rtol: 1e-3 },
+    },
   ])('$name: [$m, $c] in $groups', async ({ m, c, groups, tol }) => {
     // An offset per channel in [0, 4), so a wrong group mean shows.
     const x = randomF32(m * c, 1).map((v, i) => 3 * v + (4 * (i % c)) / c);

@@ -53,11 +53,9 @@ describe('transpose kernel', () => {
     expectClose(got, transposeRef(x, rows, cols), { atol: 0, rtol: 0 });
   });
 
-  // Known bug: the kernel splits the flat index into row and column with
-  // d.u32(i / cols), which TypeGPU compiles to u32(f32(i) / f32(cols)). f32
-  // counts exactly only up to 2^24, so past it elements land in the wrong
-  // place. Turn into a plain `it` with the fix.
-  it.fails('runs past 2^24 elements', async () => {
+  // f32 counts exactly only up to 2^24, so an f32 row index would put
+  // elements past it in the wrong place.
+  it('runs past 2^24 elements', async () => {
     const rows = 4100;
     const cols = 4097;
     expect(rows * cols).toBeGreaterThan(2 ** 24);
