@@ -6,7 +6,8 @@
  *  SLICES lanes per unit; partials add up in a fixed tree in workgroup memory,
  *  so every run gives the same result. W can be a view into one expert of a
  *  fused [E·K, N] weight: baseRow must be a K-aligned expert boundary, which
- *  the op enforces, and scales are indexed [scaleBase + kGroup·N + col]. */
+ *  the op enforces, and scales are indexed [scaleBase + kGroup·N + col], with
+ *  scaleBase a multiple of 4 since scales are read as vec4. */
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';

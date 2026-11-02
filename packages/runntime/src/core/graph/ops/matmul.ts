@@ -147,6 +147,11 @@ function matmulQuantW(
   }
   if (!Number.isInteger(scaleBase) || scaleBase < 0)
     throw new Error(`matmul: bad scaleBase ${scaleBase}`);
+  if (scaleBase % 4 !== 0) {
+    throw new Error(
+      `matmul: scaleBase ${scaleBase} must be a multiple of 4 — scales are read as vec4`,
+    );
+  }
   const { bias, addend, activation } = opts;
   const whole = baseRow === 0 && scaleBase === 0 && r === k;
   if (whole && scales.shape.elems !== (k / groupSize) * n) {

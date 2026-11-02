@@ -160,6 +160,11 @@ describe('matmulQuantW kernel', () => {
       err: /baseRow 4 must be K-aligned \(8\)/,
     },
     { name: 'a baseRow past the last expert', opts: { baseRow: 16 }, err: /bad baseRow 16/ },
+    {
+      name: 'a scaleBase that is not a multiple of 4',
+      opts: { baseRow: 8, scaleBase: 2 },
+      err: /scaleBase 2 must be a multiple of 4/,
+    },
     { name: 'bits other than 4 or 8', opts: { bits: 2 }, err: /bits must be 8 or 4, got 2/ },
   ])('refuses $name', ({ opts, err }) => {
     const weight = randomQuantWeight(root, fused, 2);
@@ -170,6 +175,7 @@ describe('matmulQuantW kernel', () => {
       bits: (opts.bits ?? 8) as 8 | 4,
       groupSize: opts.groupSize ?? 4,
       baseRow: opts.baseRow,
+      scaleBase: opts.scaleBase,
       bias: opts.bias ? upload(root, new Float32Array(8), [1, 8]) : undefined,
     };
     expect(() => matmul(a, weight.w, call)).toThrow(err);
