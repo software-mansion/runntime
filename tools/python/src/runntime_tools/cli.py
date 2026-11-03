@@ -23,9 +23,9 @@ FLOAT_DTYPES = frozenset({"F32", "F16", "BF16"})
 
 DEFAULT_INCLUDE = ("*.weight",)
 
-DEFAULT_EXCLUDE = ("*embed*", "lm_head.*")
-"""runntime reads embeddings as float lookup tables, and lm_head often shares
-the embedding's weights."""
+DEFAULT_EXCLUDE = ("*embed*", "*pos_emb*", "lm_head.*")
+"""runntime reads token and position embeddings as float lookup tables, and
+lm_head often shares the embedding's weights."""
 
 IN_FEATURES_MULTIPLE = 8
 """runntime's quantized matmul reads 8 input rows per tile."""
