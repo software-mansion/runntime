@@ -47,7 +47,11 @@ const WEIGHT_SPREAD = 0.05;
 /** k_norm's scale: q and k are RMS-normed per head and the scores carry no
  *  1/√d, so a k scale near 1 gives scores of about √d and a softmax that
  *  picks one key, where the smallest weight change flips the pick. The
- *  checkpoint's k_norm scales are near this. */
+ *  checkpoint's k_norm scales are one constant per layer, a few times this:
+ *  0.120–0.132 for the text sliding layers (d = 256, about 2/√d),
+ *  0.061–0.065 for the full layers (d = 512, 1.4/√d) and 0.48–0.51 in the
+ *  vision tower (d = 64, 4/√d). 1/√d is a softer stand-in that keeps the
+ *  scores of order 1. */
 const K_NORM_SCALE = (headDim: number) => 1 / Math.sqrt(headDim);
 
 /** One text for the replay path, two for the packed eager path. */
