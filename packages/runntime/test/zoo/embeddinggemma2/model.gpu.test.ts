@@ -35,12 +35,20 @@ const TEXT: EmbeddingGemma2Config = {
 };
 /** Real widths, one layer, a position table that covers the test image. */
 const VISION = { ...EMBEDDINGGEMMA2_VISION, layers: 1, positions: 8 };
-const AUDIO = { ...EMBEDDINGGEMMA2_AUDIO, layers: 1 };
+/** Real widths but the feed-forward, one layer. The four feed-forward
+ *  weights are two thirds of a real layer, and building, quantizing and
+ *  loading them three times is what a case's time goes on. */
+const AUDIO = { ...EMBEDDINGGEMMA2_AUDIO, layers: 1, ffn: 1024 };
 
 /** Half-width of the uniform random weights, a standard deviation of 0.029
  *  near the usual 0.02 init, so attention does not saturate and a small
  *  weight change moves the output smoothly. */
 const WEIGHT_SPREAD = 0.05;
+/** k_norm's scale: q and k are RMS-normed per head and the scores carry no
+ *  1/√d, so a k scale near 1 gives scores of about √d and a softmax that
+ *  picks one key, where the smallest weight change flips the pick. The
+ *  checkpoint's k_norm scales are near this. */
+const K_NORM_SCALE = (headDim: number) => 1 / Math.sqrt(headDim);
 
 /** One text for the replay path, two for the packed eager path. */
 const TOKENS = [2, 7, 1, 8, 28, 18, 28, 45, 9, 4, 52, 3];
@@ -95,7 +103,7 @@ function textCheckpoint(): Checkpoint {
     b.dense(`${L}.self_attn.v_proj`, kvHeads * d, hidden);
     b.dense(`${L}.self_attn.o_proj`, hidden, heads * d);
     b.vector(`${L}.self_attn.q_norm.weight`, d, 1);
-    b.vector(`${L}.self_attn.k_norm.weight`, d, 1);
+    b.vector(`${L}.self_attn.k_norm.weight`, d, K_NORM_SCALE(d));
     b.dense(`${L}.mlp.gate_proj`, ffn, hidden);
     b.dense(`${L}.mlp.up_proj`, ffn, hidden);
     b.dense(`${L}.mlp.down_proj`, hidden, ffn);
@@ -132,7 +140,7 @@ function visionCheckpoint(): Checkpoint {
   for (const p of ['q', 'k', 'v', 'o'])
     b.dense(`${L}.self_attn.${p}_proj.linear`, heads * d, hidden);
   b.vector(`${L}.self_attn.q_norm.weight`, d, 1);
-  b.vector(`${L}.self_attn.k_norm.weight`, d, 1);
+  b.vector(`${L}.self_attn.k_norm.weight`, d, K_NORM_SCALE(d));
   b.dense(`${L}.mlp.gate_proj.linear`, ffn, hidden);
   b.dense(`${L}.mlp.up_proj.linear`, ffn, hidden);
   b.dense(`${L}.mlp.down_proj.linear`, hidden, ffn);
@@ -320,20 +328,21 @@ const cosine = (a: Float32Array, b: Float32Array) => {
 
 /** Tolerance against the same ints dequantized on the CPU and loaded as
  *  floats, which isolates packing and kernel error from quantization error.
- *  Measured worst case over the three towers: 1.1e-5 in f32, where only the
- *  summation order differs, and 6.9e-3 in f16 on outputs up to 4.6, where
- *  the reference rounds each int times scale to f16 before a tower's layers
- *  stack up the difference. f16 allows four f16 steps at that size. */
+ *  Measured worst case over the three towers, the same on three runs: 7.2e-6
+ *  in f32, where only the summation order differs, and 4.9e-3 in f16 on
+ *  outputs up to 4.7 (the audio tower), where the reference rounds each int
+ *  times scale to f16 before a tower's layers stack up the difference. f16
+ *  allows four f16 steps at that size. */
 const KERNEL_TOLERANCE = {
   f32: { atol: 2e-5, rtol: 0 },
   f16: { atol: 2 ** -6, rtol: 0 },
 };
 
 /** Least cosine similarity to the model with the original float weights,
- *  set from the measured worst case across towers and dtypes: int8 0.9985
- *  (1 - cos = 1.5e-3, the text model's packed batch), int4 0.870 (0.13).
- *  Each bound allows about 1.5 to 3 times the measured 1 - cos. */
-const LEAST_COSINE = { 8: 0.995, 4: 0.8 };
+ *  set from the measured worst case across towers and dtypes, both the text
+ *  model's packed batch: int8 0.99994 (1 - cos = 6.4e-5), int4 0.978
+ *  (2.2e-2). Each bound allows about 2.5 to 3 times the measured 1 - cos. */
+const LEAST_COSINE = { 8: 0.9998, 4: 0.95 };
 
 describe('EmbeddingGemma 2 from a quantized checkpoint', () => {
   it.for(
