@@ -29,7 +29,8 @@ A weights file is one `.safetensors` file. The loader reads nothing else: no
 - **Dtypes** are `F32`, `F16` or `BF16` for a float tensor. The file's dtype
   and the math dtype are independent, see [How a file loads](#how-a-file-loads).
   A quantized weight is `I8` or `U8` with an `F16` scale tensor next to it,
-  see [The quantized format](#the-quantized-format).
+  see [The quantized format](#the-quantized-format). Today all-MiniLM-L6-v2
+  loads a quantized file; the other models load float files.
 
 A `create` call takes the file as `modelPath`: a URL, or a `RangeSource` for
 bytes you already have. The ready-made configs in `models` point at the
@@ -56,39 +57,41 @@ const embedder = await createEmbedder({
    chunks of 8 MB, so a file costs about one request per 8 MB. A server that
    ignores `Range` and answers `200` makes the loader download the whole file
    once. A short answer is retried.
-3. Each tensor is fetched, converted and uploaded to the GPU on its own, so
-   host memory holds one tensor at a time. `onProgress` fires after each
-   one.
+3. Each tensor is checked for shape, converted and uploaded to the GPU on
+   its own. `onProgress` fires after each one.
 4. With a `cache`, every fetched range is saved under the `cacheId`, and the
-   next load reads it back with no network. Cached bytes are never checked
-   against the server, so a file that changes content needs a new URL or a
-   new `cacheId`. The default `cacheId` comes from the URL.
+   next load reads it back with no network. The default `cacheId` of a
+   `create` call holds the whole URL, so a file at a new URL is a new entry.
+   Cached bytes are never checked against the server, so a file that changes
+   content at the same URL needs a new `cacheId`.
 
 The file's dtype does not pick the math. The model's `dtype` does: `'f16'`
-runs in half precision on a device with `shader-f16`, `'f32'` in full. An
-`F32` tensor narrows to f16 when needed, an `F16` or `BF16` one widens to
-f32. The vision models run in f16 only. A quantized weight stays int on the
-GPU and its scales become f32, whatever the `dtype`.
+runs in half precision on a device with `shader-f16`, `'f32'` in full. The
+`DEFAULT` configs set no `dtype`, which means f16 where the device has
+`shader-f16` and f32 elsewhere. An `F32` tensor narrows to f16 when needed,
+an `F16` or `BF16` one widens to f32. The vision models run in f16 only. A
+quantized weight stays int on the GPU and its scales become f32, whatever
+the `dtype`.
 
 ## Exporting float weights
 
 Save the model with Hugging Face `transformers`. `save_pretrained` writes
-`model.safetensors` with the original names, and `torch_dtype` picks the
-stored dtype. `F16` halves the file against `F32` and loses nothing a model
-in f16 math would keep anyway.
+`model.safetensors` with the original names, and `dtype` picks the stored
+dtype. `F16` halves the file against `F32` and loses nothing a model in f16
+math would keep anyway.
 
 ```bash
 uv run --with transformers --with torch python -c "
 from transformers import AutoModel
 import torch
-model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', torch_dtype=torch.float16)
-model.save_pretrained('export', max_shard_size='100GB')
+model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', dtype=torch.float16)
+model.save_pretrained('export', max_shard_size='100GB')  # one file, not shards
 "
 ```
 
-`max_shard_size` keeps the export in one file. A folder with shards is fine
-as the input of [`runntime quantize`](#quantizing), which writes one file,
-but not as a `modelPath`.
+A folder with shards is fine as the input of
+[`runntime quantize`](#quantizing), which writes one file, but not as a
+`modelPath`.
 
 A checkpoint from your own training code goes through
 `safetensors.torch.save_file(model.state_dict(), 'model.safetensors')`.
@@ -97,9 +100,9 @@ clone a tied `lm_head` before saving.
 
 ### Checking a file
 
-Load it. The names and shapes are checked before any weight downloads, and
-a mismatch throws `CHECKPOINT_MISMATCH` with the first names that are
-missing or unexpected, or the tensor whose shape is wrong. See
+Load it. A name the model lacks or does not expect throws
+`CHECKPOINT_MISMATCH` naming the tensor, before any weight downloads. A wrong
+shape throws the same code when that tensor binds. See
 [Error handling](/zoo/error-handling/) for how to catch it.
 
 ```ts twoslash
@@ -111,7 +114,7 @@ try {
     modelPath: '/models/minilm.safetensors',
   });
 } catch (err) {
-  // loadStateDict: state dict does not match model. missing: pooler.dense.weight …
+  // minilm state dict: missing tensor 'encoder.layer.0.attention.self.query.weight'
   if (isRunntimeError(err, 'CHECKPOINT_MISMATCH')) console.error(err.message);
   throw err;
 }
@@ -120,11 +123,13 @@ try {
 To see what a file holds without loading it, read its header in Python:
 
 ```bash
-uv run --with safetensors python -c "
+uv run --with safetensors --with numpy python -c "
 from safetensors import safe_open
-with safe_open('model.safetensors', 'pt') as f:
+with safe_open('path/to/model.safetensors', 'np') as f:
     print(f.metadata())
-    for name in f.keys(): print(name, f.get_slice(name).get_dtype(), f.get_slice(name).get_shape())
+    for name in f.keys():
+        tensor = f.get_slice(name)
+        print(name, tensor.get_dtype(), tensor.get_shape())
 "
 ```
 
@@ -132,36 +137,41 @@ with safe_open('model.safetensors', 'pt') as f:
 
 `runntime quantize` turns a float file into an int8 or int4 one. It lives in
 the repository under `tools/python` and runs with
-[uv](https://docs.astral.sh/uv/), which installs its one dependency, NumPy,
-on the first run.
+[uv](https://docs.astral.sh/uv/), which sets up Python and NumPy on the
+first run. Paths are relative to where you run it.
 
 ```bash
 git clone https://github.com/software-mansion/runntime
 cd runntime/tools/python
-uv run runntime quantize model.safetensors model.int8.safetensors --bits 8 --f16
+uv run --no-dev runntime quantize path/to/model.safetensors path/to/model.int8.safetensors --bits 8 --f16 --drop 'pooler.*'
 ```
 
 The source is a `.safetensors` file or a Hugging Face model folder, sharded
-or not. The output is one file.
+or not. The output is one file. Today all-MiniLM-L6-v2 is the model that
+loads one.
 
 - `--bits 8` or `--bits 4`. Required.
 - `--group-size N`: inputs that share one scale, a multiple of 4. Default 32.
-- `--include GLOB`, repeatable: the tensors to quantize. Default `*.weight`,
-  which the option replaces.
+- `--include GLOB`, repeatable: the tensors to quantize. Default `*.weight`.
 - `--exclude GLOB`, repeatable: the tensors to keep as stored. Default
-  `*embed*`, `*pos_emb*` and `lm_head.*`, which the option replaces: the
-  model reads token and position embeddings as float lookup tables, and
-  `lm_head` often shares the embedding's weights. Passing one `--exclude`
-  drops all three defaults, so repeat the ones you want to keep.
+  `*embed*`, `*pos_emb*` and `lm_head.*`: the model reads token and
+  position embeddings as float lookup tables, and `lm_head` often shares
+  the embedding's weights.
 - `--f16`: store every tensor that stays float as `F16`. Without it they are
   copied as stored. A value beyond the f16 range stops the run.
-- `--drop GLOB`, repeatable: leave tensors out of the output, like a
-  `pooler` the model never reads.
+- `--drop GLOB`, repeatable: leave tensors out of the output, like the
+  `pooler` above, which the embedding model never reads.
+
+Passing `--include` or `--exclude` replaces that option's defaults, so
+repeat the ones you want to keep.
 
 A tensor is quantized when it matches `--include`, matches no `--exclude`,
 is float and 2D, and fits the shape rules below. Every other tensor is
-skipped and copied, so the output always loads. Each Linear is quantized or
-float on its own.
+skipped and copied, so the output always loads. A Linear is quantized or
+float on its own, except weights the model fuses into one: all-MiniLM-L6-v2
+stacks query, key and value, so the three are quantized together, with the
+same bits and group size, or not at all. Mixing them throws
+`CHECKPOINT_MISMATCH` at load.
 
 The tool prints one line per tensor:
 
@@ -170,11 +180,15 @@ quantized  encoder.layer.0.attention.self.query.weight [384, 384]: max error 0.0
 skipped    encoder.layer.0.attention.self.query.bias [384]: not matched by --include
 skipped    encoder.layer.0.output.LayerNorm.weight [384]: 1D, needs [out, in]
 skipped    embeddings.word_embeddings.weight [30522, 384]: excluded by *embed*
+dropped    pooler.dense.weight [384, 384]: matched by pooler.*
 ```
 
 The error is the absolute difference between a weight and its int times its
 scale, over the whole tensor. A tensor whose error stands out from the rest
-is a candidate for `--exclude`. The run fails when no tensor was quantized.
+is a candidate for `--exclude`. Read the `skipped` lines too: `*embed*`
+also matches a Linear with `embed` in its name, like a projection after an
+embedding, and such a tensor needs your own `--exclude` list to get
+quantized. The run fails when no tensor was quantized.
 
 For all-MiniLM-L6-v2 from its 91 MB `F32` export, the output is 59 MB with
 `--bits 8`, 35 MB with `--bits 8 --f16` and 30 MB with `--bits 4 --f16`. The
@@ -193,15 +207,22 @@ bits.
   of `groupSize` values along a row. A weight is its int times its group's
   scale.
 - The header metadata holds `runntime.quant`, one setting for the whole
-  file: `{"version":1,"bits":8,"groupSize":32,"scheme":"symmetric"}`.
+  file, as a JSON string:
+
+  ```json
+  { "version": 1, "bits": 8, "groupSize": 32, "scheme": "symmetric" }
+  ```
+
+  `version` must be `1` and `scheme` must be `"symmetric"`, or the load
+  throws.
+
 - Every other tensor is a float tensor as before.
 
 The loader tells the tensors apart by dtype. `F32`, `F16` and `BF16` load as
 float. `I8` and `U8` load as a quantized weight, which needs the
 `runntime.quant` label and its `W_scale` of the right shape, or the load
 throws `CHECKPOINT_MISMATCH`. Only a Linear weight can be quantized: an int
-tensor bound to anything else, like a lookup table, throws too. The privacy
-filter's hosted int8 file is a different, pre-packed layout, not this one.
+tensor bound to anything else, like a lookup table, throws too.
 
 <QuantGroup />
 
@@ -220,23 +241,27 @@ only be quantized when:
 - the group size is a multiple of 4.
 
 The tool skips a tensor that breaks one and says which. The default group
-size of 32 divides every Linear of the hosted models.
+size of 32 divides both Linear input sizes of all-MiniLM-L6-v2, 384 and 1536.
 
 ### Picking the setting
 
-int8 in groups of 32 kept the quality of the small models we tried, and is
-the default. int4 lost some on them: try it when the download size matters
-more, and check the output against the float model. A bigger group means
-fewer scales and a slightly smaller file, and a bigger error on a group with
-one large weight.
+Measured on all-MiniLM-L6-v2 against the float model, over f16 and f32 math
+and group sizes 32 and 128: the worst cosine similarity of an embedding
+is 0.999993 with int8 and 0.99782 with int4. int8 in groups of 32 is the
+default. Try int4 when the download size matters more, and check the output
+on your own data. A bigger group means fewer scales and a slightly smaller
+file, and a bigger error on a group with one large weight.
 
 ## Quantization-aware training
 
 A QAT checkpoint saved as float, the "unquantized" form, quantizes like any
-other: run `runntime quantize` with the settings the training used, and the
-ints land on the grid the model was trained for. int8 in groups of 32 is the
-same grid as ggml's `Q8_0`: blocks of 32, a symmetric int, one f16 scale of
-the block's largest magnitude over 127.
+other: run `runntime quantize` with the settings the training used. The
+rule the tool applies is fixed: symmetric, groups of `--group-size` inputs
+along `in`, scale = the group's largest magnitude over 127 (int8) or 7
+(int4) rounded to f16, int = weight / scale rounded to nearest. A model
+trained on the same rule lands on its grid; a per-channel or asymmetric
+recipe gets re-rounded to this one. int8 in groups of 32 has the same block
+layout as ggml's `Q8_0`: blocks of 32 along the input, one f16 scale each.
 
 The format has no zero point, so an asymmetric scheme does not fit, and
 activations stay float: a model trained with int8 activations runs with its
