@@ -116,7 +116,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     command.add_argument("source", type=Path, help="a .safetensors file or a Hugging Face model folder")
     command.add_argument("destination", type=Path, help="the .safetensors file to write")
     command.add_argument("--bits", type=int, choices=(4, 8), required=True)
-    command.add_argument("--group-size", type=group_size, default=64, help="inputs that share one scale (default: 64)")
+    command.add_argument("--group-size", type=group_size, default=32, help="inputs that share one scale (default: 32)")
     command.add_argument(
         "--include",
         action="append",
