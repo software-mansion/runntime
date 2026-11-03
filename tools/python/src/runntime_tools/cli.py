@@ -44,6 +44,7 @@ class Options:
     group_size: int
     include: Sequence[str]
     exclude: Sequence[str]
+    drop: Sequence[str] = ()
     float16: bool = False
     """Store the tensors that stay float as F16."""
 
@@ -90,6 +91,10 @@ def quantize_checkpoint(source: Path, destination: Path, options: Options) -> li
     quantized_count = 0
     for name, tensor in checkpoint.tensors.items():
         shape = f"[{', '.join(map(str, tensor.shape))}]"
+        dropped_by = next((pattern for pattern in options.drop if fnmatchcase(name, pattern)), None)
+        if dropped_by:
+            report.append(f"dropped    {name} {shape}: matched by {dropped_by}")
+            continue
         reason = skip_reason(name, tensor, options)
         if reason:
             tensors[name] = to_float16(name, tensor) if options.float16 else tensor
@@ -145,6 +150,13 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         metavar="GLOB",
         help=f"tensor names to keep as stored, repeatable, replaces the default {' '.join(DEFAULT_EXCLUDE)}",
     )
+    command.add_argument(
+        "--drop",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="tensor names to leave out of the output, repeatable",
+    )
     command.add_argument("--f16", action="store_true", help="store the tensors that stay float as F16")
     return parser.parse_args(argv)
 
@@ -156,6 +168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         group_size=args.group_size,
         include=args.include or DEFAULT_INCLUDE,
         exclude=args.exclude or DEFAULT_EXCLUDE,
+        drop=args.drop,
         float16=args.f16,
     )
     try:

@@ -15,6 +15,8 @@ uv run runntime quantize model.safetensors model.int8.safetensors --bits 8
   glob patterns and replace those defaults.
 - Every other tensor is copied as stored, or as F16 with `--f16`, and the
   header metadata is kept.
+- `--drop` takes glob patterns of tensors to leave out, like a pooler the
+  model never reads.
 - It prints the max and mean absolute error of every quantized tensor and
   why each other tensor was skipped. Exclude the layers that lose too much.
 

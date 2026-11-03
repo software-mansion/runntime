@@ -92,3 +92,11 @@ def test_f16_fails_on_a_value_beyond_the_f16_range(tmp_path: Path, capsys: pytes
     write_safetensors(source, {"fc.weight": from_array("F32", weight), "fc.bias": from_array("F32", bias)}, {})
     assert main(["quantize", str(source), str(tmp_path / "out.safetensors"), "--bits", "8", "--f16"]) == 1
     assert "fc.bias has values beyond the f16 range" in capsys.readouterr().err
+
+
+def test_drop_leaves_matching_tensors_out(tmp_path: Path) -> None:
+    destination = tmp_path / "out.safetensors"
+    argv = ["quantize", str(GOLDEN / "tiny.safetensors"), str(destination), "--bits", "8", "--drop", "norm.*"]
+    assert main(argv) == 0
+    with safe_open(destination, "numpy") as quantized:
+        assert set(quantized.keys()) == {"embed.weight", "layer.bias", "layer.weight", "layer.weight_scale"}
