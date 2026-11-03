@@ -1,54 +1,55 @@
 ---
-/** One group of 32 weights becoming 32 int8 values and one f16 scale. Six
+/** One group of 32 weights becoming 32 int8 values and one f16 scale. Five
  *  of the 32 are drawn; the scale is the group's largest magnitude over
  *  127, and each int is its weight divided by the scale, rounded. */
-const weights = ['0.031', '-0.118', '0.054', '0.002', '0.087', '-0.070'];
-const ints = ['33', '-127', '58', '2', '94', '-75'];
-const cell = 50;
+const weights = ['0.031', '-0.118', '0.054', '0.002', '-0.070'];
+const ints = ['33', '-127', '58', '2', '-75'];
+const cell = 58;
+const box = cell - 5;
 const left = 12;
-const cells = (values: string[], y: number, strong: boolean) =>
-  values.map((value, i) => ({ x: left + i * cell, y, value, strong }));
+const cells = (values: string[], y: number) =>
+  values.map((value, i) => ({ x: left + i * cell, y, value }));
 ---
 
 <svg
   class="quant-group"
-  viewBox="0 0 400 168"
+  viewBox="0 0 400 190"
   role="img"
   aria-label="A group of 32 float weights. Its largest magnitude, 0.118, over 127 gives the scale 0.000929, stored as f16. Each weight divided by the scale and rounded gives an int8: 0.031 becomes 33, -0.118 becomes -127."
 >
-  <text class="label" x={left} y="14">32 weights of one row, f32</text>
+  <text class="label" x={left} y="16">32 weights of one row, f32</text>
   {
-    cells(weights, 22, false).map((c) => (
+    cells(weights, 26).map((c) => (
       <g>
-        <rect class="box" x={c.x} y={c.y} width={cell - 4} height="24" rx="3" />
-        <text class="value" x={c.x + (cell - 4) / 2} y={c.y + 16} text-anchor="middle">
+        <rect class="box" x={c.x} y={c.y} width={box} height="28" rx="3" />
+        <text class="value" x={c.x + box / 2} y={c.y + 19} text-anchor="middle">
           {c.value}
         </text>
       </g>
     ))
   }
-  <text class="value" x={left + 6 * cell + 10} y="38">… 26 more</text>
+  <text class="value" x={left + 5 * cell + 6} y="45">… 27 more</text>
 
-  <text class="arrow" x="200" y="68" text-anchor="middle">↓</text>
-  <text class="label" x="200" y="86" text-anchor="middle">
+  <text class="arrow" x="200" y="80" text-anchor="middle">↓</text>
+  <text class="label" x="200" y="100" text-anchor="middle">
     scale = 0.118 / 127 = 0.000929, stored as f16
   </text>
 
-  <text class="label" x={left} y="110">int = round(weight / scale), int8</text>
-  <text class="label" x={left + 6 * cell + 42} y="110" text-anchor="middle">scale, f16</text>
+  <text class="label" x={left} y="128">int = round(weight / scale), int8</text>
+  <text class="label" x={left + 5 * cell + 48} y="128" text-anchor="middle">scale, f16</text>
   {
-    cells(ints, 118, true).map((c) => (
+    cells(ints, 138).map((c) => (
       <g>
-        <rect class="box strong" x={c.x} y={c.y} width={cell - 4} height="24" rx="3" />
-        <text class="value strong" x={c.x + (cell - 4) / 2} y={c.y + 16} text-anchor="middle">
+        <rect class="box strong" x={c.x} y={c.y} width={box} height="28" rx="3" />
+        <text class="value strong" x={c.x + box / 2} y={c.y + 19} text-anchor="middle">
           {c.value}
         </text>
       </g>
     ))
   }
-  <rect class="box scale" x={left + 6 * cell + 4} y="118" width="76" height="24" rx="3"></rect>
-  <text class="value strong" x={left + 6 * cell + 42} y="134" text-anchor="middle">0.000929</text>
-  <text class="label" x={left} y="160">32 bytes of ints and 2 bytes of scale, in place of 128 bytes</text>
+  <rect class="box scale" x={left + 5 * cell + 6} y="138" width="84" height="28" rx="3"></rect>
+  <text class="value scale" x={left + 5 * cell + 48} y="157" text-anchor="middle">0.000929</text>
+  <text class="label" x={left} y="184">34 bytes in place of 128</text>
 </svg>
 
 <style>
@@ -56,7 +57,7 @@ const cells = (values: string[], y: number, strong: boolean) =>
     display: block;
     height: auto;
     margin: 1.5rem auto;
-    max-width: 36rem;
+    max-width: 32rem;
     width: 100%;
   }
 
@@ -78,24 +79,23 @@ const cells = (values: string[], y: number, strong: boolean) =>
   text {
     fill: var(--text-muted);
     font-family: var(--__sl-font, sans-serif);
-    font-size: 10.5px;
+    font-size: 13px;
   }
 
   .value {
     font-family: var(--__sl-font-mono, monospace);
-    font-size: 10px;
   }
 
   .value.strong {
     fill: var(--text-primary);
   }
 
-  .box.scale + .value {
+  .value.scale {
     fill: var(--surface-base);
   }
 
   .arrow {
     fill: var(--text-faint);
-    font-size: 16px;
+    font-size: 18px;
   }
 </style>

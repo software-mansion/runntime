@@ -58,8 +58,9 @@ const steps = [
     top: 0.625rem;
   }
 
-  /* The arrow to the next step, between the boxes. */
-  .weights-path li:not(:last-child)::after {
+  /* The arrow to the next step, between the boxes. The third box ends a
+   * row, so it gets none: the numbers carry the order to the next row. */
+  .weights-path li:not(:last-child):not(:nth-child(3))::after {
     color: var(--text-faint);
     content: '→';
     font-size: 1.125rem;
@@ -68,11 +69,6 @@ const steps = [
     right: -1.5rem;
     top: 50%;
     transform: translateY(-50%);
-  }
-
-  /* The third box ends a row: the path continues at the start of the next. */
-  .weights-path li:nth-child(3)::after {
-    content: '↵';
   }
 
   .weights-path-title {
@@ -94,11 +90,15 @@ const steps = [
     }
 
     .weights-path li:not(:last-child)::after {
+      bottom: -1.5rem;
+      color: var(--text-faint);
       content: '↓';
+      font-size: 1.125rem;
       left: 50%;
+      line-height: 1;
+      position: absolute;
       right: auto;
       top: auto;
-      bottom: -1.5rem;
       transform: translateX(-50%);
     }
   }
