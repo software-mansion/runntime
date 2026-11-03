@@ -87,7 +87,8 @@ export async function encodeImage(
   const { patch, pool, headDim, ropeTheta } = model.cfg;
   const [cols, rows] = patchGrid(image.width, image.height, maxTokens, patch, pool);
   const p = cols * rows;
-  const act = model.input_proj.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
+  // A norm scale, not a Linear weight: a quantized weight is quantW either way.
+  const act = model.embedding_pre_projection_norm.scale.shape.dtype === 'f16' ? 'f16' : 'f32';
   const upload = (data: Float32Array, r: number, dtype: 'f32' | 'f16') =>
     tensor(data, { elems: data.length, dtype, dims: [r, data.length / r] });
   const xs = new Float32Array(p);
