@@ -52,13 +52,13 @@ def skip_reason(name: str, tensor: Tensor, options: Options) -> str | None:
         return f"excluded by {excluded_by}"
     if tensor.dtype not in FLOAT_DTYPES:
         return f"dtype {tensor.dtype}"
-    if len(tensor.shape) == 3:
-        return "3D expert tensors are not supported yet"
     if len(tensor.shape) != 2:
         return f"{len(tensor.shape)}D, needs [out, in]"
     out_features, in_features = tensor.shape
-    if in_features % IN_FEATURES_MULTIPLE or in_features % options.group_size:
-        return f"in features {in_features} not a multiple of {IN_FEATURES_MULTIPLE} and of the group size"
+    if in_features % IN_FEATURES_MULTIPLE:
+        return f"in features {in_features} not a multiple of {IN_FEATURES_MULTIPLE}"
+    if in_features % options.group_size:
+        return f"in features {in_features} not a multiple of the group size {options.group_size}"
     out_multiple = PACKED_WORD_BITS // options.bits
     if out_features % out_multiple:
         return f"out features {out_features} not a multiple of {out_multiple}"
