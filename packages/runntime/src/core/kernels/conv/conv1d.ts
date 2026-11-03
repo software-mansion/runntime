@@ -10,7 +10,7 @@ import {
 } from '../common.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
-import { type LoadA, matmulTiledVec4Layout } from '../matmul/matmulTiledVec4.ts';
+import { type ASource, type LoadA, matmulTiledVec4Layout } from '../matmul/matmulTiledVec4.ts';
 
 /** Direct strided, dilated 1-D convolution, time-major.
  *
@@ -219,14 +219,14 @@ export function conv1dHandle(
   );
 }
 
-/** Runs a padded or dilated conv1d on the tiled matmul: row i of a is output
+/** Runs a padded or dilated conv1d on a tiled matmul: row i of a is output
  *  frame i's window over the [aRows, cIn] input, and tap j of it reads frame
  *  i·stride + j·dilation − padLeft, zero outside the input. */
 export function conv1dLoadA(
   elem: Elem,
   geom: { cIn: number; stride: number; dilation: number; padLeft: number },
+  source: ASource = matmulTiledVec4Layout(elem),
 ): LoadA {
-  const layout = matmulTiledVec4Layout(elem);
   const storeVec4 = elem.vec4;
   const cIn4 = geom.cIn / 4;
   const { stride, dilation, padLeft } = geom;
@@ -235,8 +235,8 @@ export function conv1dLoadA(
     const tap = std.intdiv(k4, cIn4);
     const pos = d.i32(row * stride + tap * dilation) - padLeft;
     let v = storeVec4();
-    if (pos >= 0 && pos < d.i32(layout.$.dims.aRows)) {
-      v = storeVec4(layout.$.a[d.u32(pos) * cIn4 + (k4 % cIn4)]!);
+    if (pos >= 0 && pos < d.i32(source.$.dims.aRows)) {
+      v = storeVec4(source.$.a[d.u32(pos) * cIn4 + (k4 % cIn4)]!);
     }
     return v;
   };

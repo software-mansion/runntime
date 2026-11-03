@@ -144,13 +144,13 @@ async function bindStateDict(
   let done = 0;
   for (const [name, p] of params) {
     const t = sd.tensors.get(name)!;
-    // Linear's hook turns its quantized weight into quantW words, so a
-    // QuantTensor still here is bound to something else.
+    // Linear's and the convs' hooks turn a quantized weight into quantW
+    // words, so a QuantTensor still here is bound to something else.
     if (t.kind === 'quant') {
       throw new RunntimeError(
         'CHECKPOINT_MISMATCH',
-        `loadStateDict: '${name}' is quantized (int${t.bits}), but only a Linear weight loads ` +
-          `quantized and this parameter holds ${p.shape.dtype}`,
+        `loadStateDict: '${name}' is quantized (int${t.bits}), but only a Linear, Conv1d or ` +
+          `ConvTranspose1d weight loads quantized and this parameter holds ${p.shape.dtype}`,
       );
     }
     const numel = t.shape.reduce((a, b) => a * b, 1);

@@ -416,6 +416,105 @@ describe('Linear with a quantized weight', () => {
   });
 });
 
+describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
+  /** A [out, in·kernel] int8 entry of zeros, with `groups` scales per row. */
+  const zeros = (out: number, cols: number, groups: number): QuantEntry => ({
+    ints: Array<number>(out * cols).fill(0),
+    scales: Array<number>(out * groups).fill(1),
+    shape: [out, cols],
+  });
+
+  it('retypes a Conv1d weight to quantW [kernel·in, out] with a scale per channel group', async () => {
+    const layer = new Conv1d(8, 4, 3);
+    // groups of 12 values: 4 input channels with their 3 taps
+    const sd = await quantCheckpoint(8, 12, { weight: zeros(4, 24, 2) });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 24, dtype: 'quantW', dims: [24, 4] },
+      bias: meta([4]),
+      weightScale: meta([2, 4]),
+    });
+    expect([...sd.tensors.keys()]).toEqual(['weight', 'weightScale']);
+  });
+
+  it('pads a Conv1d to 1 output channel up to 4 columns, bias included', async () => {
+    const layer = new Conv1d(8, 1, 3);
+    const sd = await quantCheckpoint(8, 12, { weight: zeros(1, 24, 2) });
+    sd.tensors.set('bias', memoryStateDict({ bias: Float32Array.of(2.5) }).tensors.get('bias')!);
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 24, dtype: 'quantW', dims: [24, 4] },
+      bias: meta([4]),
+      weightScale: meta([2, 4]),
+    });
+    expect([...(await sd.tensors.get('bias')!.f32())]).toEqual([2.5, 0, 0, 0]);
+  });
+
+  it('refuses a padded Conv1d bias of another length with CHECKPOINT_MISMATCH', async () => {
+    const layer = new Conv1d(8, 1, 3);
+    const sd = await quantCheckpoint(8, 12, { weight: zeros(1, 24, 2) });
+    sd.tensors.set('bias', memoryStateDict({ bias: Float32Array.of(1, 2) }).tensors.get('bias')!);
+    expect(() => layer.transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(/bias has shape \[2\], expected \[1\]/),
+      }),
+    );
+  });
+
+  it('retypes a ConvTranspose1d weight to quantW [taps·in, stride·out]', async () => {
+    const layer = new ConvTranspose1d(8, 2, 4, { stride: 2 });
+    const sd = await quantCheckpoint(8, 16, { weight: zeros(2, 32, 2) });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 16, dtype: 'quantW', dims: [16, 4] },
+      bias: meta([4]),
+      weightScale: meta([2, 4]),
+    });
+  });
+
+  it.each([
+    {
+      name: 'groups that split a channel',
+      layer: () => new Conv1d(8, 4, 3),
+      file: () => quantCheckpoint(8, 4, { weight: zeros(4, 24, 6) }),
+      error: /groups of 4 values, not whole channels of 3 values/,
+    },
+    {
+      name: 'a group of 2 channels',
+      layer: () => new Conv1d(8, 4, 2),
+      file: () => quantCheckpoint(8, 4, { weight: zeros(4, 16, 4) }),
+      error: /groups of 2 channels, which needs a group a multiple of 4/,
+    },
+    {
+      name: 'kernel·in that is not a multiple of 8',
+      layer: () => new Conv1d(4, 4, 3),
+      file: () => quantCheckpoint(8, 12, { weight: zeros(4, 12, 1) }),
+      error: /3·in a multiple of 8, got in 4/,
+    },
+    {
+      name: 'a weight of another shape',
+      layer: () => new Conv1d(8, 4, 3),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(4, 16, 2) }),
+      error: /expected \[out, in·kernel\] = \[4, 24\]/,
+    },
+    {
+      name: 'stride·out that is not a multiple of 4',
+      layer: () => new ConvTranspose1d(8, 3, 2, { stride: 2 }),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(3, 16, 2) }),
+      error: /needs stride·out a multiple of 4, got 6/,
+    },
+  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ layer, file, error }) => {
+    const sd = await file();
+    expect(() => layer().transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(error),
+      }),
+    );
+  });
+});
+
 describe('Conv1d', () => {
   it('stores the weight tap-major as [kernelSize·in, out]', () => {
     expect(shapes(new Conv1d(4, 6, 3))).toEqual({ weight: meta([12, 6]), bias: meta([6]) });

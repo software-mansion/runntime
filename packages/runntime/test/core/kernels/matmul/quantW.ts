@@ -10,7 +10,8 @@ import { randomF32 } from '../../../gpu.ts';
  *  dequantizes to. */
 export interface QuantWeight {
   w: Value;
-  /** f32 [E·K / groupSize, N]: one scale per group of rows in each column. */
+  /** f32 [period / groupSize, N]: one scale per group of rows in each
+   *  column, the same in every period of rows. */
   scales: Float32Array;
   /** q · scale for row r and column c at [r·N + c], in f64. */
   dequant: Float64Array;
@@ -42,7 +43,8 @@ function packQuantW(q: Int8Array, experts: number, k: number, n: number, bits: 4
 }
 
 /** Random ints over the full signed range of `bits` and positive scales,
- *  packed and uploaded. The buffer is destroyed when the test ends. */
+ *  packed and uploaded. Row r takes scale row (r mod period) / groupSize,
+ *  period E·K when omitted. The buffer is destroyed when the test ends. */
 export function randomQuantWeight(
   root: TgpuRoot,
   {
@@ -51,7 +53,8 @@ export function randomQuantWeight(
     n,
     bits,
     groupSize,
-  }: { experts: number; k: number; n: number; bits: 4 | 8; groupSize: number },
+    period = experts * k,
+  }: { experts: number; k: number; n: number; bits: 4 | 8; groupSize: number; period?: number },
   seed: number,
 ): QuantWeight {
   const rows = experts * k;
@@ -59,12 +62,13 @@ export function randomQuantWeight(
   const q = Int8Array.from(randomF32(rows * n, seed), (v) =>
     Math.min(half - 1, Math.floor(v * half)),
   );
-  const scales = randomF32((rows / groupSize) * n, seed + 1).map((v) => (Math.abs(v) + 0.1) / half);
+  const scales = randomF32((period / groupSize) * n, seed + 1).map(
+    (v) => (Math.abs(v) + 0.1) / half,
+  );
   const dequant = new Float64Array(rows * n);
   for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < n; c++) {
-      dequant[r * n + c] = q[r * n + c]! * scales[Math.floor(r / groupSize) * n + c]!;
-    }
+    const row = Math.floor((r % period) / groupSize);
+    for (let c = 0; c < n; c++) dequant[r * n + c] = q[r * n + c]! * scales[row * n + c]!;
   }
   const words = packQuantW(q, experts, k, n, bits);
   const buffer = uploadU32(root, words);
