@@ -375,7 +375,12 @@ describe('fromSafetensors', () => {
     it.each([
       { name: 'text that is not JSON', metadata: { 'runntime.quant': '{bits' }, error: /JSON/ },
       { name: 'a JSON array', metadata: quant([1, 8]), error: /not a JSON object/ },
-      { name: 'version 2', metadata: quant({ ...valid, version: 2 }), error: /version/ },
+      { name: 'version 3', metadata: quant({ ...valid, version: 3 }), error: /version/ },
+      {
+        name: 'version 2 with bits and groupSize',
+        metadata: quant({ ...valid, version: 2 }),
+        error: /version 2 takes from each tensor/,
+      },
       { name: 'no version', metadata: quant({ ...valid, version: undefined }), error: /version/ },
       { name: 'bits 2', metadata: quant({ ...valid, bits: 2 }), error: /bits 4 or 8/ },
       { name: "bits '8'", metadata: quant({ ...valid, bits: '8' }), error: /bits 4 or 8/ },
@@ -415,6 +420,7 @@ describe('fromSafetensors', () => {
     const int4Setting = {
       'runntime.quant': '{"version":1,"bits":4,"groupSize":2,"scheme":"symmetric"}',
     };
+    const v2Setting = { 'runntime.quant': '{"version":2,"scheme":"symmetric"}' };
     const i8Bytes = (values: number[]) => new Uint8Array(new Int8Array(values).buffer);
     // f16 bits of 1, 0.5, 2 and -1: one scale per 2 columns of a [2, 4] weight.
     const scale: TensorSpec = {
@@ -469,6 +475,44 @@ describe('fromSafetensors', () => {
       expect(w).toMatchObject({ shape: [2, 4], bits: 4, groupSize: 2, byteLength: 4 + 8 });
       expect(await w.ints()).toEqual(new Int8Array([1, 2, -8, -1, -2, 7, -7, 0]));
       expect(sd.totalBytes()).toBe(4 + 8);
+    });
+
+    it('takes bits and groupSize from each tensor in a version 2 file', async () => {
+      const sd = await open(
+        {
+          'a.weight': { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+          'a.weight_scale': scale,
+          'b.weight': { dtype: 'U8', shape: [2, 4], bytes: new Uint8Array(8) },
+          'b.weight_scale': { dtype: 'F16', shape: [2, 2], bytes: new Uint8Array(8) },
+          'c.weight': { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+          'c.weight_scale': { dtype: 'F16', shape: [2, 1], bytes: new Uint8Array(4) },
+        },
+        v2Setting,
+      );
+      const meta = (name: string) => {
+        const t = sd.tensors.get(name)!;
+        if (t.kind !== 'quant') throw new Error('expected a quantized tensor');
+        return { shape: t.shape, bits: t.bits, groupSize: t.groupSize };
+      };
+      expect(meta('a.weight')).toEqual({ shape: [2, 4], bits: 8, groupSize: 2 });
+      expect(meta('b.weight')).toEqual({ shape: [2, 8], bits: 4, groupSize: 4 });
+      expect(meta('c.weight')).toEqual({ shape: [2, 4], bits: 8, groupSize: 4 });
+    });
+
+    it('rejects version 2 scales that do not split the columns evenly', async () => {
+      const opening = open(
+        {
+          w: { dtype: 'I8', shape: [2, 4], bytes: new Uint8Array(8) },
+          w_scale: { dtype: 'F16', shape: [2, 3], bytes: new Uint8Array(12) },
+        },
+        v2Setting,
+      );
+      await expect(opening).rejects.toMatchObject({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(
+          /needs an F16 w_scale \[2, groups\] with groups dividing 4, got F16 \[2, 3\]/,
+        ),
+      });
     });
 
     it('pairs a weight whose scales come first in the file', async () => {
