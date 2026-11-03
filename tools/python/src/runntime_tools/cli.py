@@ -30,6 +30,9 @@ lm_head often shares the embedding's weights."""
 IN_FEATURES_MULTIPLE = 8
 """runntime's quantized matmul reads 8 input rows per tile."""
 
+F16_MAX = float(np.finfo(np.float16).max)
+"""The largest finite f16. A tensor with a bigger value cannot be stored as F16."""
+
 PACKED_WORD_BITS = 32
 """runntime packs a weight 32 bits to a word, so out features must fill whole
 words: a multiple of 4 for int8, 8 for int4."""
@@ -41,6 +44,8 @@ class Options:
     group_size: int
     include: Sequence[str]
     exclude: Sequence[str]
+    float16: bool = False
+    """Store the tensors that stay float as F16."""
 
 
 def skip_reason(name: str, tensor: Tensor, options: Options) -> str | None:
@@ -65,6 +70,17 @@ def skip_reason(name: str, tensor: Tensor, options: Options) -> str | None:
     return None
 
 
+def to_float16(name: str, tensor: Tensor) -> Tensor:
+    """`tensor` as F16, or unchanged when it is not F32 or BF16. Raises
+    ValueError when a value is beyond the f16 range."""
+    if tensor.dtype not in {"F32", "BF16"}:
+        return tensor
+    values = to_float32(tensor)
+    if np.abs(values[np.isfinite(values)]).max(initial=0) > F16_MAX:
+        raise ValueError(f"{name} has values beyond the f16 range, run without --f16")
+    return from_array("F16", values.astype(np.float16))
+
+
 def quantize_checkpoint(source: Path, destination: Path, options: Options) -> list[str]:
     """Quantizes the selected tensors of `source` into `destination` and
     returns one report line per tensor, in file order."""
@@ -76,7 +92,7 @@ def quantize_checkpoint(source: Path, destination: Path, options: Options) -> li
         shape = f"[{', '.join(map(str, tensor.shape))}]"
         reason = skip_reason(name, tensor, options)
         if reason:
-            tensors[name] = tensor
+            tensors[name] = to_float16(name, tensor) if options.float16 else tensor
             report.append(f"skipped    {name} {shape}: {reason}")
             continue
         weight = to_float32(tensor)
@@ -129,6 +145,7 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         metavar="GLOB",
         help=f"tensor names to keep as stored, repeatable, replaces the default {' '.join(DEFAULT_EXCLUDE)}",
     )
+    command.add_argument("--f16", action="store_true", help="store the tensors that stay float as F16")
     return parser.parse_args(argv)
 
 
@@ -139,6 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         group_size=args.group_size,
         include=args.include or DEFAULT_INCLUDE,
         exclude=args.exclude or DEFAULT_EXCLUDE,
+        float16=args.f16,
     )
     try:
         report = quantize_checkpoint(args.source, args.destination, options)

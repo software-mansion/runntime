@@ -6,7 +6,7 @@ from safetensors import safe_open
 
 from runntime_tools.cli import Options, main, skip_reason
 from runntime_tools.quantize import Bits
-from runntime_tools.safetensors_io import Tensor
+from runntime_tools.safetensors_io import Tensor, from_array, write_safetensors
 
 GOLDEN = Path(__file__).parent / "golden"
 """tiny.safetensors and what `runntime quantize --group-size 32` makes of it
@@ -68,3 +68,27 @@ def test_quantize_fails_when_no_tensor_is_selected(tmp_path: Path, capsys: pytes
     assert main(argv) == 1
     assert "no tensor was quantized" in capsys.readouterr().err
     assert not destination.exists()
+
+
+def test_f16_stores_the_float_tensors_that_stay_as_f16(tmp_path: Path) -> None:
+    destination = tmp_path / "out.safetensors"
+    argv = ["quantize", str(GOLDEN / "tiny.safetensors"), str(destination), "--bits", "8", "--f16"]
+    assert main(argv) == 0
+    with (
+        safe_open(destination, "numpy") as quantized,
+        safe_open(GOLDEN / "tiny.safetensors", "numpy") as source,
+    ):
+        assert quantized.get_tensor("layer.weight").dtype == np.int8
+        for name in ("embed.weight", "layer.bias", "norm.weight"):
+            stored = quantized.get_tensor(name)
+            assert stored.dtype == np.float16
+            np.testing.assert_array_equal(stored, source.get_tensor(name).astype(np.float16))
+
+
+def test_f16_fails_on_a_value_beyond_the_f16_range(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = tmp_path / "big.safetensors"
+    weight = np.zeros((8, 32), dtype=np.float32)
+    bias = np.array([1e5], dtype=np.float32)
+    write_safetensors(source, {"fc.weight": from_array("F32", weight), "fc.bias": from_array("F32", bias)}, {})
+    assert main(["quantize", str(source), str(tmp_path / "out.safetensors"), "--bits", "8", "--f16"]) == 1
+    assert "fc.bias has values beyond the f16 range" in capsys.readouterr().err
