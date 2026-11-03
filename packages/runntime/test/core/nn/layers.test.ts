@@ -654,9 +654,10 @@ describe('normalization layers', () => {
     });
   });
 
-  it('GroupNorm has a weight and bias per channel, and needs one group', () => {
+  it('GroupNorm has a weight and bias per channel, and groups that divide the channels', () => {
     expect(shapes(new GroupNorm(1, 8))).toEqual({ weight: meta([8]), bias: meta([8]) });
-    expect(() => new GroupNorm(2, 8)).toThrow(/only numGroups = 1 is supported, got 2/);
+    expect(shapes(new GroupNorm(8, 8))).toEqual({ weight: meta([8]), bias: meta([8]) });
+    expect(() => new GroupNorm(3, 8)).toThrow(/numGroups 3 must divide the 8 channels/);
   });
 
   it('RMSNorm has one scale per feature', () => {
@@ -666,6 +667,7 @@ describe('normalization layers', () => {
   it.each([
     ['LayerNorm', () => new LayerNorm(8, 1e-5, { bias: true })],
     ['GroupNorm', () => new GroupNorm(1, 8)],
+    ['GroupNorm per channel', () => new GroupNorm(8, 8)],
     ['RMSNorm', () => new RMSNorm(8)],
   ] as const)('%s keeps the [T, N] shape', (_, make) => {
     expect(fakeLoad(make()).forward(input([5, 8])).shape).toEqual(meta([5, 8]));

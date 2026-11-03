@@ -3,7 +3,15 @@
 
 import tgpu, { d, std } from 'typegpu';
 
-export const ACT_CODE = { none: 0, tanh: 1, gelu: 2, silu: 3, relu: 4, geluTanh: 5 } as const;
+export const ACT_CODE = {
+  none: 0,
+  tanh: 1,
+  gelu: 2,
+  silu: 3,
+  relu: 4,
+  geluTanh: 5,
+  elu: 6,
+} as const;
 export type ActName = keyof typeof ACT_CODE;
 export type SlotAct = Exclude<ActName, 'none'>;
 
@@ -67,6 +75,14 @@ export const geluTanhAct = ((x: d.v4f) => {
   return 0.5 * x * (1 + th);
 }) as Activation;
 
+/** torch's ELU with alpha 1: x above 0, eˣ − 1 below. exp only ever sees
+ *  x ≤ 0, so it never overflows, and the positive side adds an exact 0. */
+export const eluAct = ((x: d.v4f) => {
+  'use gpu';
+  const zero = std.sign(x) * 0;
+  return std.max(x, zero) + (std.exp(std.min(x, zero)) - 1);
+}) as Activation;
+
 export const ACTIVATIONS: readonly Activation[] = [
   identityAct,
   tanhAct,
@@ -74,9 +90,10 @@ export const ACTIVATIONS: readonly Activation[] = [
   siluAct,
   reluAct,
   geluTanhAct,
+  eluAct,
 ];
 
-const ACT_NAMES = ['none', 'tanh', 'gelu', 'silu', 'relu', 'geluTanh'] as const;
+const ACT_NAMES = ['none', 'tanh', 'gelu', 'silu', 'relu', 'geluTanh', 'elu'] as const;
 for (const [i, name] of ACT_NAMES.entries()) {
   if (ACT_CODE[name] !== i || ACTIVATIONS[i] === undefined) {
     throw new Error(

@@ -8,7 +8,7 @@ import {
   WORKGROUP_SIZE,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
-import { gelu } from '../activations.ts';
+import { eluAct, gelu } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
 /** `a` is the scalar operand, or clamp's lo bound; `b` is clamp's hi bound. */
@@ -92,6 +92,13 @@ function makeUnaryVariant(elem: Elem) {
     layout.$.out[i] = store(x / (1 + std.exp(-x)));
   });
 
+  const elu = shell(({ gid }) => {
+    'use gpu';
+    const i = flatIndex(gid);
+    if (i >= layout.$.meta.total) return;
+    layout.$.out[i] = store(eluAct(d.f32(layout.$.x[i]!)));
+  });
+
   return {
     layout,
     rsqrt,
@@ -103,6 +110,7 @@ function makeUnaryVariant(elem: Elem) {
     gelu: geluFn,
     asinh,
     silu,
+    elu,
   };
 }
 
@@ -142,6 +150,9 @@ export function createSiluPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) {
 }
 export function createAsinhPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) {
   return root.createComputePipeline({ compute: unaryVariant(elem).asinh });
+}
+export function createEluPipeline(root: TgpuRoot, elem: Elem = F32_ELEM) {
+  return root.createComputePipeline({ compute: unaryVariant(elem).elu });
 }
 
 export function unaryHandle(

@@ -7,6 +7,7 @@ export {
   add,
   asinh,
   clamp,
+  elu,
   gelu,
   mul,
   rsqrt,

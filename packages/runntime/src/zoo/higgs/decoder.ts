@@ -21,7 +21,9 @@ import {
 import { checkpointMismatch, requireTensor } from '../errors.ts';
 import { HIGGS_DECODER, type HiggsDecoderConfig } from './config.ts';
 
-class ResidualUnit extends nn.Module {
+/** DAC's residual unit: Snake, a dilated conv, Snake, a 1×1 conv, plus the
+ *  input. The encoder's blocks use it too. */
+export class ResidualUnit extends nn.Module {
   readonly snake1: nn.Snake;
   readonly conv1: nn.Conv1d;
   readonly snake2: nn.Snake;

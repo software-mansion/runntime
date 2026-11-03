@@ -14,6 +14,7 @@ import {
   createAddScalarPipeline,
   createAsinhPipeline,
   createClampScalarPipeline,
+  createEluPipeline,
   createGeluPipeline,
   createMulScalarPipeline,
   createRsqrtPipeline,
@@ -105,6 +106,7 @@ export const tanhSpec = unarySpec('tanh', createTanhPipeline, scalarOnly);
 export const geluSpec = unarySpec('gelu', createGeluPipeline, scalarOnly);
 export const siluSpec = unarySpec('silu', createSiluPipeline, scalarOnly);
 export const asinhSpec = unarySpec('asinh', createAsinhPipeline, scalarOnly);
+export const eluSpec = unarySpec('elu', createEluPipeline, scalarOnly);
 export const clampScalarSpec = unarySpec('clampScalar', createClampScalarPipeline, (p) => ({
   a: finite(p.attrs![0]!),
   b: finite(p.attrs![1]!),

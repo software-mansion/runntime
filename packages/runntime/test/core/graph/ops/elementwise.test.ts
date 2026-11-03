@@ -3,6 +3,7 @@ import {
   add,
   asinh,
   clamp,
+  elu,
   gelu,
   mul,
   rsqrt,
@@ -153,6 +154,7 @@ describe('unary ops', () => {
     ['gelu', gelu],
     ['silu', silu],
     ['asinh', asinh],
+    ['elu', elu],
   ] as const)('%s keeps shape and dtype', (_, op) => {
     expect(op(input([4, 7], 'f16')).shape).toEqual(meta([4, 7], 'f16'));
   });
@@ -163,6 +165,7 @@ describe('unary ops', () => {
     ['gelu', gelu],
     ['silu', silu],
     ['asinh', asinh],
+    ['elu', elu],
   ] as const)('%s runs on hwc4, since it maps 0 to 0', (_, op) => {
     expect(op(hwc4Input(5, 2, 2)).shape.layout).toBe('hwc4');
   });

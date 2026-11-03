@@ -25,6 +25,7 @@ export const EPILOGUES: readonly { name: string; epilogue: Epilogue }[] = [
   { name: 'silu', epilogue: { activation: 'silu' } },
   { name: 'relu', epilogue: { activation: 'relu' } },
   { name: 'geluTanh', epilogue: { activation: 'geluTanh' } },
+  { name: 'elu', epilogue: { activation: 'elu' } },
   { name: 'bias, gelu and addend', epilogue: { bias: true, addend: true, activation: 'gelu' } },
 ];
 
@@ -48,6 +49,7 @@ export const ACTIVATION_REF: Record<SlotAct, (x: number) => number> = {
   silu: (x) => x / (1 + Math.exp(-x)),
   relu: (x) => Math.max(x, 0),
   geluTanh: (x) => 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * x ** 3))),
+  elu: (x) => (x > 0 ? x : Math.expm1(x)),
 };
 
 /** C = activation(A·B + bias) + addend for row-major A [m, k] and B [k, n],
