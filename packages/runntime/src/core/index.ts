@@ -155,6 +155,7 @@ export type {
   LazyStateDict,
   LazyTensor,
   MemoryStateDict,
+  QuantTensor,
 } from './weights/safetensors.ts';
 export { gpuUpload } from './nn/loadStateDict.ts';
 export type { LoadStateDictOpts, UploadFn } from './nn/loadStateDict.ts';

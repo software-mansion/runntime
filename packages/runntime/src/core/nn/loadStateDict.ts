@@ -8,7 +8,7 @@ import { defaultRoot } from '../gpu/context.ts';
 import { inGpuErrorScopes } from '../gpu/errorScopes.ts';
 import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
 import { bf16ToF16Bits, f32ArrayToF16Bits } from '../weights/convert.ts';
-import type { LazyStateDict, LazyTensor } from '../weights/safetensors.ts';
+import type { DerivedTensor, FileTensor, LazyStateDict } from '../weights/safetensors.ts';
 import { CpuParameter, type AnyModule } from './module.ts';
 
 export type UploadFn = (data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) => Value;
@@ -53,7 +53,7 @@ export function gpuUpload(root: TgpuRoot): UploadFn {
   };
 }
 
-async function materialize(name: string, t: LazyTensor, want: ValueMeta['dtype']) {
+async function materialize(name: string, t: FileTensor | DerivedTensor, want: ValueMeta['dtype']) {
   if (want === 'f16') {
     // F16 bytes are already the buffer contents; BF16 converts directly, and
     // anything else rounds down from f32.
@@ -144,6 +144,12 @@ async function bindStateDict(
   let done = 0;
   for (const [name, p] of params) {
     const t = sd.tensors.get(name)!;
+    if (t.kind === 'quant') {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `loadStateDict: '${name}' is quantized (int${t.bits}), but the parameter holds ${p.shape.dtype}`,
+      );
+    }
     const numel = t.shape.reduce((a, b) => a * b, 1);
     const expected = numel;
     if (expected !== p.shape.elems) {

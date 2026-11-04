@@ -99,6 +99,9 @@ describe('transformHfPrivacyFilterStateDict', () => {
     const outWeight = get('block.0.mlp.outWeight');
     expect(outWeight.shape).toEqual([4, 1]);
     expect(outWeight.byteLength).toBe(4 * elemBytes);
+    if (source.kind === 'quant' || outWeight.kind === 'quant') {
+      throw new Error('expected float tensors');
+    }
     expect([outWeight.kind, outWeight.dtype]).toEqual([source.kind, source.dtype]);
     expect([...(await outWeight.f32())]).toEqual([1, 2, 3, 4]);
 

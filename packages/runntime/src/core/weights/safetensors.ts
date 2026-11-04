@@ -315,7 +315,25 @@ export interface DerivedTensor extends LazyTensorBase {
   data(): Promise<Float32Array | Uint16Array | Uint32Array>;
 }
 
-export type LazyTensor = FileTensor | DerivedTensor;
+/** Symmetric int weights with one scale per `groupSize` values along the last
+ *  dim: value = int · scale of its group. `shape` is logical, one element per
+ *  int even for int4, and `byteLength` covers the ints and the scales. The
+ *  float accessors reject with CHECKPOINT_MISMATCH. */
+export interface QuantTensor extends LazyTensorBase {
+  kind: 'quant';
+  /** What the tensor is, for error messages: its name in the file, or the
+   *  helper that made it and the sources. */
+  name: string;
+  bits: 4 | 8;
+  groupSize: number;
+  /** One signed value per logical element, row-major; int4 comes unpacked. */
+  ints(): Promise<Int8Array>;
+  /** Row-major, shape `[...lead, last / groupSize]`. F16 halfwords as stored
+   *  in the file; f32 once a helper changed them. */
+  scales(): Promise<Float32Array | Uint16Array>;
+}
+
+export type LazyTensor = FileTensor | DerivedTensor | QuantTensor;
 
 export interface LazyStateDict {
   metadata: Record<string, string>;
@@ -390,6 +408,81 @@ function fileTensor(name: string, info: SafeTensorInfo, source: RangeSource): Fi
       return toHalfwords(await fetchBytes());
     },
   };
+}
+
+/** A QuantTensor over `ints` and `scales`. Like derivedTensor it holds
+ *  nothing between reads. */
+export function quantTensor(
+  parts: Pick<
+    QuantTensor,
+    'name' | 'shape' | 'bits' | 'groupSize' | 'byteLength' | 'ints' | 'scales'
+  >,
+): QuantTensor {
+  const refuse = () =>
+    Promise.reject(
+      new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `tensor ${parts.name} is quantized (int${parts.bits}, groups of ${parts.groupSize}) and has no float reading`,
+      ),
+    );
+  return { kind: 'quant', ...parts, f32: refuse, halfWords: refuse, words: refuse, u16: refuse };
+}
+
+/** Unpacks int4 bytes, two values each with the low nibble first, into one
+ *  signed value per element. */
+function unpackInt4(bytes: Uint8Array): Int8Array {
+  const out = new Int8Array(bytes.length * 2);
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i]!;
+    // (n ^ 8) - 8 sign-extends a 4-bit two's-complement nibble.
+    out[2 * i] = ((byte & 0x0f) ^ 8) - 8;
+    out[2 * i + 1] = ((byte >> 4) ^ 8) - 8;
+  }
+  return out;
+}
+
+/** The int weight `name` paired with its F16 `scale`, checked against the
+ *  file's quantization setting. bits 8 needs I8; bits 4 needs U8, where U8
+ *  means packed bytes of two signed nibbles, not unsigned values. Any other
+ *  pairing throws CHECKPOINT_MISMATCH. */
+function fileQuantTensor(
+  name: string,
+  info: SafeTensorInfo,
+  scale: SafeTensorInfo | undefined,
+  quant: QuantConfig,
+  source: RangeSource,
+): QuantTensor {
+  const bad = (why: string): never => {
+    throw new RunntimeError('CHECKPOINT_MISMATCH', `safetensors: quantized tensor ${name} ${why}`);
+  };
+  const { bits, groupSize } = quant;
+  const dtype = bits === 8 ? 'I8' : 'U8';
+  if (info.dtype !== dtype) bad(`is ${info.dtype}, but int${bits} is stored as ${dtype}`);
+  if (info.shape.length !== 2) bad(`needs a 2D shape, got [${info.shape.join(', ')}]`);
+  const out = info.shape[0]!;
+  const cols = bits === 8 ? info.shape[1]! : info.shape[1]! * 2;
+  if (cols % groupSize !== 0) bad(`has ${cols} columns, not a multiple of groupSize ${groupSize}`);
+  if (!scale) return bad(`has no ${name}_scale`);
+  const scaleShape = [out, cols / groupSize];
+  if (scale.dtype !== 'F16' || scale.shape.join() !== scaleShape.join()) {
+    bad(
+      `needs an F16 ${name}_scale of shape [${scaleShape.join(', ')}], ` +
+        `got ${scale.dtype} [${scale.shape.join(', ')}]`,
+    );
+  }
+  return quantTensor({
+    name,
+    shape: [out, cols],
+    bits,
+    groupSize,
+    byteLength: info.end - info.begin + (scale.end - scale.begin),
+    async ints() {
+      const bytes = await source.read(info.begin, info.end);
+      if (bits === 4) return unpackInt4(bytes);
+      return new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    },
+    scales: async () => toHalfwords(await source.read(scale.begin, scale.end)),
+  });
 }
 
 export function eagerTensor(data: Float32Array | Uint32Array, shape: number[]): LazyTensor {
@@ -483,6 +576,48 @@ function bf16Tensor(bits: Uint16Array, shape: number[]): FileTensor {
   };
 }
 
+/** Metadata key of a quantized file: a JSON string
+ *  `{"version":1,"bits":8|4,"groupSize":N,"scheme":"symmetric"}`. */
+const QUANT_METADATA_KEY = 'runntime.quant';
+
+/** How a quantized file stores its int weights: `bits` per value, one f16
+ *  scale per `groupSize` values along each row. */
+interface QuantConfig {
+  bits: 4 | 8;
+  groupSize: number;
+}
+
+/** The file's quantization setting, or undefined for a float file. Throws
+ *  CHECKPOINT_MISMATCH on a setting this reader does not know. */
+function quantConfigOf(metadata: Record<string, string>): QuantConfig | undefined {
+  const raw: unknown = metadata[QUANT_METADATA_KEY];
+  if (raw === undefined) return undefined;
+  const bad = (why: string): never => {
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      `safetensors: '${QUANT_METADATA_KEY}' metadata ${JSON.stringify(raw)} ${why}`,
+    );
+  };
+  if (typeof raw !== 'string') return bad('is not a string');
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return bad('is not valid JSON');
+  }
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+    return bad('is not a JSON object');
+  }
+  const { version, bits, groupSize, scheme } = json as Record<string, unknown>;
+  if (version !== 1) return bad('has a version other than 1');
+  if (bits !== 4 && bits !== 8) return bad('needs bits 4 or 8');
+  if (typeof groupSize !== 'number' || !Number.isSafeInteger(groupSize) || groupSize <= 0) {
+    return bad('needs a positive integer groupSize');
+  }
+  if (scheme !== 'symmetric') return bad("needs scheme 'symmetric'");
+  return { bits, groupSize };
+}
+
 export async function fromSafetensors(
   src: string | RangeSource,
   opts: {
@@ -532,8 +667,28 @@ export async function fromSafetensors(
   const data = cached(
     chunkBytes > 0 && payloadEnd > 0 ? chunkedSource(raw, payloadEnd, chunkBytes) : raw,
   );
+  const quant = quantConfigOf(index.metadata);
+  const isInt = (info: SafeTensorInfo) => info.dtype === 'I8' || info.dtype === 'U8';
+  // Each int weight X takes X_scale into its QuantTensor, so the scales get
+  // no entry of their own.
+  const scaleNames = new Set(
+    [...index.tensors].filter(([, info]) => isInt(info)).map(([name]) => `${name}_scale`),
+  );
   const tensors = new Map<string, LazyTensor>();
-  for (const [name, info] of index.tensors) tensors.set(name, fileTensor(name, info, data));
+  for (const [name, info] of index.tensors) {
+    if (scaleNames.has(name)) continue;
+    if (!isInt(info)) {
+      tensors.set(name, fileTensor(name, info, data));
+      continue;
+    }
+    if (!quant) {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `safetensors: tensor ${name} is ${info.dtype}, but the file has no '${QUANT_METADATA_KEY}' metadata`,
+      );
+    }
+    tensors.set(name, fileQuantTensor(name, info, index.tensors.get(`${name}_scale`), quant, data));
+  }
   return {
     metadata: index.metadata,
     tensors,
