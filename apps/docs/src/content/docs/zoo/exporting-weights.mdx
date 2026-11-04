@@ -245,11 +245,12 @@ size of 32 divides both Linear input sizes of all-MiniLM-L6-v2, 384 and 1536.
 
 ### Picking the setting
 
-Measured on all-MiniLM-L6-v2 against the float model, over f16 and f32 math
-and group sizes 32 and 128: the worst cosine similarity of an embedding
-is 0.999993 with int8 and 0.99782 with int4. int8 in groups of 32 is the
-default. Try int4 when the download size matters more, and check the output
-on your own data. A bigger group means fewer scales and a slightly smaller
+Measured on the all-MiniLM-L6-v2 weights against the float model, 20
+search queries, groups of 32: the worst cosine similarity of an embedding
+is 0.9998 with int8 and 0.94 with int4, and int4 changes the top 3 results
+of 8 queries. int8 in groups of 32 is the safe pick and the default. int4
+costs quality: try it only when the download size matters more, and check
+the output on your own data. A bigger group means fewer scales and a slightly smaller
 file, and a bigger error on a group with one large weight.
 
 ## Quantization-aware training
