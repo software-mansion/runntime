@@ -144,18 +144,28 @@ async function bindStateDict(
   let done = 0;
   for (const [name, p] of params) {
     const t = sd.tensors.get(name)!;
+    // Linear's hook turns its quantized weight into quantW words, so a
+    // QuantTensor still here is bound to something else.
     if (t.kind === 'quant') {
       throw new RunntimeError(
         'CHECKPOINT_MISMATCH',
-        `loadStateDict: '${name}' is quantized (int${t.bits}), but the parameter holds ${p.shape.dtype}`,
+        `loadStateDict: '${name}' is quantized (int${t.bits}), but only a Linear weight loads ` +
+          `quantized and this parameter holds ${p.shape.dtype}`,
       );
     }
     const numel = t.shape.reduce((a, b) => a * b, 1);
-    const expected = numel;
-    if (expected !== p.shape.elems) {
+    // A quantW slot counts u32 words under logical dims. Privacy-filter's
+    // pre-packed U32 file tensors count words too; anything else, like
+    // Linear's packed weight, counts logical values.
+    const words = p.shape.dtype === 'quantW' && t.kind === 'file' && t.dtype === 'U32';
+    const expected =
+      p.shape.dtype === 'quantW' && !words
+        ? p.shape.dims!.reduce((a, b) => a * b, 1)
+        : p.shape.elems;
+    if (numel !== expected) {
       throw new RunntimeError(
         'CHECKPOINT_MISMATCH',
-        `loadStateDict: '${name}' checkpoint shape [${t.shape}] (${numel} elems) != model ${JSON.stringify(p.shape.dims)} (${p.shape.elems} ${p.shape.dtype === 'quantW' ? 'words' : 'elems'})`,
+        `loadStateDict: '${name}' checkpoint shape [${t.shape}] (${numel} elems) != model ${JSON.stringify(p.shape.dims)} (${expected} ${words ? 'words' : 'elems'})`,
       );
     }
     if (p instanceof CpuParameter) {

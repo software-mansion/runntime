@@ -11,6 +11,7 @@ import {
   gatherRows,
   gatherRowsFrom,
   layerNorm,
+  matmul,
   reshape,
   rmsNorm,
   sdpa,
@@ -20,7 +21,12 @@ import {
 } from '../graph/ops.ts';
 import { matrix, type Value } from '../graph/value.ts';
 import {
+  MATMUL_QUANT_TILED_BK,
+  matmulQuantTiledEligible,
+} from '../kernels/matmul/matmulQuantTiled.ts';
+import {
   convToTapMajor,
+  f16ToF32,
   packConv1x1Hwc4F16,
   packConvHwc4F16,
   packConvWinogradF16,
@@ -28,7 +34,8 @@ import {
   permuteConvTransposeF16,
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
-import { derivedTensor, type LazyStateDict } from '../weights/safetensors.ts';
+import { packQuantW } from '../weights/quantPack.ts';
+import { derivedTensor, type LazyStateDict, type QuantTensor } from '../weights/safetensors.ts';
 import { readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
@@ -100,12 +107,21 @@ export class Embedding extends Module<[readonly number[] | Value], Value> {
 /** y = x @ weight + bias. weight is stored [in, out]; torch checkpoints
  *  transpose once at load.
  *
+ *  A quantized checkpoint weight loads as quantW words with its f32 scales in
+ *  `weightScale` [in / groupSize, out], and forward() runs the quantized
+ *  matmul. Only the checkpoint says which kind it is, so transformStateDict
+ *  retypes the slot at load.
+ *
  *  `addend` and `activation` fold a residual add and a following tanh or GELU
  *  into the matmul epilogue, as act(x·W + bias) + addend. */
 export class Linear extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
   readonly activation?: SlotAct;
+  /** Set when a quantized weight loads. */
+  weightScale?: Parameter;
+  /** How the loaded weight is quantized, or undefined for a float weight. */
+  private quantization?: { bits: 4 | 8; groupSize: number };
   constructor(
     readonly inFeatures: number,
     readonly outFeatures: number,
@@ -135,10 +151,76 @@ export class Linear extends Module {
           `expected torch layout [${this.outFeatures}, ${this.inFeatures}]`,
       );
     }
+    if (tensor.kind === 'quant') {
+      this.loadQuantized(sd, prefix, name, tensor);
+      return;
+    }
     sd.tensors.set(name, transposeWeight(tensor));
   }
+  /** Replaces `name` with quantW words [in, out] and adds its scales
+   *  [in / groupSize, out] right after it, so they bind in file order. The
+   *  words carry the whole byteLength of the ints and scales. */
+  private loadQuantized(
+    sd: LazyStateDict,
+    prefix: string,
+    name: string,
+    tensor: QuantTensor,
+  ): void {
+    const { bits, groupSize } = tensor;
+    const k = this.inFeatures;
+    const n = this.outFeatures;
+    // The quantized matmul reads whole tiles of 4 columns and 8 rows and
+    // packs int4 columns 8 to a word.
+    if (!matmulQuantTiledEligible(k, n, groupSize) || n % (32 / bits) !== 0) {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `Linear: ${name} is int${bits} in groups of ${groupSize}, which needs in features ` +
+          `a multiple of ${MATMUL_QUANT_TILED_BK} and of the group size, out features a ` +
+          `multiple of ${32 / bits} and a group size a multiple of 4, got [out, in] = [${n}, ${k}]`,
+      );
+    }
+    this.quantization = { bits, groupSize };
+    this.weight.retype('quantW', (k * n * bits) / 32);
+    this.weightScale = new Parameter(
+      { elems: (k / groupSize) * n, dtype: 'f32', dims: [k / groupSize, n] },
+      undefined,
+      true,
+    );
+    const words = derivedTensor(
+      [k, n],
+      async () => packQuantW(await tensor.ints(), k, n, bits),
+      tensor.byteLength,
+    );
+    const groups = k / groupSize;
+    const scales = derivedTensor([groups, n], async () => {
+      const data = await tensor.scales();
+      const f32 = data instanceof Float32Array ? data : f16ToF32(data);
+      // torch's [out, in / groupSize] to the kernels' [in / groupSize, out]
+      const out = new Float32Array(f32.length);
+      for (let o = 0; o < n; o++) {
+        for (let g = 0; g < groups; g++) out[g * n + o] = f32[o * groups + g]!;
+      }
+      return out;
+    });
+    const scaleName = prefix ? `${prefix}.weightScale` : 'weightScale';
+    const entries = [...sd.tensors];
+    sd.tensors.clear();
+    for (const [key, t] of entries) {
+      sd.tensors.set(key, key === name ? words : t);
+      if (key === name) sd.tensors.set(scaleName, scales);
+    }
+  }
   forward(x: Value, call: { addend?: Value } = {}): Value {
-    return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
+    if (!this.weightScale || !this.quantization) {
+      return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
+    }
+    return matmul(x, this.weight.value, {
+      scales: this.weightScale.value,
+      ...this.quantization,
+      bias: this.bias?.value,
+      addend: call.addend,
+      activation: this.activation,
+    });
   }
 }
 

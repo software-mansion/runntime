@@ -11,22 +11,23 @@ import {
 
 export type Entry = { values: number[]; shape: number[] };
 
+/** The array types an entry's data can come in. */
+type EntryData = Float32Array | Uint16Array | Uint32Array | Int8Array | Uint8Array;
+
 /** Safetensors dtype by the array type that holds an entry's data. */
-const dtypeOf = (data: Float32Array | Uint16Array | Int8Array | Uint8Array) => {
+const dtypeOf = (data: EntryData) => {
   if (data instanceof Float32Array) return 'F32';
   if (data instanceof Uint16Array) return 'F16';
+  if (data instanceof Uint32Array) return 'U32';
   return data instanceof Int8Array ? 'I8' : 'U8';
 };
 
 /** A safetensors file built from the format spec: an 8-byte little-endian
  *  header length, the JSON header, then the payload. An entry's dtype follows
- *  its data: F32 for a Float32Array, F16 for a Uint16Array of halfwords, I8
- *  for an Int8Array, U8 for a Uint8Array. `metadata` goes in `__metadata__`. */
+ *  its data: F32 for a Float32Array, F16 for a Uint16Array of halfwords, U32
+ *  for a Uint32Array, I8 for an Int8Array, U8 for a Uint8Array. `metadata` goes in `__metadata__`. */
 export function safetensorsFile(
-  entries: Record<
-    string,
-    { data: Float32Array | Uint16Array | Int8Array | Uint8Array; shape: number[] }
-  >,
+  entries: Record<string, { data: EntryData; shape: number[] }>,
   metadata?: Record<string, string>,
 ): Uint8Array {
   const header: Record<string, unknown> = metadata ? { __metadata__: metadata } : {};
