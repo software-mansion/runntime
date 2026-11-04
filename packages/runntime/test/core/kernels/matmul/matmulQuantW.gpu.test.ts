@@ -89,6 +89,9 @@ describe('matmulQuantW kernel', () => {
         groupSize: 16,
         dtypes: both,
       },
+      // matmulQuantW: m < 32, though m · n >= 48·1024; the tiled suite has m = 32
+      { name: 'a wide decode row', m: 1, k: 64, n: 49152, groupSize: 32, dtypes: both },
+      { name: 'one row short of a row tile', m: 31, k: 32, n: 2048, groupSize: 16, dtypes: both },
       // matmulQuantW: one expert of a fused weight, whatever m
       {
         name: 'rows past a workgroup on one expert',

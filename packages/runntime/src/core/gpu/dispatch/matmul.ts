@@ -153,6 +153,11 @@ export const matmulSpec = defineSpec({
  *  on an Apple M4 Pro for N from 384 to 2048. */
 const QUANT_TILED_MIN_OUTPUTS = 48 * 1024;
 
+/** And from this many rows, one full row tile of matmulQuantTiled. With fewer
+ *  a wide N alone passes QUANT_TILED_MIN_OUTPUTS, and each tile computes
+ *  mostly empty rows: [1,2048]×[2048,131072] is 4.8× slower tiled. */
+const QUANT_TILED_MIN_ROWS = 32;
+
 export const matmulQuantWSpec = defineSpec({
   attrs: (p) => {
     const [baseRow, scaleBase, bits, groupSize, hasBias, hasAdd, act] = p.attrs as [
@@ -175,6 +180,7 @@ export const matmulQuantWSpec = defineSpec({
       attrs.baseRow === 0 &&
       attrs.scaleBase === 0 &&
       rows === k &&
+      m >= QUANT_TILED_MIN_ROWS &&
       m * n >= QUANT_TILED_MIN_OUTPUTS &&
       matmulQuantTiledEligible(k, n, attrs.groupSize);
     return {

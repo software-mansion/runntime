@@ -20,7 +20,7 @@ interface Case {
 }
 
 /** act(a · dequant(W) + bias) + addend on the whole quantW weight, through the
- *  tiled route: m · n >= 48·1024 and K % 8 == 0. */
+ *  tiled route: m >= 32, m · n >= 48·1024 and K % 8 == 0. */
 async function checkQuantTiled(c: Case, dtype: 'f32' | 'f16') {
   const { m, k, n, bits, groupSize } = c;
   const round = dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
@@ -57,10 +57,11 @@ async function checkQuantTiled(c: Case, dtype: 'f32' | 'f16') {
 }
 
 describe('matmulQuantTiled kernel', () => {
-  // tiled: a whole weight from 48·1024 output values (m · n), K % 8 == 0.
-  // matmulQuantW's suite has the case one output below.
+  // tiled: a whole weight from 32 rows and 48·1024 output values (m · n),
+  // K % 8 == 0. matmulQuantW's suite has the cases one row and one output below.
   const SHAPES = [
     { name: 'the first output on the tiled route', m: 1536, k: 32, n: 32, groupSize: 16 },
+    { name: 'the first row tile on the tiled route', m: 32, k: 32, n: 2048, groupSize: 16 },
     { name: 'one step of the K loop', m: 1536, k: 8, n: 32, groupSize: 4 },
     { name: 'partial row and column tiles', m: 1229, k: 48, n: 40, groupSize: 8 },
     { name: 'one group per column', m: 3072, k: 64, n: 16, groupSize: 64 },
