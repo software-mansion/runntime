@@ -258,6 +258,9 @@ abSuite('matmul', [
       bias: true,
     },
   ),
+  // matmulQuantW: fewer than 32 rows on a wide N, past 48·1024 outputs.
+  quantWhole('quantW int8 whole, wide decode [1,2048]×[2048,65536]', 1, 2048, 65536, 8, 32),
+  quantWhole('quantW int8 whole, LLM MLP 4 rows [4,4096]×[4096,14336]', 4, 4096, 14336, 8, 32),
 
   // matmulGather: one expert per row.
   gather('matmulGather f32, privacy-filter [64,640], 16 experts', 64, 16, 640, 640),
