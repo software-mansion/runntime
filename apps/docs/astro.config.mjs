@@ -158,6 +158,7 @@ export default defineConfig({
                   label: 'Guides',
                   items: [
                     { label: 'Error handling', slug: 'zoo/error-handling' },
+                    { label: 'Exporting weights', slug: 'zoo/exporting-weights' },
                     {
                       label: 'Migrating from transformers.js',
                       slug: 'zoo/migrating-from-transformers-js',

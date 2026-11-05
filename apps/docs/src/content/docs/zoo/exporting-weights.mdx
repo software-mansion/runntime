@@ -1,0 +1,199 @@
+---
+title: Exporting weights
+description: Run your own weights in ruNNtime, as float or quantized to int8 or int4.
+---
+
+import WeightsPath from '../../../components/WeightsPath.astro';
+import QuantFile from '../../../components/QuantFile.astro';
+
+Every model in the zoo reads its weights from one safetensors file. The
+hosted files are exports of the original checkpoints. Your own export works
+the same way: a fine-tune, a smaller download, or a quantized file. This page
+is the path from a checkpoint to a file a `create` call loads.
+
+<WeightsPath />
+
+## The weights file
+
+A weights file is one `.safetensors` file. The loader reads nothing else: no
+`config.json`, no sharded index.
+
+- **Names** are the ones the model's loader expects. For the hosted models
+  these are the names of the original checkpoint, like
+  `encoder.layer.0.attention.self.query.weight` for all-MiniLM-L6-v2 or
+  `model.decoder.layers.0.self_attn.q_proj.weight` for Moonshine. The hosted
+  file's header lists the exact set.
+- **Shapes** are the original layout. A Linear weight is `[out, in]`, as
+  PyTorch stores it.
+- **Dtypes** are `F32`, `F16` or `BF16`, or int8/int4 for a file from
+  [`runntime quantize`](#quantizing). Today all-MiniLM-L6-v2 loads a
+  quantized file; the other models load float files.
+
+A `create` call takes the file as `modelPath`: a URL, or a `RangeSource` for
+bytes you already have. The ready-made configs in `models` point at the
+hosted files. Spread one and replace `modelPath` to keep its other fields,
+like the tokenizer.
+
+```ts twoslash
+import { createEmbedder, models } from 'runntime/zoo';
+
+const embedder = await createEmbedder({
+  ...models.embedding.ALL_MINILM_L6_V2.DEFAULT,
+  modelPath: '/models/minilm.int8.safetensors',
+});
+```
+
+## Caching and precision
+
+With a `cache`, the downloaded file is saved in the browser and the next load
+needs no network. The cache key comes from the URL and the bytes are never
+checked against the server: when you replace a file, give it a new URL or
+pass a new `cacheId`.
+
+The file's dtype does not pick the math, the model's `dtype` does. The
+`DEFAULT` configs run f16 where the device has `shader-f16` and f32
+elsewhere, whatever the file stores. An `F16` file is half the download of
+an `F32` one.
+
+## Exporting float weights
+
+Save the model with Hugging Face `transformers`. `save_pretrained` writes
+`model.safetensors` with the original names, and `dtype` picks the stored
+dtype. `F16` halves the file against `F32` and loses nothing a model in f16
+math would keep anyway.
+
+```bash
+uv run --with transformers --with torch python -c "
+from transformers import AutoModel
+import torch
+model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', dtype=torch.float16)
+model.save_pretrained('export', max_shard_size='100GB')  # one file, not shards
+"
+```
+
+A folder with shards is fine as the input of
+[`runntime quantize`](#quantizing), which writes one file, but not as a
+`modelPath`.
+
+A checkpoint from your own training code goes through
+`safetensors.torch.save_file(model.state_dict(), 'model.safetensors')`.
+Every tensor must be contiguous, and two names cannot share one tensor:
+clone a tied `lm_head` before saving.
+
+### Checking a file
+
+Load it. A missing or extra tensor throws `CHECKPOINT_MISMATCH` naming it,
+before any weight downloads; a wrong shape throws the same code with the
+shapes. See [Error handling](/zoo/error-handling/) for how to catch it.
+
+```ts twoslash
+import { createEmbedder, isRunntimeError, models } from 'runntime/zoo';
+// ---cut---
+try {
+  await createEmbedder({
+    ...models.embedding.ALL_MINILM_L6_V2.DEFAULT,
+    modelPath: '/models/minilm.safetensors',
+  });
+} catch (err) {
+  // minilm state dict: missing tensor 'encoder.layer.0.attention.self.query.weight'
+  if (isRunntimeError(err, 'CHECKPOINT_MISMATCH')) console.error(err.message);
+  throw err;
+}
+```
+
+To see what a file holds without loading it, read its header in Python:
+
+```bash
+uv run --with safetensors --with numpy python -c "
+from safetensors import safe_open
+with safe_open('path/to/model.safetensors', 'np') as f:
+    print(f.metadata())
+    for name in f.keys():
+        tensor = f.get_slice(name)
+        print(name, tensor.get_dtype(), tensor.get_shape())
+"
+```
+
+## Quantizing
+
+`runntime quantize` turns a float file into an int8 or int4 one. It lives in
+the repository under `tools/python` and runs with
+[uv](https://docs.astral.sh/uv/), which sets up Python and NumPy on the
+first run. Paths are relative to where you run it.
+
+```bash
+git clone https://github.com/software-mansion/runntime
+cd runntime/tools/python
+uv run --no-dev runntime quantize path/to/model.safetensors path/to/model.int8.safetensors --bits 8 --f16 --drop 'pooler.*'
+```
+
+The source is a `.safetensors` file or a Hugging Face model folder, sharded
+or not. The output is one file.
+
+- `--bits 8` or `--bits 4`. Required.
+- `--group-size N`: inputs that share one scale, a multiple of 4. Default 32.
+- `--include GLOB`, repeatable: the tensors to quantize. Default `*.weight`.
+- `--exclude GLOB`, repeatable: the tensors to keep as stored. Default
+  `*embed*`, `*pos_emb*` and `lm_head.*`: the model reads token and
+  position embeddings as float lookup tables, and `lm_head` often shares
+  the embedding's weights.
+- `--f16`: store every tensor that stays float as `F16`. Without it they are
+  copied as stored. A value beyond the f16 range stops the run.
+- `--drop GLOB`, repeatable: leave tensors out of the output, like the
+  `pooler` above, which the embedding model never reads.
+
+Passing `--include` or `--exclude` replaces that option's defaults, so
+repeat the ones you want to keep.
+
+A tensor is quantized when it matches `--include`, matches no `--exclude`,
+is float and 2D, and has a shape the quantized matmul can tile. Every other
+tensor is copied as it is, so the output always loads.
+
+The tool prints one line per tensor:
+
+```text
+quantized  encoder.layer.0.attention.self.query.weight [384, 384]: max error 0.00302, mean 0.000425
+skipped    encoder.layer.0.attention.self.query.bias [384]: not matched by --include
+skipped    encoder.layer.0.output.LayerNorm.weight [384]: 1D, needs [out, in]
+skipped    embeddings.word_embeddings.weight [30522, 384]: excluded by *embed*
+dropped    pooler.dense.weight [384, 384]: matched by pooler.*
+```
+
+The error is how far the quantized weights are from the float ones. A
+tensor whose error stands out from the rest is a candidate for `--exclude`.
+Read the `skipped` lines too: `*embed*` also matches a layer with `embed` in
+its name, like a projection after an embedding, which then needs your own
+`--exclude` list to get quantized. The run fails when no tensor was
+quantized.
+
+For all-MiniLM-L6-v2 from its 91 MB `F32` export, the output is 59 MB with
+`--bits 8`, 35 MB with `--bits 8 --f16` and 30 MB with `--bits 4 --f16`. The
+embedding table is half of this model, so `--f16` matters more than the
+bits.
+
+### What the file holds
+
+<QuantFile />
+
+Each quantized weight is stored as int8 or int4 with one f16 scale per group
+of `--group-size` inputs, and the file header records the bits and group
+size. Every other tensor stays float. Only the weights of Linear layers load
+quantized, which is why the default `--exclude` keeps embedding tables float.
+
+### Picking the setting
+
+Measured on the all-MiniLM-L6-v2 weights against the float model, 20
+search queries, groups of 32: the worst cosine similarity of an embedding
+is 0.9998 with int8 and 0.94 with int4, and int4 changes the top 3 results
+of 8 queries. int8 in groups of 32 is the safe pick and the default. int4
+costs quality: try it only when the download size matters more, and check
+the output on your own data.
+
+## Quantization-aware training
+
+A QAT checkpoint saved as float, the "unquantized" form, quantizes like any
+other. The tool's grid is symmetric int8 or int4, one scale per group of
+inputs, the scale being the group's largest magnitude over 127 or 7. A model
+trained on that grid, like one trained for ggml's `Q8_0` with
+`--bits 8 --group-size 32`, keeps what it learned; another recipe gets
+re-rounded. Activations stay float.

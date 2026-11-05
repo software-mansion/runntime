@@ -1,0 +1,105 @@
+---
+/** The path of a weights file, from a checkpoint to the GPU: six numbered
+ *  steps in two rows, one column at phone width. */
+const steps = [
+  { title: 'Checkpoint', detail: 'PyTorch or Hugging Face' },
+  { title: 'Export', detail: 'model.safetensors, F32 / F16 / BF16' },
+  { title: 'Quantize', detail: 'runntime quantize, int8 or int4. Optional.' },
+  { title: 'Host', detail: 'any static file server' },
+  { title: 'modelPath', detail: 'create<Task>({ modelPath })' },
+  { title: 'Load', detail: 'header, 8 MB chunks, cache, GPU upload' },
+];
+---
+
+<ol class="weights-path" aria-label="From a checkpoint to the GPU">
+  {
+    steps.map((step) => (
+      <li>
+        <span class="weights-path-title">{step.title}</span>
+        <span class="weights-path-detail">{step.detail}</span>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .weights-path {
+    counter-reset: step;
+    display: grid;
+    gap: 1.75rem 2rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    list-style: none;
+    margin: 1.5rem 0;
+    padding: 0;
+  }
+
+  .weights-path li {
+    background: var(--surface-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: 0.5rem;
+    counter-increment: step;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0;
+    min-height: 5rem;
+    padding: 0.75rem 0.875rem;
+    position: relative;
+  }
+
+  /* The step number, in the top right corner. */
+  .weights-path li::before {
+    color: var(--text-faint);
+    content: counter(step);
+    font-family: var(--__sl-font-mono, monospace);
+    font-size: 0.75rem;
+    position: absolute;
+    right: 0.75rem;
+    top: 0.625rem;
+  }
+
+  /* The arrow to the next step, between the boxes. The third box ends a
+   * row, so it gets none: the numbers carry the order to the next row. */
+  .weights-path li:not(:last-child):not(:nth-child(3))::after {
+    color: var(--text-faint);
+    content: '→';
+    font-size: 1.125rem;
+    line-height: 1;
+    position: absolute;
+    right: -1.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .weights-path-title {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .weights-path-detail {
+    color: var(--text-muted);
+    font-family: var(--__sl-font-mono, monospace);
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+
+  @media (max-width: 40rem) {
+    .weights-path {
+      gap: 1.75rem;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .weights-path li:not(:last-child)::after {
+      bottom: -1.5rem;
+      color: var(--text-faint);
+      content: '↓';
+      font-size: 1.125rem;
+      left: 50%;
+      line-height: 1;
+      position: absolute;
+      right: auto;
+      top: auto;
+      transform: translateX(-50%);
+    }
+  }
+</style>

@@ -1,0 +1,89 @@
+---
+/** What a quantized safetensors file holds and how the loader reads each
+ *  entry: the header label, an int8 weight with its F16 scales, and the float
+ *  tensors around them. Names are all-MiniLM-L6-v2's, shortened; the floats
+ *  are F16 as `--f16` stores them. */
+const rows = [
+  { name: '…word_embeddings.weight', dtype: 'F16', shape: '[30522, 384]', loads: 'float' },
+  { name: '…query.weight', dtype: 'I8', shape: '[384, 384]', loads: 'int8 weight', quant: true },
+  { name: '…query.weight_scale', dtype: 'F16', shape: '[384, 12]', loads: 'its scales', quant: true },
+  { name: '…query.bias', dtype: 'F16', shape: '[384]', loads: 'float' },
+  { name: '…LayerNorm.weight', dtype: 'F16', shape: '[384]', loads: 'float' },
+];
+const rowHeight = 30;
+const top = 84;
+const height = top + rows.length * rowHeight + 14;
+---
+
+<svg
+  class="quant-file"
+  viewBox={`0 0 400 ${height}`}
+  role="img"
+  aria-label="A quantized file: the runntime.quant header label, then tensors. F16 tensors load as float, an I8 weight loads as an int8 weight and takes its F16 weight_scale with it."
+>
+  <rect class="file" x="0.5" y="0.5" width="399" height={height - 1} rx="6"></rect>
+  <text class="header" x="12" y="22">__metadata__ runntime.quant =</text>
+  <text class="header strong" x="12" y="42">{'{'}"version":1,"bits":8,</text>
+  <text class="header strong" x="12" y="60">"groupSize":32,"scheme":"symmetric"{'}'}</text>
+  <line class="rule" x1="0" y1="72" x2="400" y2="72"></line>
+  {
+    rows.map((row, i) => {
+      const y = top + i * rowHeight + 12;
+      return (
+        <g class={row.quant ? 'row quant' : 'row'}>
+          {row.quant && (
+            <rect class="band" x="6" y={y - 20} width="388" height={rowHeight} rx="3" />
+          )}
+          <text class="name" x="12" y={y}>
+            {row.name}
+          </text>
+          <text class="dtype" x="212" y={y}>
+            {row.dtype} {row.shape}
+          </text>
+          <text class="loads" x="392" y={y} text-anchor="end">
+            {row.loads}
+          </text>
+        </g>
+      );
+    })
+  }
+</svg>
+
+<style>
+  .quant-file {
+    display: block;
+    height: auto;
+    margin: 1.5rem auto;
+    max-width: 30rem;
+    width: 100%;
+  }
+
+  .file {
+    fill: var(--surface-raised);
+    stroke: var(--border-strong);
+  }
+
+  .rule {
+    stroke: var(--border-strong);
+  }
+
+  .band {
+    fill: var(--surface-quiet);
+  }
+
+  text {
+    fill: var(--text-muted);
+    font-family: var(--__sl-font-mono, monospace);
+    font-size: 13px;
+  }
+
+  .strong,
+  .quant .name,
+  .quant .loads {
+    fill: var(--text-primary);
+  }
+
+  .loads {
+    font-family: var(--__sl-font, sans-serif);
+  }
+</style>
