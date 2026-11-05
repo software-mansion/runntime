@@ -3,7 +3,7 @@
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/software-mansion/runntime/main/apps/docs/src/assets/logo-dark.svg">
     <img alt="ruNNtime" src="https://raw.githubusercontent.com/software-mansion/runntime/main/apps/docs/src/assets/logo-light.svg" width="360">
   </picture>
-  <p><strong>AI models on the web, built with TypeGPU.</strong></p>
+  <p><strong>AI Inference in TypeScript, built on top of TypeGPU.</strong></p>
 </div>
 
 <br />
