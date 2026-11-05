@@ -118,26 +118,49 @@ describe('transform hooks', () => {
   });
 });
 
-describe('strict key check', () => {
-  it.each<{ name: string; sd: Entries; message: RegExp }>([
+describe('key check', () => {
+  const unexpected: Entries = {
+    a: new Float32Array(2),
+    b: new Float32Array(2),
+    c: new Float32Array(2),
+  };
+
+  it.each<{ name: string; sd: Entries; strict?: boolean; message: RegExp }>([
     { name: 'missing', sd: { a: new Float32Array(2) }, message: /missing: b\./ },
-    {
-      name: 'unexpected',
-      sd: { a: new Float32Array(2), b: new Float32Array(2), c: new Float32Array(2) },
-      message: /unexpected: c\./,
-    },
+    { name: 'unexpected, when strict', sd: unexpected, strict: true, message: /unexpected: c\./ },
     {
       name: 'both',
       sd: { a: new Float32Array(2), c: new Float32Array(2) },
       message: /missing: b\. unexpected: c\./,
     },
-  ])('reports $name keys before uploading anything', async ({ sd, message }) => {
+  ])('reports $name keys before uploading anything', async ({ sd, strict, message }) => {
     const upload = recorder();
-    await expect(load(new Pair(), sd, upload)).rejects.toMatchObject({
-      code: 'CHECKPOINT_MISMATCH',
-      message,
-    });
+    await expect(loadLazyStateDict(new Pair(), dict(sd), { upload, strict })).rejects.toMatchObject(
+      { code: 'CHECKPOINT_MISMATCH', message },
+    );
     expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('warns about unexpected keys and binds the rest when not strict', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const m = new Pair();
+    const upload = recorder();
+    const progress: [number, number][] = [];
+    await loadLazyStateDict(m, dict(unexpected), {
+      upload,
+      onProgress: (_, done, total) => progress.push([done, total]),
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'loadStateDict: state dict has tensors the model does not read: c.',
+    );
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(m.a.loaded && m.b.loaded).toBe(true);
+    // The unbound tensor's bytes are never read, so they are not in the total.
+    expect(progress).toEqual([
+      [8, 16],
+      [16, 16],
+    ]);
+    warn.mockRestore();
   });
 
   it('lists eight names and counts the rest', async () => {
@@ -145,7 +168,11 @@ describe('strict key check', () => {
       Array.from({ length: 10 }, (_, i) => [`x${i}`, new Float32Array(1)]),
     );
     await expect(
-      load(new Pair(), { a: new Float32Array(2), b: new Float32Array(2), ...extra }),
+      loadLazyStateDict(
+        new Pair(),
+        dict({ a: new Float32Array(2), b: new Float32Array(2), ...extra }),
+        { upload: recorder(), strict: true },
+      ),
     ).rejects.toThrow(/unexpected: x0, x1, x2, x3, x4, x5, x6, x7 … \(\+2\)\./);
   });
 
