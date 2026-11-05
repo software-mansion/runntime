@@ -143,7 +143,9 @@ describe('MiniLM from a quantized checkpoint', () => {
       .filter((name) => name.endsWith('weightScale'));
     expect(scaleNames).toEqual(
       Array.from({ length: CFG.layers }, (_, i) =>
-        ['qkv', 'out', 'up', 'down'].map((m) => `layers.${i}.${m}.weightScale`),
+        ['attention.self.qkv', 'attention.output.dense', 'intermediate.dense', 'output.dense'].map(
+          (m) => `encoder.layer.${i}.${m}.weightScale`,
+        ),
       ).flat(),
     );
 
