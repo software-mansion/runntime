@@ -93,6 +93,9 @@ export async function contents(t: LazyTensor): Promise<{ type: 'f16' | 'f32'; va
  *  `[out, in / groupSize]`. */
 export type QuantEntry = { ints: number[]; scales: number[]; shape: [number, number] };
 
+/** A QuantEntry with its own bits, for a mixedQuantFile. */
+export type BitsQuantEntry = QuantEntry & { bits: 4 | 8 };
+
 /** `values`, a torch-layout `[out, in]` weight, quantized the way the format
  *  spec's symmetric scheme reads it: per group of `groupSize` along `in`, the
  *  scale is the group's largest |value| over the top int (127 for int8, 7 for
@@ -117,18 +120,19 @@ export function quantizeWeight(
   return { ints, scales, shape };
 }
 
-/** A quantized safetensors file in the format spec: each entry's ints as
- *  `name` (I8, or U8 with two int4 per byte, low nibble first), its scales
- *  rounded to f16 as `name_scale`, and the setting in `runntime.quant`.
- *  `floats` go in as F32 tensors next to them. */
-export function quantFile(
-  bits: 4 | 8,
-  groupSize: number,
-  entries: Record<string, QuantEntry>,
-  floats: Record<string, { data: Float32Array; shape: number[] }> = {},
-): Uint8Array {
-  const tensors: Parameters<typeof safetensorsFile>[0] = { ...floats };
-  for (const [name, { ints, scales, shape }] of Object.entries(entries)) {
+/** The values `entry` stands for: each int times the scale of its group. */
+export function dequantizeWeight({ ints, scales, shape }: QuantEntry): Float32Array {
+  const groupSize = (shape[0] * shape[1]) / scales.length;
+  return Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);
+}
+
+/** Each entry's ints as `name` (I8, or U8 with two int4 per byte, low nibble
+ *  first) and its scales rounded to f16 as `name_scale`. */
+function quantTensors(
+  entries: Record<string, BitsQuantEntry>,
+): Parameters<typeof safetensorsFile>[0] {
+  const tensors: Parameters<typeof safetensorsFile>[0] = {};
+  for (const [name, { bits, ints, scales, shape }] of Object.entries(entries)) {
     const [out, cols] = shape;
     tensors[name] =
       bits === 8
@@ -141,11 +145,42 @@ export function quantFile(
           };
     tensors[`${name}_scale`] = {
       data: Uint16Array.from(scales, f32ToF16Bits),
-      shape: [out, cols / groupSize],
+      shape: [out, scales.length / out],
     };
   }
+  return tensors;
+}
+
+/** A quantized safetensors file in the format spec: the entries' ints and
+ *  scales, and the setting in `runntime.quant`. `floats` go in as F32 tensors
+ *  next to them. */
+export function quantFile(
+  bits: 4 | 8,
+  groupSize: number,
+  entries: Record<string, QuantEntry>,
+  floats: Record<string, { data: Float32Array; shape: number[] }> = {},
+): Uint8Array {
+  const quant = Object.fromEntries(
+    Object.entries(entries).map(([name, entry]) => [name, { ...entry, bits }]),
+  );
   const setting = { version: 1, bits, groupSize, scheme: 'symmetric' };
-  return safetensorsFile(tensors, { 'runntime.quant': JSON.stringify(setting) });
+  return safetensorsFile(
+    { ...floats, ...quantTensors(quant) },
+    { 'runntime.quant': JSON.stringify(setting) },
+  );
+}
+
+/** quantFile for entries that differ in bits and group size: the setting
+ *  sets neither, so each tensor gives its own. */
+export function mixedQuantFile(
+  entries: Record<string, BitsQuantEntry>,
+  floats: Record<string, { data: Float32Array; shape: number[] }> = {},
+): Uint8Array {
+  const setting = { version: 1, scheme: 'symmetric' };
+  return safetensorsFile(
+    { ...floats, ...quantTensors(entries) },
+    { 'runntime.quant': JSON.stringify(setting) },
+  );
 }
 
 /** The quantized tensor `name` of `entries`, read back from a quantFile. */
