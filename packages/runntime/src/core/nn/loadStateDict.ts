@@ -1,4 +1,4 @@
-/** Streaming state-dict loader: transform hooks, then a strict name check over
+/** Streaming state-dict loader: transform hooks, then a name check over
  *  headers alone, then per-tensor fetch, adapt, preprocess and upload. Peak
  *  host memory is one tensor's working set. */
 import type { TgpuRoot } from 'typegpu';
@@ -20,6 +20,11 @@ export interface LoadStateDictOpts {
   upload?: UploadFn;
   /** After each bound tensor: cumulative file bytes done / total. */
   onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  /** Whether a tensor in the file that no parameter reads is an error
+   *  (CHECKPOINT_MISMATCH) rather than a warning. Default false, like
+   *  PyTorch's `strict=False`: the tensor is left unbound. A parameter the
+   *  file lacks is always an error, as it has no value to fall back to. */
+  strict?: boolean;
 }
 
 /** The default GPU upload.
@@ -125,12 +130,17 @@ async function bindStateDict(
   const paramNames = new Set(params.map(([n]) => n));
   const missing = params.filter(([n]) => !sd.tensors.has(n)).map(([n]) => n);
   const unexpected = [...sd.tensors.keys()].filter((n) => !paramNames.has(n));
-  if (missing.length || unexpected.length) {
+  if (missing.length || (unexpected.length && opts.strict)) {
     throw new RunntimeError(
       'CHECKPOINT_MISMATCH',
       'loadStateDict: state dict does not match model.' +
         (missing.length ? ` missing: ${list(missing)}.` : '') +
         (unexpected.length ? ` unexpected: ${list(unexpected)}.` : ''),
+    );
+  }
+  if (unexpected.length) {
+    console.warn(
+      `loadStateDict: state dict has tensors the model does not read: ${list(unexpected)}.`,
     );
   }
 
@@ -140,7 +150,8 @@ async function bindStateDict(
   const position = new Map([...sd.tensors.keys()].map((name, i) => [name, i]));
   params.sort(([a], [b]) => (position.get(a) ?? Infinity) - (position.get(b) ?? Infinity));
 
-  const total = sd.totalBytes();
+  // Unbound tensors are never read, so they do not count towards the total.
+  const total = params.reduce((sum, [name]) => sum + sd.tensors.get(name)!.byteLength, 0);
   let done = 0;
   for (const [name, p] of params) {
     const t = sd.tensors.get(name)!;
