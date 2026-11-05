@@ -38,20 +38,18 @@ const gridRows = (base: number, order: number[], cols: number) =>
 const ones = (n: number) => new Array<number>(n).fill(1);
 
 /** Maps `sd` and returns a getter over the result, after checking that the
- *  result holds exactly `renamed`'s targets plus `mapped`, with each renamed
- *  tensor passed through untouched. */
+ *  result holds exactly `untouched` plus `mapped`, with each untouched tensor
+ *  passed through as it was. */
 function mapAndCheck(
   sd: LazyStateDict,
   run: (sd: LazyStateDict) => void,
-  renamed: Record<string, string>,
+  untouched: string[],
   mapped: string[],
 ) {
   const before = new Map(sd.tensors);
   run(sd);
-  expect([...sd.tensors.keys()].sort()).toEqual([...Object.values(renamed), ...mapped].sort());
-  for (const [hf, ours] of Object.entries(renamed)) {
-    expect(sd.tensors.get(ours)).toBe(before.get(hf));
-  }
+  expect([...sd.tensors.keys()].sort()).toEqual([...untouched, ...mapped].sort());
+  for (const name of untouched) expect(sd.tensors.get(name)).toBe(before.get(name));
   return (name: string) => sd.tensors.get(name)!;
 }
 
@@ -72,27 +70,29 @@ describe('transformEmbeddingGemma2StateDict', () => {
 
   const S = 'language_model.';
   const L = (i: number) => `language_model.layers.${i}`;
-  const layerRenamed = (i: number): Record<string, string> => ({
-    [`${L(i)}.self_attn.o_proj.weight`]: `layers.${i}.o_proj.weight`,
-    [`${L(i)}.mlp.gate_proj.weight`]: `layers.${i}.gate_proj.weight`,
-    [`${L(i)}.mlp.up_proj.weight`]: `layers.${i}.up_proj.weight`,
-    [`${L(i)}.mlp.down_proj.weight`]: `layers.${i}.down_proj.weight`,
-    [`${L(i)}.ple_block.per_layer_input_gate.weight`]: `layers.${i}.per_layer_input_gate.weight`,
-    [`${L(i)}.ple_block.per_layer_projection.weight`]: `layers.${i}.per_layer_projection.weight`,
-    [`${L(i)}.ple_block.post_per_layer_input_norm.weight`]: `layers.${i}.post_per_layer_input_norm.weight`,
-    [`${L(i)}.input_layernorm.weight`]: `layers.${i}.input_layernorm.weight`,
-    [`${L(i)}.post_attention_layernorm.weight`]: `layers.${i}.post_attention_layernorm.weight`,
-    [`${L(i)}.pre_feedforward_layernorm.weight`]: `layers.${i}.pre_feedforward_layernorm.weight`,
-    [`${L(i)}.post_feedforward_layernorm.weight`]: `layers.${i}.post_feedforward_layernorm.weight`,
-  });
-  const RENAMED: Record<string, string> = {
-    ...layerRenamed(0),
-    ...layerRenamed(1),
-    [`${S}ple.per_layer_projection_norm.weight`]: 'ple.per_layer_projection_norm.weight',
-    [`${S}embed_tokens.weight`]: 'embed_tokens.weight',
-    [`${S}norm.weight`]: 'norm.weight',
-    [`${S}embedding_projection.weight`]: 'embedding_projection.weight',
-  };
+  /** Tensors the hook leaves as they are, under their own names. */
+  const layerUntouched = (i: number) =>
+    [
+      'self_attn.o_proj.weight',
+      'mlp.gate_proj.weight',
+      'mlp.up_proj.weight',
+      'mlp.down_proj.weight',
+      'ple_block.per_layer_input_gate.weight',
+      'ple_block.per_layer_projection.weight',
+      'ple_block.post_per_layer_input_norm.weight',
+      'input_layernorm.weight',
+      'post_attention_layernorm.weight',
+      'pre_feedforward_layernorm.weight',
+      'post_feedforward_layernorm.weight',
+    ].map((n) => `${L(i)}.${n}`);
+  const UNTOUCHED = [
+    ...layerUntouched(0),
+    ...layerUntouched(1),
+    `${S}ple.per_layer_projection_norm.weight`,
+    `${S}embed_tokens.weight`,
+    `${S}norm.weight`,
+    `${S}embedding_projection.weight`,
+  ];
   /** Layer `i`'s attention: q over `heads` heads of `d` rows, k and v over
    *  one, norms 1 … d and d + 1 … 2d. */
   const attention = (i: number, d: number): Record<string, Entry> => ({
@@ -110,7 +110,7 @@ describe('transformEmbeddingGemma2StateDict', () => {
     [`${L(i)}.layer_scalar`]: { values: [0.25], shape: [1] },
   });
   const CHECKPOINT: Record<string, Entry> = {
-    ...Object.fromEntries(Object.keys(RENAMED).map((name) => [name, ZERO])),
+    ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
     ...attention(0, 4),
     ...attention(1, 8),
     [`${S}ple.per_layer_model_projection.weight`]: grid(0, 2, 4),
@@ -119,14 +119,14 @@ describe('transformEmbeddingGemma2StateDict', () => {
   it.for(DTYPES)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
-    const get = mapAndCheck(sd, (s) => transformEmbeddingGemma2StateDict(s, '', cfg), RENAMED, [
-      'layers.0.qkv.weight',
-      'layers.0.qkv_norm',
-      'layers.0.layer_scalar',
-      'layers.1.qkv.weight',
-      'layers.1.qkv_norm',
-      'layers.1.layer_scalar',
-      'ple.per_layer_model_projection.weight',
+    const get = mapAndCheck(sd, (s) => transformEmbeddingGemma2StateDict(s, '', cfg), UNTOUCHED, [
+      `${L(0)}.self_attn.qkv.weight`,
+      `${L(0)}.self_attn.qkv_norm`,
+      `${L(0)}.layer_scalar`,
+      `${L(1)}.self_attn.qkv.weight`,
+      `${L(1)}.self_attn.qkv_norm`,
+      `${L(1)}.layer_scalar`,
+      `${S}ple.per_layer_model_projection.weight`,
     ]);
 
     // Rope pairs (p, p + d/2) of each d-row head become rows (2p, 2p + 1):
@@ -138,7 +138,7 @@ describe('transformEmbeddingGemma2StateDict', () => {
       [1, 8, [0, 4, 1, 5, 2, 6, 3, 7]],
     ];
     for (const [i, d, head] of layers) {
-      const qkv = get(`layers.${i}.qkv.weight`);
+      const qkv = get(`${L(i)}.self_attn.qkv.weight`);
       expect(qkv.shape).toEqual([4 * d, 4]);
       expect(qkv.byteLength).toBe(16 * d * elemBytes);
       expect(await contents(qkv)).toEqual({
@@ -156,7 +156,7 @@ describe('transformEmbeddingGemma2StateDict', () => {
 
       // q_norm reordered like q, once per q head; k_norm once; ones for v.
       // Each norm's bytes count once.
-      const norm = get(`layers.${i}.qkv_norm`);
+      const norm = get(`${L(i)}.self_attn.qkv_norm`);
       expect(norm.shape).toEqual([4 * d]);
       expect(norm.byteLength).toBe(2 * d * elemBytes);
       const qn = head.map((r) => r + 1);
@@ -167,13 +167,13 @@ describe('transformEmbeddingGemma2StateDict', () => {
       });
 
       // The CPU parameter reads f32 whatever the checkpoint holds.
-      const scalar = get(`layers.${i}.layer_scalar`);
+      const scalar = get(`${L(i)}.layer_scalar`);
       expect(scalar.byteLength).toBe(elemBytes);
       expect(await contents(scalar)).toEqual({ type: 'f32', values: [0.25] });
     }
 
     // Scaled, so f32 on every checkpoint.
-    const ple = get('ple.per_layer_model_projection.weight');
+    const ple = get(`${S}ple.per_layer_model_projection.weight`);
     expect(ple.shape).toEqual([2, 4]);
     expect(ple.byteLength).toBe(8 * elemBytes);
     expect(await contents(ple)).toEqual({ type: 'f32', values: [0, 0.5, 1, 1.5, 5, 5.5, 6, 6.5] });
@@ -194,21 +194,23 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     layers: 1,
   };
 
+  const P = 'vision_tower.patch_embedder';
   const T = 'vision_tower.encoder.layers.0';
-  const RENAMED: Record<string, string> = {
-    'vision_tower.patch_embedder.input_proj.weight': 'input_proj.weight',
-    [`${T}.self_attn.o_proj.linear.weight`]: 'layers.0.o_proj.weight',
-    [`${T}.mlp.gate_proj.linear.weight`]: 'layers.0.gate_proj.weight',
-    [`${T}.mlp.up_proj.linear.weight`]: 'layers.0.up_proj.weight',
-    [`${T}.mlp.down_proj.linear.weight`]: 'layers.0.down_proj.weight',
-    [`${T}.input_layernorm.weight`]: 'layers.0.input_layernorm.weight',
-    [`${T}.post_attention_layernorm.weight`]: 'layers.0.post_attention_layernorm.weight',
-    [`${T}.pre_feedforward_layernorm.weight`]: 'layers.0.pre_feedforward_layernorm.weight',
-    [`${T}.post_feedforward_layernorm.weight`]: 'layers.0.post_feedforward_layernorm.weight',
-    'embed_vision.embedding_projection.weight': 'embedding_projection.weight',
-  };
+  /** Tensors the hook leaves as they are, under their own names. */
+  const UNTOUCHED = [
+    `${P}.input_proj.weight`,
+    `${T}.self_attn.o_proj.linear.weight`,
+    `${T}.mlp.gate_proj.linear.weight`,
+    `${T}.mlp.up_proj.linear.weight`,
+    `${T}.mlp.down_proj.linear.weight`,
+    `${T}.input_layernorm.weight`,
+    `${T}.post_attention_layernorm.weight`,
+    `${T}.pre_feedforward_layernorm.weight`,
+    `${T}.post_feedforward_layernorm.weight`,
+    'embed_vision.embedding_projection.weight',
+  ];
   const CHECKPOINT: Record<string, Entry> = {
-    ...Object.fromEntries(Object.keys(RENAMED).map((name) => [name, ZERO])),
+    ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
     // [2, positions, hidden]: x rows 1 2 | 3 4, y rows 5 6 | 7 8.
     'vision_tower.patch_embedder.position_embedding_table': {
       values: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -227,19 +229,18 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     const get = mapAndCheck(
       sd,
       (s) => transformEmbeddingGemma2VisionStateDict(s, '', cfg),
-      RENAMED,
+      UNTOUCHED,
       [
-        'pos_x.weight',
-        'pos_y.weight',
-        'layers.0.qkv.weight',
-        'layers.0.qkv_norm',
-        'embedding_pre_projection_norm.weight',
+        `${P}.pos_x.weight`,
+        `${P}.pos_y.weight`,
+        `${T}.self_attn.qkv.weight`,
+        `${T}.self_attn.qkv_norm`,
       ],
     );
 
     for (const [name, values] of [
-      ['pos_x.weight', [1, 2, 3, 4]],
-      ['pos_y.weight', [5, 6, 7, 8]],
+      [`${P}.pos_x.weight`, [1, 2, 3, 4]],
+      [`${P}.pos_y.weight`, [5, 6, 7, 8]],
     ] as const) {
       const table = get(name);
       expect(table.shape).toEqual([2, 2]);
@@ -249,7 +250,7 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
 
     // Rows 0 2 1 3 of each half head.
     const halfHeads = [0, 2, 1, 3, 4, 6, 5, 7];
-    const qkv = get('layers.0.qkv.weight');
+    const qkv = get(`${T}.self_attn.qkv.weight`);
     expect(qkv.shape).toEqual([24, 2]);
     expect(qkv.byteLength).toBe(48 * elemBytes);
     expect(await contents(qkv)).toEqual({
@@ -261,19 +262,13 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
       ],
     });
 
-    const norm = get('layers.0.qkv_norm');
+    const norm = get(`${T}.self_attn.qkv_norm`);
     expect(norm.shape).toEqual([24]);
     expect(norm.byteLength).toBe(16 * elemBytes);
     expect(await contents(norm)).toEqual({
       type,
       values: [1, 3, 2, 4, 5, 7, 6, 8, 11, 13, 12, 14, 15, 17, 16, 18, ...ones(8)],
     });
-
-    // Ones download nothing and are exact in f16.
-    const pre = get('embedding_pre_projection_norm.weight');
-    expect(pre.shape).toEqual([2]);
-    expect(pre.byteLength).toBe(0);
-    expect(await contents(pre)).toEqual({ type: 'f16', values: [1, 1] });
 
     expect(sd.totalBytes()).toBe(total);
   });
@@ -297,42 +292,41 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
   const A = 'audio_tower.';
   const sub = `${A}subsample_conv_projection.`;
   const T = `${A}layers.0`;
-  /** Every clipped linear, HF prefix → ours. */
-  const CLIPPED: Record<string, string> = {
-    [`${T}.feed_forward1.ffw_layer_1`]: 'layers.0.feed_forward1.ffw_layer_1',
-    [`${T}.feed_forward1.ffw_layer_2`]: 'layers.0.feed_forward1.ffw_layer_2',
-    [`${T}.feed_forward2.ffw_layer_1`]: 'layers.0.feed_forward2.ffw_layer_1',
-    [`${T}.feed_forward2.ffw_layer_2`]: 'layers.0.feed_forward2.ffw_layer_2',
-    [`${T}.self_attn.post`]: 'layers.0.post',
-    [`${T}.lconv1d.linear_start`]: 'layers.0.lconv.linear_start',
-    [`${T}.lconv1d.linear_end`]: 'layers.0.lconv.linear_end',
-  };
+  /** Every clipped linear but q, k and v. */
+  const CLIPPED = [
+    `${T}.feed_forward1.ffw_layer_1`,
+    `${T}.feed_forward1.ffw_layer_2`,
+    `${T}.feed_forward2.ffw_layer_1`,
+    `${T}.feed_forward2.ffw_layer_2`,
+    `${T}.self_attn.post`,
+    `${T}.lconv1d.linear_start`,
+    `${T}.lconv1d.linear_end`,
+  ];
   const BOUNDS = ['input_min', 'input_max', 'output_min', 'output_max'];
-  const RENAMED: Record<string, string> = {
-    ...Object.fromEntries(
-      Object.entries(CLIPPED).map(([hf, ours]) => [`${hf}.linear.weight`, `${ours}.weight`]),
-    ),
-    [`${sub}layer0.norm.weight`]: 'norm0.weight',
-    [`${sub}layer1.norm.weight`]: 'norm1.weight',
-    [`${sub}input_proj_linear.weight`]: 'input_proj.weight',
-    [`${T}.feed_forward1.pre_layer_norm.weight`]: 'layers.0.feed_forward1.pre_layer_norm.weight',
-    [`${T}.feed_forward2.pre_layer_norm.weight`]: 'layers.0.feed_forward2.pre_layer_norm.weight',
-    [`${T}.lconv1d.pre_layer_norm.weight`]: 'layers.0.lconv.pre_layer_norm.weight',
-    [`${T}.lconv1d.conv_norm.weight`]: 'layers.0.lconv.conv_norm.weight',
-    [`${T}.norm_pre_attn.weight`]: 'layers.0.norm_pre_attn.weight',
-    [`${T}.norm_post_attn.weight`]: 'layers.0.norm_post_attn.weight',
-    [`${T}.norm_out.weight`]: 'layers.0.norm_out.weight',
-    [`${A}output_proj.weight`]: 'output_proj.weight',
-    [`${A}output_proj.bias`]: 'output_proj.bias',
-    'embed_audio.embedding_projection.weight': 'embedding_projection.weight',
-  };
+  /** Tensors the hook leaves as they are, under their own names. */
+  const UNTOUCHED = [
+    ...CLIPPED.flatMap((c) => [`${c}.linear.weight`, ...BOUNDS.map((b) => `${c}.${b}`)]),
+    `${sub}layer0.norm.weight`,
+    `${sub}layer1.norm.weight`,
+    `${sub}input_proj_linear.weight`,
+    `${T}.feed_forward1.pre_layer_norm.weight`,
+    `${T}.feed_forward2.pre_layer_norm.weight`,
+    `${T}.lconv1d.pre_layer_norm.weight`,
+    `${T}.lconv1d.conv_norm.weight`,
+    `${T}.norm_pre_attn.weight`,
+    `${T}.norm_post_attn.weight`,
+    `${T}.norm_out.weight`,
+    `${A}output_proj.weight`,
+    `${A}output_proj.bias`,
+    'embed_audio.embedding_projection.weight',
+  ];
   const bound = (prefix: string, values: number[]) =>
     Object.fromEntries(
       BOUNDS.map((b, i) => [`${prefix}.${b}`, { values: [values[i]!], shape: [1] }]),
     );
   const CHECKPOINT: Record<string, Entry> = {
-    ...Object.fromEntries(Object.keys(RENAMED).map((name) => [name, ZERO])),
-    ...Object.assign({}, ...Object.keys(CLIPPED).map((p) => bound(p, [-1, 1, -2, 2]))),
+    ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
+    ...Object.assign({}, ...CLIPPED.map((p) => bound(p, [-1, 1, -2, 2]))),
     ...Object.assign(
       {},
       ...['q_proj', 'k_proj', 'v_proj'].map((p) => bound(`${T}.self_attn.${p}`, [-3, 3, -4, 4])),
@@ -364,8 +358,6 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       shape: [4, 1, 2],
     },
   };
-  const clipNames = Object.values(CLIPPED).map((ours) => `${ours}.clip`);
-
   it.for(DTYPES)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
@@ -373,25 +365,23 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     const get = mapAndCheck(
       sd,
       (s) => transformEmbeddingGemma2AudioStateDict(s, '', cfg),
-      RENAMED,
+      UNTOUCHED,
       [
-        ...clipNames,
-        'conv0.weight',
-        'conv1.weight',
-        'layers.0.feed_forward1.post_layer_norm.weight',
-        'layers.0.feed_forward2.post_layer_norm.weight',
-        'layers.0.qkv.weight',
-        'layers.0.qkv.clip',
-        'layers.0.rel',
-        'layers.0.q_scale',
-        'layers.0.lconv.conv',
-        'embedding_pre_projection_norm.weight',
+        `${sub}layer0.conv.weight`,
+        `${sub}layer1.conv.weight`,
+        `${T}.feed_forward1.post_layer_norm.weight`,
+        `${T}.feed_forward2.post_layer_norm.weight`,
+        `${T}.self_attn.qkv.linear.weight`,
+        ...BOUNDS.map((b) => `${T}.self_attn.qkv.${b}`),
+        `${T}.self_attn.rel`,
+        `${T}.self_attn.q_scale`,
+        `${T}.lconv1d.depthwise_conv1d.weight`,
       ],
     );
 
     // conv0 only folds its taps: the source tensor, reshaped.
     const source = before.get(`${sub}layer0.conv.weight`)!;
-    const conv0 = get('conv0.weight');
+    const conv0 = get(`${sub}layer0.conv.weight`);
     expect(conv0.shape).toEqual([2, 9]);
     expect(conv0.byteLength).toBe(18 * elemBytes);
     if (source.kind === 'quant' || conv0.kind === 'quant')
@@ -399,7 +389,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     expect([conv0.kind, conv0.dtype]).toEqual([source.kind, source.dtype]);
 
     // Tap k of channel c moves from c·9 + k to k·2 + c.
-    const conv1 = get('conv1.weight');
+    const conv1 = get(`${sub}layer1.conv.weight`);
     expect(conv1.shape).toEqual([1, 18]);
     expect(conv1.byteLength).toBe(18 * elemBytes);
     expect(await contents(conv1)).toEqual({
@@ -409,8 +399,8 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
 
     // Times the residual weight 0.5, so f32 on every checkpoint.
     for (const [name, values] of [
-      ['layers.0.feed_forward1.post_layer_norm.weight', [1, 2, 3, 4]],
-      ['layers.0.feed_forward2.post_layer_norm.weight', [0.5, 1.5, 2.5, 3.5]],
+      [`${T}.feed_forward1.post_layer_norm.weight`, [1, 2, 3, 4]],
+      [`${T}.feed_forward2.post_layer_norm.weight`, [0.5, 1.5, 2.5, 3.5]],
     ] as const) {
       const norm = get(name);
       expect(norm.shape).toEqual([4]);
@@ -418,7 +408,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       expect(await contents(norm)).toEqual({ type: 'f32', values });
     }
 
-    const qkv = get('layers.0.qkv.weight');
+    const qkv = get(`${T}.self_attn.qkv.linear.weight`);
     expect(qkv.shape).toEqual([12, 4]);
     expect(qkv.byteLength).toBe(48 * elemBytes);
     expect(await contents(qkv)).toEqual({
@@ -426,18 +416,17 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       values: [0, 100, 200].flatMap((base) => gridRows(base, [0, 1, 2, 3], 4)),
     });
 
-    // Bounds are CPU data: f32, and their bytes are not counted.
-    for (const name of clipNames) {
-      expect(await contents(get(name))).toEqual({ type: 'f32', values: [-1, 1, -2, 2] });
+    // The fused projection's bounds are q's, f32, each carrying one
+    // scalar's bytes.
+    for (const [i, b] of BOUNDS.entries()) {
+      const value = get(`${T}.self_attn.qkv.${b}`);
+      expect(value.byteLength).toBe(elemBytes);
+      expect(await contents(value)).toEqual({ type: 'f32', values: [[-3, 3, -4, 4][i]!] });
     }
-    expect(await contents(get('layers.0.qkv.clip'))).toEqual({
-      type: 'f32',
-      values: [-3, 3, -4, 4],
-    });
 
     // Sinusoid rows for distances 0 and 1 at hidden 4: angle j·10000^-i for
     // i = 0, 1, sines then cosines.
-    const rel = get('layers.0.rel');
+    const rel = get(`${T}.self_attn.rel`);
     expect(rel.shape).toEqual([2, 4]);
     expect(rel.byteLength).toBe(16 * elemBytes);
     const relValues = await contents(rel);
@@ -445,7 +434,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     const want = [0, 0, 1, 1, Math.sin(1), Math.sin(1e-4), Math.cos(1), Math.cos(1e-4)];
     relValues.values.forEach((v, i) => expect(v).toBeCloseTo(want[i]!, 6));
 
-    const qScale = get('layers.0.q_scale');
+    const qScale = get(`${T}.self_attn.q_scale`);
     expect(qScale.shape).toEqual([4]);
     expect(qScale.byteLength).toBe(4 * elemBytes);
     const qScaleValues = await contents(qScale);
@@ -453,17 +442,12 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     qScaleValues.values.forEach((v) => expect(v).toBeCloseTo(0.5, 6));
 
     // [hidden, 1, K] → [K, hidden]: tap 0 of every channel, then tap 1.
-    const lconv = get('layers.0.lconv.conv');
+    const lconv = get(`${T}.lconv1d.depthwise_conv1d.weight`);
     expect(lconv.shape).toEqual([2, 4]);
     expect(lconv.byteLength).toBe(8 * elemBytes);
     expect(await contents(lconv)).toEqual({ type, values: [1, 3, 5, 7, 2, 4, 6, 8] });
 
-    expect(await contents(get('embedding_pre_projection_norm.weight'))).toEqual({
-      type: 'f16',
-      values: [1, 1],
-    });
-
-    // 10 clipped linears' worth of bounds, 4 scalars each.
-    expect(sd.totalBytes()).toBe(total - 40 * elemBytes);
+    // k's and v's bounds, 4 scalars each, are the only bytes lost.
+    expect(sd.totalBytes()).toBe(total - 8 * elemBytes);
   });
 });
