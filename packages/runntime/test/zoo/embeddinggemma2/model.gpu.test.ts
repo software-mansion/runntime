@@ -242,14 +242,14 @@ const scaleNamesOf = (model: nn.Module<never[], unknown>) =>
 
 const textLayer = (i: number) =>
   [
-    'qkv',
-    'o_proj',
-    'gate_proj',
-    'up_proj',
-    'down_proj',
-    'per_layer_input_gate',
-    'per_layer_projection',
-  ].map((m) => `layers.${i}.${m}`);
+    'self_attn.qkv',
+    'self_attn.o_proj',
+    'mlp.gate_proj',
+    'mlp.up_proj',
+    'mlp.down_proj',
+    'ple_block.per_layer_input_gate',
+    'ple_block.per_layer_projection',
+  ].map((m) => `language_model.layers.${i}.${m}`);
 
 const TOWERS: Record<string, Tower> = {
   text: {
@@ -267,8 +267,8 @@ const TOWERS: Record<string, Tower> = {
     quantized: [
       ...textLayer(0),
       ...textLayer(1),
-      'ple.per_layer_model_projection',
-      'embedding_projection',
+      'language_model.ple.per_layer_model_projection',
+      'language_model.embedding_projection',
     ],
   },
   vision: {
@@ -286,9 +286,14 @@ const TOWERS: Record<string, Tower> = {
       };
     },
     quantized: [
-      'input_proj',
-      ...['qkv', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'].map((m) => `layers.0.${m}`),
-      'embedding_projection',
+      'vision_tower.patch_embedder.input_proj',
+      ...['self_attn.qkv', 'self_attn.o_proj.linear', 'mlp.gate_proj.linear'].map(
+        (m) => `vision_tower.encoder.layers.0.${m}`,
+      ),
+      ...['mlp.up_proj.linear', 'mlp.down_proj.linear'].map(
+        (m) => `vision_tower.encoder.layers.0.${m}`,
+      ),
+      'embed_vision.embedding_projection',
     ],
   },
   audio: {
@@ -301,19 +306,19 @@ const TOWERS: Record<string, Tower> = {
       return { scaleNames: scaleNamesOf(model), outputs: [await encodeAudio(model, samples, ex)] };
     },
     quantized: [
-      'input_proj',
+      'audio_tower.subsample_conv_projection.input_proj_linear',
       ...[
         'feed_forward1.ffw_layer_1',
         'feed_forward1.ffw_layer_2',
-        'qkv',
-        'post',
-        'lconv.linear_start',
-        'lconv.linear_end',
+        'self_attn.qkv',
+        'self_attn.post',
+        'lconv1d.linear_start',
+        'lconv1d.linear_end',
         'feed_forward2.ffw_layer_1',
         'feed_forward2.ffw_layer_2',
-      ].map((m) => `layers.0.${m}`),
-      'output_proj',
-      'embedding_projection',
+      ].map((m) => `audio_tower.layers.0.${m}.linear`),
+      'audio_tower.output_proj',
+      'embed_audio.embedding_projection',
     ],
   },
 };
