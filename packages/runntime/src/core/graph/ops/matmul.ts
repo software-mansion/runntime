@@ -97,8 +97,8 @@ export function matmul(a: Value, b: Value, opts: MatmulOpts = {}): Value {
 }
 
 /** matmul's quantW path. The result takes a's dtype. An f16 a, a bias, an
- *  addend or an activation need the tiled kernel: the whole weight (baseRow
- *  and scaleBase 0) and a shape it supports. */
+ *  addend or an activation need the whole weight (baseRow and scaleBase 0)
+ *  and a shape the tiled kernel supports, since large inputs take it. */
 function matmulQuantW(
   a: Value,
   w: Value,
@@ -147,6 +147,11 @@ function matmulQuantW(
   }
   if (!Number.isInteger(scaleBase) || scaleBase < 0)
     throw new Error(`matmul: bad scaleBase ${scaleBase}`);
+  if (scaleBase % 4 !== 0) {
+    throw new Error(
+      `matmul: scaleBase ${scaleBase} must be a multiple of 4 — scales are read as vec4`,
+    );
+  }
   const { bias, addend, activation } = opts;
   const whole = baseRow === 0 && scaleBase === 0 && r === k;
   if (whole && scales.shape.elems !== (k / groupSize) * n) {

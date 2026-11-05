@@ -2,82 +2,132 @@ import { describe, expect, it } from 'vitest';
 import { toArray } from '../../../../src/core/gpu/eval.ts';
 import { matmul, type MatmulOpts } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
-import { GRID_Y_STRIDE } from '../../../../src/core/kernels/common.ts';
-import { expectClose, gpu, randomF32, requireFeature, upload } from '../../../gpu.ts';
+import { MAX_WORKGROUPS_PER_DIM } from '../../../../src/core/kernels/common.ts';
+import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../../gpu.ts';
+import { ACTIVATION_REF, EPILOGUES, type Epilogue } from './checkMatmul.ts';
 import { randomQuantWeight } from './quantW.ts';
 
 const { root, ex } = await gpu();
 
-interface Case {
+interface Case extends Epilogue {
   m: number;
   k: number;
   n: number;
   bits: 4 | 8;
   groupSize: number;
+  dtype?: 'f32' | 'f16';
   experts?: number;
   /** The expert the call reads, through baseRow and scaleBase. */
   expert?: number;
 }
 
-async function checkQuantMatmul({ m, k, n, bits, groupSize, experts = 1, expert = 0 }: Case) {
+/** act(a · dequant(W[expert]) + bias) + addend against a plain loop in f64. */
+async function checkQuantMatmul(c: Case) {
+  const { m, k, n, bits, groupSize, dtype = 'f32', experts = 1, expert = 0 } = c;
+  const round = dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
+  const meta = (rows: number, cols: number) => ({ ...matrix(rows, cols), dtype });
   const weight = randomQuantWeight(root, { experts, k, n, bits, groupSize }, 2);
-  const a = randomF32(m * k, 1);
+  const a = round(randomF32(m * k, 1));
+  const bias = c.bias ? round(randomF32(n, 3)) : undefined;
+  const addend = c.addend ? round(randomF32(m * n, 4)) : undefined;
   const got = await toArray(
-    matmul(upload(root, a, [m, k]), weight.w, {
+    matmul(upload(root, a, meta(m, k)), weight.w, {
       scales: upload(root, weight.scales, [weight.scales.length / n, n]),
       bits,
       groupSize,
       baseRow: expert * k,
       scaleBase: ((expert * k) / groupSize) * n,
+      bias: bias && upload(root, bias, meta(1, n)),
+      addend: addend && upload(root, addend, meta(m, n)),
+      activation: c.activation,
     }),
     ex,
   );
-  // a · W[expert] from the dequantized weights, in f64.
   const want = new Float64Array(m * n);
   for (let i = 0; i < m; i++) {
-    for (let c = 0; c < n; c++) {
-      let sum = 0;
-      for (let j = 0; j < k; j++) sum += a[i * k + j]! * weight.dequant[(expert * k + j) * n + c]!;
-      want[i * n + c] = sum;
+    for (let col = 0; col < n; col++) {
+      let sum = bias ? bias[col]! : 0;
+      for (let j = 0; j < k; j++)
+        sum += a[i * k + j]! * weight.dequant[(expert * k + j) * n + col]!;
+      if (c.activation) sum = ACTIVATION_REF[c.activation](sum);
+      if (addend) sum += addend[i * n + col]!;
+      want[i * n + col] = sum;
     }
   }
-  expectClose(got, want, { atol: 1e-6 * k, rtol: 1e-5 });
+  // Sums are f32 for both dtypes; f16 rounds the output to half precision.
+  const tol = dtype === 'f16' ? { atol: 1e-5 * k, rtol: 1e-3 } : { atol: 1e-6 * k, rtol: 1e-5 };
+  expectClose(got, want, tol);
 }
 
 describe('matmulQuantW kernel', () => {
-  // Routes are picked in gpu/dispatch/matmul.ts. This kernel takes an f32
-  // input with no epilogue on one expert, below 8 rows, or when K is not a
-  // multiple of 8. Other calls on a whole weight take matmulQuantTiled. K and
-  // groupSize are multiples of 4, N of 4 for int8 and of 8 for int4.
+  // Routes are picked in gpu/dispatch/matmul.ts. This kernel takes a whole
+  // weight below 48·1024 output values (m · n), one expert of a fused weight
+  // whatever m, and any call with K not a multiple of 8. Other calls take
+  // matmulQuantTiled. K and groupSize are multiples of 4, N of 4 for int8 and
+  // of 8 for int4. A workgroup serves 4 rows × 8 four-column units, with K
+  // split across 16 lanes.
+  // f16 needs a whole weight with K % 8 == 0, which the op checks.
+  const both = ['f32', 'f16'] as const;
+  const f32 = ['f32'] as const;
   it.for(
-    ([8, 4] as const).flatMap((bits) =>
-      [
-        // plain: m < 8
-        { name: 'one tile', m: 1, k: 4, n: 8, groupSize: 4 },
-        { name: 'one group per column', m: 3, k: 12, n: 8, groupSize: 12 },
-        { name: 'a group every 4 rows', m: 3, k: 12, n: 16, groupSize: 4 },
-        { name: 'groups of 8', m: 5, k: 64, n: 24, groupSize: 8 },
-        { name: 'a wide row', m: 2, k: 640, n: 640, groupSize: 32 },
-        { name: 'one row short of the tiled route', m: 7, k: 32, n: 8, groupSize: 16 },
-        // tiled: a whole weight, m >= 8 and K % 8 == 0
-        { name: 'the first m on the tiled route', m: 8, k: 32, n: 8, groupSize: 16 },
-        // plain: one expert of a fused weight, whatever m
-        {
-          name: 'rows past a workgroup of units on one expert',
-          m: 70,
-          k: 32,
-          n: 8,
-          groupSize: 16,
-          experts: 2,
-          expert: 1,
-        },
-        // plain: K % 8 != 0. Past GRID_Y_STRIDE units the dispatch goes 2-D.
-        { name: 'units past GRID_Y_STRIDE', m: GRID_Y_STRIDE / 2 + 5, k: 4, n: 8, groupSize: 4 },
-      ].map((c) => ({ bits, ...c })),
+    [
+      // matmulQuantW: m · n < 48·1024
+      { name: 'one tile', m: 1, k: 4, n: 8, groupSize: 4, dtypes: f32 },
+      { name: 'one group per column', m: 3, k: 12, n: 8, groupSize: 12, dtypes: f32 },
+      { name: 'a group every 4 rows', m: 3, k: 12, n: 16, groupSize: 4, dtypes: f32 },
+      { name: 'one 8-row tile', m: 1, k: 8, n: 8, groupSize: 4, dtypes: both },
+      { name: 'groups of 8, a partial row block', m: 5, k: 64, n: 24, groupSize: 8, dtypes: both },
+      { name: 'a partial block of units', m: 8, k: 96, n: 40, groupSize: 32, dtypes: both },
+      { name: 'a wide row', m: 2, k: 640, n: 640, groupSize: 32, dtypes: both },
+      { name: 'an LLM decode row', m: 1, k: 2048, n: 2048, groupSize: 64, dtypes: both },
+      // matmulQuantW: one below 48·1024 outputs; the tiled suite has the first above
+      {
+        name: 'one output short of the tiled route',
+        m: 1535,
+        k: 32,
+        n: 32,
+        groupSize: 16,
+        dtypes: both,
+      },
+      // matmulQuantW: m < 32, though m · n >= 48·1024; the tiled suite has m = 32
+      { name: 'a wide decode row', m: 1, k: 64, n: 49152, groupSize: 32, dtypes: both },
+      { name: 'one row short of a row tile', m: 31, k: 32, n: 2048, groupSize: 16, dtypes: both },
+      // matmulQuantW: one expert of a fused weight, whatever m
+      {
+        name: 'rows past a workgroup on one expert',
+        m: 70,
+        k: 32,
+        n: 8,
+        groupSize: 16,
+        experts: 2,
+        expert: 1,
+        dtypes: f32,
+      },
+    ].flatMap(({ dtypes, ...c }) =>
+      dtypes.flatMap((dtype) => ([8, 4] as const).map((bits) => ({ dtype, bits, ...c }))),
     ),
-  )('int$bits $name: [$m, $k] × [$k, $n], groupSize $groupSize', (c) => checkQuantMatmul(c));
+  )('$dtype int$bits $name: [$m, $k] × [$k, $n], groupSize $groupSize', async (c, ctx) => {
+    if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkQuantMatmul(c);
+  });
 
-  // plain: baseRow and scaleBase read one expert of a fused [E·K, N] weight.
+  // matmulQuantW: K % 8 != 0. Past MAX_WORKGROUPS_PER_DIM workgroups the
+  // dispatch goes 2-D.
+  it.for([8, 4] as const)('int%i workgroups past MAX_WORKGROUPS_PER_DIM', (bits) =>
+    checkQuantMatmul({ m: 4 * MAX_WORKGROUPS_PER_DIM + 5, k: 4, n: 8, bits, groupSize: 4 }),
+  );
+
+  // matmulQuantW: every epilogue on a few rows, m · n < 48·1024
+  it.for(
+    (['f32', 'f16'] as const).flatMap((dtype) =>
+      ([8, 4] as const).flatMap((bits) => EPILOGUES.map((e) => ({ dtype, bits, ...e }))),
+    ),
+  )('$dtype int$bits with $name on 5 rows', async ({ dtype, bits, epilogue }, ctx) => {
+    if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkQuantMatmul({ m: 5, k: 64, n: 40, bits, groupSize: 16, dtype, ...epilogue });
+  });
+
+  // matmulQuantW: baseRow and scaleBase read one expert of a fused [E·K, N] weight.
   it.for(([8, 4] as const).flatMap((bits) => [0, 1, 2].map((expert) => ({ bits, expert }))))(
     'int$bits expert $expert of 3',
     ({ bits, expert }) =>
@@ -113,6 +163,11 @@ describe('matmulQuantW kernel', () => {
       err: /baseRow 4 must be K-aligned \(8\)/,
     },
     { name: 'a baseRow past the last expert', opts: { baseRow: 16 }, err: /bad baseRow 16/ },
+    {
+      name: 'a scaleBase that is not a multiple of 4',
+      opts: { baseRow: 8, scaleBase: 2 },
+      err: /scaleBase 2 must be a multiple of 4/,
+    },
     { name: 'bits other than 4 or 8', opts: { bits: 2 }, err: /bits must be 8 or 4, got 2/ },
   ])('refuses $name', ({ opts, err }) => {
     const weight = randomQuantWeight(root, fused, 2);
@@ -123,6 +178,7 @@ describe('matmulQuantW kernel', () => {
       bits: (opts.bits ?? 8) as 8 | 4,
       groupSize: opts.groupSize ?? 4,
       baseRow: opts.baseRow,
+      scaleBase: opts.scaleBase,
       bias: opts.bias ? upload(root, new Float32Array(8), [1, 8]) : undefined,
     };
     expect(() => matmul(a, weight.w, call)).toThrow(err);

@@ -20,7 +20,7 @@ interface Case {
 }
 
 /** act(a · dequant(W) + bias) + addend on the whole quantW weight, through the
- *  tiled route: an f16 input, an epilogue, or at least 8 rows. */
+ *  tiled route: m >= 32, m · n >= 48·1024 and K % 8 == 0. */
 async function checkQuantTiled(c: Case, dtype: 'f32' | 'f16') {
   const { m, k, n, bits, groupSize } = c;
   const round = dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
@@ -57,13 +57,16 @@ async function checkQuantTiled(c: Case, dtype: 'f32' | 'f16') {
 }
 
 describe('matmulQuantTiled kernel', () => {
-  // tiled: a whole weight from 8 rows, K % 8 == 0
+  // tiled: a whole weight from 32 rows and 48·1024 output values (m · n),
+  // K % 8 == 0. matmulQuantW's suite has the cases one row and one output below.
   const SHAPES = [
-    { name: 'one tile', m: 8, k: 8, n: 8, groupSize: 4 },
-    { name: 'partial row and column tiles', m: 37, k: 48, n: 40, groupSize: 8 },
-    { name: 'one group per column', m: 9, k: 64, n: 16, groupSize: 64 },
+    { name: 'the first output on the tiled route', m: 1536, k: 32, n: 32, groupSize: 16 },
+    { name: 'the first row tile on the tiled route', m: 32, k: 32, n: 2048, groupSize: 16 },
+    { name: 'one step of the K loop', m: 1536, k: 8, n: 32, groupSize: 4 },
+    { name: 'partial row and column tiles', m: 1229, k: 48, n: 40, groupSize: 8 },
+    { name: 'one group per column', m: 3072, k: 64, n: 16, groupSize: 64 },
     { name: 'a fused q|k projection', m: 97, k: 1024, n: 2304, groupSize: 32 },
-    { name: 'a per-channel down projection', m: 40, k: 2048, n: 1024, groupSize: 2048 },
+    { name: 'a per-channel down projection', m: 48, k: 2048, n: 1024, groupSize: 2048 },
   ];
   it.for(
     (['f32', 'f16'] as const).flatMap((dtype) =>
@@ -74,7 +77,7 @@ describe('matmulQuantTiled kernel', () => {
     await checkQuantTiled(c, c.dtype);
   });
 
-  // tiled: an f16 input or an epilogue on a whole weight, whatever m
+  // tiled: every epilogue, m · n >= 48·1024
   it.for(
     (['f32', 'f16'] as const).flatMap((dtype) =>
       ([4, 8] as const).flatMap((bits) =>
@@ -86,8 +89,8 @@ describe('matmulQuantTiled kernel', () => {
         ].map((e) => ({ dtype, bits, ...e })),
       ),
     ),
-  )('$dtype int$bits with $name on 3 rows', async ({ dtype, ...e }, ctx) => {
+  )('$dtype int$bits with $name on 2048 rows', async ({ dtype, ...e }, ctx) => {
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
-    await checkQuantTiled({ m: 3, k: 64, n: 24, groupSize: 16, ...e }, dtype);
+    await checkQuantTiled({ m: 2048, k: 64, n: 24, groupSize: 16, ...e }, dtype);
   });
 });

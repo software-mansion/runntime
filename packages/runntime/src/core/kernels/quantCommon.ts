@@ -1,4 +1,5 @@
 import { d, std } from 'typegpu';
+import type { F32Buffer, FloatBuffer, U32Buffer } from './common.ts';
 
 /** The physical layout contract for quantW weight buffers, shared by the
  *  packer and the matmulQuantW, moeQuantW and matmulQuantTiled kernels.
@@ -41,3 +42,24 @@ export const deqRow = (c0: number, c1: number, c2: number, c3: number, r: number
     d.f32(std.extractBits(std.bitcast(d.u32, d.i32)(c3), (12 * bits + off) % 32, bits)),
   );
 };
+
+/** Pipeline config of the matmulQuantW and matmulQuantTiled kernels. */
+export interface MatmulQuantCfg {
+  k: number;
+  n: number;
+  bits: number;
+  groupSize: number;
+  hasBias: number;
+  hasAdd: number;
+  act?: number;
+}
+
+/** Buffers of a matmulQuantW or matmulQuantTiled dispatch. */
+export interface MatmulQuantBuffers {
+  a: FloatBuffer;
+  w: U32Buffer;
+  scales: F32Buffer;
+  out: FloatBuffer;
+  bias?: FloatBuffer;
+  addend?: FloatBuffer;
+}
