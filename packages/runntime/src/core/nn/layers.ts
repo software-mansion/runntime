@@ -36,7 +36,7 @@ import {
 import { foldBnIntoConv } from '../weights/foldBn.ts';
 import { packQuantW } from '../weights/quantPack.ts';
 import { derivedTensor, type LazyStateDict, type QuantTensor } from '../weights/safetensors.ts';
-import { readFloats, transposeWeight } from '../weights/transforms.ts';
+import { dequantize, readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -251,6 +251,23 @@ export class Linear extends Module {
   }
 }
 
+/** Throws CHECKPOINT_MISMATCH unless the quantized conv weight `t` is
+ *  [out, in·kernel]. */
+function checkQuantConvShape(
+  layer: string,
+  name: string,
+  t: QuantTensor,
+  { cIn, cOut, kernel }: { cIn: number; cOut: number; kernel: number },
+): void {
+  if (t.shape[0] !== cOut || t.shape[1] !== cIn * kernel) {
+    throw new RunntimeError(
+      'CHECKPOINT_MISMATCH',
+      `${layer}: ${name} is quantized as [${t.shape.join(', ')}], ` +
+        `expected [out, in·kernel] = [${cOut}, ${cIn * kernel}]`,
+    );
+  }
+}
+
 /** The number of input channels in each scale group of a quantized conv
  *  weight [out, in·kernel]. A group holds whole channels with all their
  *  kernel values. Throws CHECKPOINT_MISMATCH when the weight does not fit
@@ -261,15 +278,11 @@ function quantConvGroup(
   t: QuantTensor,
   shape: { cIn: number; cOut: number; kernel: number; taps: number; n: number },
 ): number {
-  const { cIn, cOut, kernel, taps, n } = shape;
+  const { cIn, kernel, taps, n } = shape;
   const bad = (why: string): never => {
     throw new RunntimeError('CHECKPOINT_MISMATCH', `${layer}: ${name} ${why}`);
   };
-  if (t.shape[0] !== cOut || t.shape[1] !== cIn * kernel) {
-    bad(
-      `is quantized as [${t.shape.join(', ')}], expected [out, in·kernel] = [${cOut}, ${cIn * kernel}]`,
-    );
-  }
+  checkQuantConvShape(layer, name, t, shape);
   const group = t.groupSize / kernel;
   if (!Number.isInteger(group)) {
     bad(`has groups of ${t.groupSize} values, not whole channels of ${kernel} values`);
@@ -296,7 +309,9 @@ function quantConvGroup(
  *  A quantized checkpoint weight loads as quantW words with its f32 scales in
  *  `weightScale` [in / group, out], one per group of input channels, the same
  *  for every tap. Output channels pad up to the packing width and are cut
- *  after the conv. */
+ *  after the conv. A conv whose input channels and kernel the quantized conv
+ *  takes in no group size loads a quantized weight as its dequantized
+ *  floats. */
 export class Conv1d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
@@ -340,11 +355,19 @@ export class Conv1d extends Module {
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const name = prefix ? `${prefix}.weight` : 'weight';
-    const tensor = sd.tensors.get(name);
+    let tensor = sd.tensors.get(name);
     if (!tensor) return; // a missing key is reported by the strict key check
     if (tensor.kind === 'quant') {
-      this.loadQuantized(sd, prefix, name, tensor);
-      return;
+      const { inChannels: cIn, outChannels: cOut, kernelSize: kernel } = this;
+      const width = 32 / tensor.bits;
+      const n = Math.ceil(cOut / width) * width;
+      // One group of every input channel is the widest the quantized conv takes.
+      if (matmulQuantTiledEligible(kernel * cIn, n, cIn, cIn)) {
+        this.loadQuantized(sd, prefix, name, tensor, n);
+        return;
+      }
+      checkQuantConvShape('Conv1d', name, tensor, { cIn, cOut, kernel });
+      tensor = dequantize(tensor, [cOut, cIn, kernel]);
     }
     // Without this a weight with equal in/out channels loads scrambled.
     if (
@@ -377,10 +400,14 @@ export class Conv1d extends Module {
   /** Loads `name` as quantW words [kernel·in, n] with its scales
    *  [in / group, n], where n is outChannels padded to the packing width. The
    *  bias pads to n too. */
-  private loadQuantized(sd: LazyStateDict, prefix: string, name: string, t: QuantTensor): void {
+  private loadQuantized(
+    sd: LazyStateDict,
+    prefix: string,
+    name: string,
+    t: QuantTensor,
+    n: number,
+  ): void {
     const { inChannels: cIn, outChannels: cOut, kernelSize: kernel } = this;
-    const width = 32 / t.bits;
-    const n = Math.ceil(cOut / width) * width;
     const group = quantConvGroup('Conv1d', name, t, { cIn, cOut, kernel, taps: kernel, n });
     const k = kernel * cIn;
     const groups = cIn / group;

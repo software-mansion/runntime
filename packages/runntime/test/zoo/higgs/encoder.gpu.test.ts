@@ -1,10 +1,15 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, onTestFinished } from 'vitest';
 import { toArray } from '../../../src/core/gpu/eval.ts';
 import { matrix } from '../../../src/core/graph/value.ts';
+import {
+  bufferSource,
+  fromSafetensors,
+  type LazyStateDict,
+} from '../../../src/core/weights/safetensors.ts';
 import { HiggsEncoder } from '../../../src/zoo/higgs/encoder.ts';
 import { expectClose, gpu, randomF32, upload } from '../../gpu.ts';
 import { ACTIVATION_REF } from '../../core/kernels/matmul/checkMatmul.ts';
-import { CFG, checkpoint } from './encoderCheckpoint.ts';
+import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
 
 const { root, ex } = await gpu();
 
@@ -94,4 +99,40 @@ describe('HiggsEncoder on the GPU', () => {
     expect(y.shape).toEqual(matrix(t, codebooks));
     expect(Int32Array.from(await toArray(y, ex))).toEqual(want);
   });
+});
+
+describe('HiggsEncoder from a quantized checkpoint', () => {
+  it.for([8, 4] as const)(
+    'with int%i Linears matches the encoder loaded with the dequantized floats',
+    async (bits) => {
+      const { file, dequantized } = quantize(checkpoint(QUANT_CFG), bits);
+      const hidden = QUANT_CFG.acoustic.latent + QUANT_CFG.hubert.hidden;
+      // 20 samples give HuBERT 4 frames, two whole strides.
+      const [audio, semantic, rows] = [
+        randomF32(30, 21),
+        randomF32(20, 22),
+        randomF32(5 * hidden, 23),
+      ];
+      const run = async (sd: LazyStateDict | Sd) => {
+        const e = new HiggsEncoder(QUANT_CFG);
+        onTestFinished(() => e.dispose());
+        await e.loadStateDict(sd, { root });
+        const a = e.acoustic_encoder.forward(upload(root, audio, [audio.length, 1]));
+        const s = e.encoder_semantic.forward(
+          e.semantic_model.forward(upload(root, semantic, [semantic.length, 1])),
+        );
+        const fc = e.fc.forward(upload(root, rows, [5, hidden]));
+        const out: Float32Array[] = [];
+        for (const v of [a, s, fc]) out.push(await toArray(v, ex));
+        return out;
+      };
+      const got = await run(await fromSafetensors(bufferSource(file), { chunkBytes: 0 }));
+      const want = await run(dequantized);
+      // Both sum in f32 in another order.
+      got.forEach((g, i) => {
+        const peak = want[i]!.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+        expectClose(g, want[i]!, { atol: 1e-5 * peak, rtol: 1e-4 });
+      });
+    },
+  );
 });
