@@ -1,10 +1,11 @@
-/** Maps the HF BertModel checkpoint onto the model's parameter tree as lazy
- *  derived tensors; nothing is fetched here.
+/** Derives what the HF BertModel checkpoint stores differently from the
+ *  model's parameters, as lazy tensors; nothing is fetched here. Every other
+ *  tensor binds under its own name, since the modules are named like the
+ *  checkpoint; the pooler and `position_ids` are left unread.
  *
- *  Drops the unused pooler keys, folds the constant token-type row into the
- *  position table, and fuses q/k/v into one weight with the score scale split
- *  across the q and k parts, so the scale-free kernel still computes
- *  q·kᵀ/√headDim.
+ *  The constant token-type row folds into the position table, and q/k/v fuse
+ *  into one weight with the score scale split across the q and k parts, so
+ *  the scale-free kernel still computes q·kᵀ/√headDim.
  *
  *  Weights stay in torch layout for the core Linear hook to transpose. The
  *  fused q/k/v and the position sum are f32 even from an F16 checkpoint, so
@@ -31,10 +32,6 @@ function take(sd: LazyStateDict, name: string): LazyTensor {
   return t;
 }
 
-function move(sd: LazyStateDict, from: string, to: string): void {
-  sd.tensors.set(to, take(sd, from));
-}
-
 export function transformMinilmStateDict(
   sd: LazyStateDict,
   prefix: string,
@@ -44,15 +41,12 @@ export function transformMinilmStateDict(
   // qkScale on q and k each — their product is the 1/√headDim score scale.
   const qkScale = cfg.headDim ** -0.25;
 
-  sd.tensors.delete(q('pooler.dense.weight'));
-  sd.tensors.delete(q('pooler.dense.bias'));
-  sd.tensors.delete(q('embeddings.position_ids'));
-
   // position' = position + tokenType[0] (every real input is token type 0).
-  const position = take(sd, q('embeddings.position_embeddings.weight'));
+  const positions = q('embeddings.position_embeddings.weight');
+  const position = take(sd, positions);
   const tokenType = take(sd, q('embeddings.token_type_embeddings.weight'));
   sd.tensors.set(
-    q('embeddings.position.weight'),
+    positions,
     derivedTensor(
       position.shape,
       async () => {
@@ -65,20 +59,15 @@ export function transformMinilmStateDict(
       position.byteLength + tokenType.byteLength,
     ),
   );
-  move(sd, q('embeddings.word_embeddings.weight'), q('embeddings.word.weight'));
-  move(sd, q('embeddings.LayerNorm.weight'), q('embeddings.norm.weight'));
-  move(sd, q('embeddings.LayerNorm.bias'), q('embeddings.norm.bias'));
 
   for (let i = 0; i < cfg.layers; i++) {
-    const hf = (name: string) => q(`encoder.layer.${i}.${name}`);
-    const ours = (name: string) => q(`layers.${i}.${name}`);
-
-    // q|k|v → one torch-layout [3·hidden, hidden] weight and [3·hidden] bias:
-    // the three parts stacked row-wise, q/k pre-scaled.
+    const self = q(`encoder.layer.${i}.attention.self`);
+    // query|key|value → one torch-layout [3·hidden, hidden] weight and
+    // [3·hidden] bias: the three parts stacked row-wise, q/k pre-scaled.
     for (const suffix of ['weight', 'bias']) {
-      const part = (p: string) => take(sd, hf(`attention.self.${p}.${suffix}`));
+      const part = (p: string) => take(sd, `${self}.${p}.${suffix}`);
       sd.tensors.set(
-        ours(`qkv.${suffix}`),
+        `${self}.qkv.${suffix}`,
         concatRows([
           scaleWeight(part('query'), qkScale),
           scaleWeight(part('key'), qkScale),
@@ -86,17 +75,5 @@ export function transformMinilmStateDict(
         ]),
       );
     }
-
-    move(sd, hf('attention.output.dense.weight'), ours('out.weight'));
-    move(sd, hf('attention.output.dense.bias'), ours('out.bias'));
-    move(sd, hf('attention.output.LayerNorm.weight'), ours('attnNorm.weight'));
-    move(sd, hf('attention.output.LayerNorm.bias'), ours('attnNorm.bias'));
-
-    move(sd, hf('intermediate.dense.weight'), ours('up.weight'));
-    move(sd, hf('intermediate.dense.bias'), ours('up.bias'));
-    move(sd, hf('output.dense.weight'), ours('down.weight'));
-    move(sd, hf('output.dense.bias'), ours('down.bias'));
-    move(sd, hf('output.LayerNorm.weight'), ours('ffnNorm.weight'));
-    move(sd, hf('output.LayerNorm.bias'), ours('ffnNorm.bias'));
   }
 }
