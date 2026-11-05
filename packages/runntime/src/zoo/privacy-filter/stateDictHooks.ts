@@ -7,8 +7,8 @@
  *  - the rest renames. score.bias is all zero and the head has no bias, so
  *    it is dropped.
  *  An F16 checkpoint gives f16 derived tensors.
- *  Files from tools/export_pf_safetensors.py use these names as is and
- *  bypass this mapping. */
+ *  Files from tools/export_pf_safetensors.py use these names as is, with the
+ *  RMSNorm scales as `scale`, and bypass this mapping. */
 
 import {
   concatRows,
@@ -49,8 +49,8 @@ export function transformHfPrivacyFilterStateDict(sd: LazyStateDict): void {
   while (sd.tensors.has(`model.layers.${n}.input_layernorm.weight`)) {
     const src = `model.layers.${n}`;
     const dst = `block.${n}`;
-    move(sd, `${src}.input_layernorm.weight`, `${dst}.attn.norm.scale`);
-    move(sd, `${src}.post_attention_layernorm.weight`, `${dst}.mlp.norm.scale`);
+    move(sd, `${src}.input_layernorm.weight`, `${dst}.attn.norm.weight`);
+    move(sd, `${src}.post_attention_layernorm.weight`, `${dst}.mlp.norm.weight`);
     for (const suffix of ['weight', 'bias']) {
       sd.tensors.set(
         `${dst}.attn.qkv.${suffix}`,
@@ -72,8 +72,16 @@ export function transformHfPrivacyFilterStateDict(sd: LazyStateDict): void {
     n++;
   }
   move(sd, 'model.embed_tokens.weight', 'embedding.weight');
-  move(sd, 'model.norm.weight', 'norm.scale');
+  move(sd, 'model.norm.weight', 'norm.weight');
   move(sd, 'score.weight', 'unembedding.weight');
   sd.tensors.delete('score.bias');
   sd.metadata['model'] = 'privacy-filter';
+}
+
+/** Renames the RMSNorm scales of an exported file, written as `scale`, to
+ *  the core layer's `weight`. */
+export function renameExportedNormScales(sd: LazyStateDict): void {
+  for (const name of [...sd.tensors.keys()]) {
+    if (name.endsWith('.scale')) move(sd, name, `${name.slice(0, -'scale'.length)}weight`);
+  }
 }

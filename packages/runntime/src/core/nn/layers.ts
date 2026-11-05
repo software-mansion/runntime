@@ -673,16 +673,16 @@ export class BatchNorm2d extends Module {
 
 /** RMSNorm over the last dim of width `n`. */
 export class RMSNorm extends Module {
-  readonly scale: Parameter;
+  readonly weight: Parameter;
   constructor(
     readonly n: number,
     readonly eps = 1e-6,
   ) {
     super();
-    this.scale = new Parameter({ elems: n, dtype: 'f32', dims: [n] });
+    this.weight = new Parameter({ elems: n, dtype: 'f32', dims: [n] });
   }
   forward(x: Value): Value {
-    return rmsNorm(x, this.scale.value, this.eps);
+    return rmsNorm(x, this.weight.value, this.eps);
   }
 }
 
