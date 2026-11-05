@@ -16,6 +16,10 @@ import type { ObjectDetectorModel } from './tasks/cv/objectDetection.ts';
 import type { KeypointDetectorModel } from './tasks/cv/keypointDetection.ts';
 import type { EmbedderModel } from './tasks/multimodal/embedding.ts';
 import type { PrivacyFilterModel } from './tasks/nlp/privacyFilter.ts';
+import type { TextGeneratorModel } from './tasks/nlp/textGeneration.ts';
+import type { DecoderConfig } from './decoder/config.ts';
+import { GEMMA3_1B, GEMMA3_270M } from './gemma3/config.ts';
+import { QWEN3_0_6B } from './qwen3/config.ts';
 
 const HUB = 'https://huggingface.co/software-mansion';
 
@@ -99,6 +103,40 @@ const YOLO26_POSE_M = {
   modelPath: weights('yolo26-pose', 'm', 'f16'),
 } satisfies KeypointDetectorModel;
 
+/** Gemma 3 instruction-tuned checkpoints, the ungated unsloth mirrors of
+ *  google/gemma-3-*-it, pinned to a revision so cached bytes stay valid. */
+const gemma3 = (name: string, revision: string, config: DecoderConfig): TextGeneratorModel => {
+  const root = `https://huggingface.co/unsloth/${name}/resolve/${revision}`;
+  return {
+    modelPath: `${root}/model.safetensors`,
+    tokenizerPath: `${root}/tokenizer.json`,
+    config,
+    cacheId: `gemma3-v1/${name}@${revision.slice(0, 12)}`,
+  };
+};
+const GEMMA3_1B_IT = gemma3('gemma-3-1b-it', '5b11413a10db4e486ef16a20101fd028f8f2499c', GEMMA3_1B);
+const GEMMA3_270M_IT = gemma3(
+  'gemma-3-270m-it',
+  '23cf460f6bb16954176b3ddcc8d4f250501458a9',
+  GEMMA3_270M,
+);
+
+/** Qwen 3 checkpoints from the (ungated) Qwen org, pinned to a revision. */
+const qwen3 = (name: string, revision: string, config: DecoderConfig): TextGeneratorModel => {
+  const root = `https://huggingface.co/Qwen/${name}/resolve/${revision}`;
+  return {
+    modelPath: `${root}/model.safetensors`,
+    tokenizerPath: `${root}/tokenizer.json`,
+    config,
+    cacheId: `qwen3-v1/${name}@${revision.slice(0, 12)}`,
+  };
+};
+const QWEN3_0_6B_MODEL = qwen3(
+  'Qwen3-0.6B',
+  'c1899de289a04d12100db370d81485cdf75e47ca',
+  QWEN3_0_6B,
+);
+
 const DEPTHART_S = { modelPath: weights('depthart', 's', 'f16') } satisfies DepthEstimatorModel;
 const DEPTHART_B = { modelPath: weights('depthart', 'b', 'f16') } satisfies DepthEstimatorModel;
 
@@ -175,6 +213,15 @@ export const models = {
       /** The base size, 24 MB. More detail, slower. */
       B: DEPTHART_B,
     },
+  },
+  textGeneration: {
+    /** Gemma 3 1B instruction-tuned, bf16 weights (2.0 GB download). */
+    GEMMA3_1B_IT,
+    /** Gemma 3 270M instruction-tuned, bf16 weights (536 MB download). */
+    GEMMA3_270M_IT,
+    /** Qwen 3 0.6B (hybrid thinking, tool calling), bf16 weights (1.5 GB
+     *  download). Thinking is off unless `chatTemplate.enableThinking`. */
+    QWEN3_0_6B: QWEN3_0_6B_MODEL,
   },
   imageClassification: {
     /** MobileNetV4 conv, ImageNet-1k, f16 weights. The model runs in f16
