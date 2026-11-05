@@ -189,7 +189,7 @@ export class Linear extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const name = prefix ? `${prefix}.weight` : 'weight';
     const tensor = sd.tensors.get(name);
-    if (!tensor) return; // missing keys are the strict check's job, not ours
+    if (!tensor) return; // missing keys are the key check's job, not ours
     // Without this a square wrong-layout weight loads silently transposed.
     if (
       tensor.shape.length !== 2 ||
@@ -336,7 +336,7 @@ export class Conv1d extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const name = prefix ? `${prefix}.weight` : 'weight';
     let tensor = sd.tensors.get(name);
-    if (!tensor) return; // a missing key is reported by the strict key check
+    if (!tensor) return; // a missing key is reported by the key check
     if (tensor.kind === 'quant') {
       const { inChannels: cIn, outChannels: cOut, kernelSize: kernel } = this;
       checkQuantConvShape('Conv1d', name, tensor, {
