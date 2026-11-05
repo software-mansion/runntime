@@ -3,9 +3,9 @@ import { MOONSHINE_STREAMING_SMALL } from '../../../src/zoo/moonshine-streaming/
 import { transformStreamingStateDict } from '../../../src/zoo/moonshine-streaming/stateDictHooks.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
-// The hook reads only frameLen and the layer counts, head dims and hidden
-// sizes. Encoder headDim 4 makes the q scale 1/√4 = 0.5, exact in f16. The
-// hidden sizes differ, as in the small model, so the adapter projection maps.
+// The hook reads only the layer counts, head dims and hidden sizes. Encoder
+// headDim 4 makes the q scale 1/√4 = 0.5, exact in f16. The hidden sizes
+// differ, as in the small model, so the decoder projection is there.
 const SMALL = MOONSHINE_STREAMING_SMALL;
 const CFG = {
   ...SMALL,
@@ -19,38 +19,38 @@ const square = (values: number[]): Entry => ({ values, shape: [2, 2] });
 const wide = (values: number[]): Entry => ({ values, shape: [2, 3] });
 const ZERO = square([0, 0, 0, 0]);
 
-/** Tensors the hook only renames, HF name → ours. */
-const RENAMED: Record<string, string> = {
-  'model.decoder.embed_tokens.weight': 'embedding.weight',
-  'model.encoder.embedder.linear.weight': 'frontend.linear.weight',
-  'model.encoder.embedder.conv1.weight': 'frontend.conv1.weight',
-  'model.encoder.embedder.conv1.bias': 'frontend.conv1.bias',
-  'model.encoder.embedder.conv2.weight': 'frontend.conv2.weight',
-  'model.encoder.embedder.conv2.bias': 'frontend.conv2.bias',
-  'model.encoder.layers.0.self_attn.o_proj.weight': 'encoder.layers.0.attn.out.weight',
-  'model.encoder.layers.0.mlp.fc1.weight': 'encoder.layers.0.mlp.fc1.weight',
-  'model.encoder.layers.0.mlp.fc1.bias': 'encoder.layers.0.mlp.fc1.bias',
-  'model.encoder.layers.0.mlp.fc2.weight': 'encoder.layers.0.mlp.fc2.weight',
-  'model.encoder.layers.0.mlp.fc2.bias': 'encoder.layers.0.mlp.fc2.bias',
-  'model.decoder.pos_emb.weight': 'adapter.posEmb',
-  'model.decoder.proj.weight': 'adapter.proj.weight',
-  'model.decoder.layers.0.input_layernorm.weight': 'decoder.layers.0.norm1.weight',
-  'model.decoder.layers.0.self_attn.o_proj.weight': 'decoder.layers.0.selfAttn.out.weight',
-  'model.decoder.layers.0.post_attention_layernorm.weight': 'decoder.layers.0.norm2.weight',
-  'model.decoder.layers.0.encoder_attn.o_proj.weight': 'decoder.layers.0.crossAttn.out.weight',
-  'model.decoder.layers.0.final_layernorm.weight': 'decoder.layers.0.norm3.weight',
-  'model.decoder.layers.0.mlp.fc1.weight': 'decoder.layers.0.mlp.fc1.weight',
-  'model.decoder.layers.0.mlp.fc1.bias': 'decoder.layers.0.mlp.fc1.bias',
-  'model.decoder.layers.0.mlp.fc2.weight': 'decoder.layers.0.mlp.fc2.weight',
-  'model.decoder.layers.0.mlp.fc2.bias': 'decoder.layers.0.mlp.fc2.bias',
-  'model.decoder.norm.weight': 'decoder.norm.weight',
-};
+/** Tensors the hook leaves as they are, under their own names. */
+const UNTOUCHED = [
+  'model.decoder.embed_tokens.weight',
+  'model.encoder.embedder.linear.weight',
+  'model.encoder.embedder.conv1.weight',
+  'model.encoder.embedder.conv1.bias',
+  'model.encoder.embedder.conv2.weight',
+  'model.encoder.embedder.conv2.bias',
+  'model.encoder.layers.0.self_attn.o_proj.weight',
+  'model.encoder.layers.0.mlp.fc1.weight',
+  'model.encoder.layers.0.mlp.fc1.bias',
+  'model.encoder.layers.0.mlp.fc2.weight',
+  'model.encoder.layers.0.mlp.fc2.bias',
+  'model.decoder.pos_emb.weight',
+  'model.decoder.proj.weight',
+  'model.decoder.layers.0.input_layernorm.weight',
+  'model.decoder.layers.0.self_attn.o_proj.weight',
+  'model.decoder.layers.0.post_attention_layernorm.weight',
+  'model.decoder.layers.0.encoder_attn.o_proj.weight',
+  'model.decoder.layers.0.final_layernorm.weight',
+  'model.decoder.layers.0.mlp.fc1.weight',
+  'model.decoder.layers.0.mlp.fc1.bias',
+  'model.decoder.layers.0.mlp.fc2.weight',
+  'model.decoder.layers.0.mlp.fc2.bias',
+  'model.decoder.norm.weight',
+  'proj_out.weight',
+];
 
 /** A one-layer Moonshine v2 checkpoint with HF names. Every value is exact in
  *  f16. */
 const CHECKPOINT: Record<string, Entry> = {
-  ...Object.fromEntries(Object.keys(RENAMED).map((name) => [name, ZERO])),
-  'proj_out.weight': ZERO,
+  ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
   'model.encoder.embedder.comp.log_k': { values: [1], shape: [1] },
   'model.encoder.layers.0.input_layernorm.gamma': { values: [0.5, -0.25], shape: [2] },
   'model.encoder.layers.0.post_attention_layernorm.gamma': { values: [0, 2], shape: [2] },
@@ -78,37 +78,29 @@ describe('transformStreamingStateDict', () => {
     const get = (name: string) => sd.tensors.get(name)!;
 
     const derived = [
-      'frontend.cmvn.weight',
-      'frontend.k',
-      'encoder.layers.0.norm1.weight',
-      'encoder.layers.0.norm2.weight',
-      'encoder.norm.weight',
-      'encoder.layers.0.attn.qkv.weight',
-      'decoder.layers.0.selfAttn.qkv.weight',
-      'decoder.layers.0.crossAttn.q.weight',
-      'decoder.layers.0.crossAttn.kv.weight',
+      'model.encoder.embedder.comp.k',
+      'model.encoder.layers.0.input_layernorm.weight',
+      'model.encoder.layers.0.post_attention_layernorm.weight',
+      'model.encoder.final_norm.weight',
+      'model.encoder.layers.0.self_attn.qkv.weight',
+      'model.decoder.layers.0.self_attn.qkv.weight',
+      'model.decoder.layers.0.encoder_attn.q_proj.weight',
+      'model.decoder.layers.0.encoder_attn.kv.weight',
     ];
-    // proj_out is tied to the embedding and dropped.
-    expect([...sd.tensors.keys()].sort()).toEqual([...Object.values(RENAMED), ...derived].sort());
-    for (const [hf, ours] of Object.entries(RENAMED)) expect(get(ours)).toBe(before.get(hf));
-
-    // CMVN has no learned scale: ones, with no file bytes behind them.
-    const cmvn = get('frontend.cmvn.weight');
-    expect(cmvn.shape).toEqual([3]);
-    expect(cmvn.byteLength).toBe(0);
-    expect(await contents(cmvn)).toEqual({ type: 'f32', values: [1, 1, 1] });
+    expect([...sd.tensors.keys()].sort()).toEqual([...UNTOUCHED, ...derived].sort());
+    for (const name of UNTOUCHED) expect(get(name)).toBe(before.get(name));
 
     // k = exp(log_k) = e, in f32 for any checkpoint.
-    const k = get('frontend.k');
+    const k = get('model.encoder.embedder.comp.k');
     expect(k.shape).toEqual([1]);
     expect(k.byteLength).toBe(elemBytes);
     expect(await contents(k)).toEqual({ type: 'f32', values: [Math.fround(Math.E)] });
 
     // Norm gammas gain back their −1 offset, in f32 for any checkpoint.
     for (const [name, values] of [
-      ['encoder.layers.0.norm1.weight', [1.5, 0.75]],
-      ['encoder.layers.0.norm2.weight', [1, 3]],
-      ['encoder.norm.weight', [0, 1.125]],
+      ['model.encoder.layers.0.input_layernorm.weight', [1.5, 0.75]],
+      ['model.encoder.layers.0.post_attention_layernorm.weight', [1, 3]],
+      ['model.encoder.final_norm.weight', [0, 1.125]],
     ] as const) {
       const gamma = get(name);
       expect(gamma.shape).toEqual([2]);
@@ -118,7 +110,7 @@ describe('transformStreamingStateDict', () => {
 
     // Encoder q|k|v with q times 1/√headDim = 0.5: the encoder has no rope.
     // The scaled part makes it f32 on every checkpoint.
-    const encQkv = get('encoder.layers.0.attn.qkv.weight');
+    const encQkv = get('model.encoder.layers.0.self_attn.qkv.weight');
     expect(encQkv.shape).toEqual([6, 2]);
     expect(encQkv.byteLength).toBe(12 * elemBytes);
     expect(await contents(encQkv)).toEqual({
@@ -127,7 +119,7 @@ describe('transformStreamingStateDict', () => {
     });
 
     // Decoder q|k|v unscaled: its rope tables carry the scale.
-    const decQkv = get('decoder.layers.0.selfAttn.qkv.weight');
+    const decQkv = get('model.decoder.layers.0.self_attn.qkv.weight');
     expect(decQkv.shape).toEqual([6, 3]);
     expect(decQkv.byteLength).toBe(18 * elemBytes);
     expect(await contents(decQkv)).toEqual({
@@ -137,11 +129,11 @@ describe('transformStreamingStateDict', () => {
 
     // Cross-attention q times 1/√headDim = 0.5, f32 on every checkpoint;
     // k|v stacked as is.
-    const crossQ = get('decoder.layers.0.crossAttn.q.weight');
+    const crossQ = get('model.decoder.layers.0.encoder_attn.q_proj.weight');
     expect(crossQ.shape).toEqual([2, 3]);
     expect(crossQ.byteLength).toBe(6 * elemBytes);
     expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5] });
-    const crossKv = get('decoder.layers.0.crossAttn.kv.weight');
+    const crossKv = get('model.decoder.layers.0.encoder_attn.kv.weight');
     expect(crossKv.shape).toEqual([4, 3]);
     expect(crossKv.byteLength).toBe(12 * elemBytes);
     expect(await contents(crossKv)).toEqual({
@@ -149,7 +141,7 @@ describe('transformStreamingStateDict', () => {
       values: [2, 4, 6, 8, 10, 12, 10, 20, 30, 40, 50, 60],
     });
 
-    // The dropped proj_out (4 elems) is the only byte loss.
-    expect(sd.totalBytes()).toBe(total - 4 * elemBytes);
+    // Nothing is dropped: every derived tensor carries its source's bytes.
+    expect(sd.totalBytes()).toBe(total);
   });
 });

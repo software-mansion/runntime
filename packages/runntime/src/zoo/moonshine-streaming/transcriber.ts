@@ -29,7 +29,8 @@ import type { SelfKV } from '../moonshine/decoder.ts';
 import type { TranscribeResult, Transcriber, TranscriberPerf } from '../moonshine/transcriber.ts';
 import { presetFromStateDict, type MoonshineStreamingConfig } from './config.ts';
 import { frontendFrames } from './frontend.ts';
-import { MoonshineStreamingModel, decoderView } from './model.ts';
+import { decoderView } from './decoder.ts';
+import { MoonshineStreamingModel } from './model.ts';
 
 export type { TranscribeResult, Transcriber };
 
@@ -111,8 +112,8 @@ export async function createTranscriber(
     const frames = frontendFrames(audio.length, cfg.frameLen);
     const x = actTensor(audio, [frames.input, cfg.frameLen]);
 
-    const adapterOut = model.adapter.forward(model.encoder.forward(model.frontend.forward(x)));
-    const cross = model.decoder.precomputeCrossKV(adapterOut);
+    const adapterOut = model.model.decoder.adapt(model.model.encoder.forward(x));
+    const cross = model.model.decoder.precomputeCrossKV(adapterOut);
     // The K/V co-targets pin every buffer the decode loop reads.
     evalValues([adapterOut, ...cross.flatMap((c) => [c.k, c.v])], ex);
     // Keeps the encoder's GPU tail out of the first burst's readback wait.
@@ -148,7 +149,7 @@ export async function createTranscriber(
       let x1 = model.embed([ids[base]!]); // burst opener: CPU-known id
       for (let j = 0; j < burst; j++) {
         const t = base + j;
-        const h = model.decoder.forwardStep(
+        const h = model.model.decoder.forwardStep(
           x1,
           slice(decCos, 0, t, t + 1),
           slice(decSin, 0, t, t + 1),
