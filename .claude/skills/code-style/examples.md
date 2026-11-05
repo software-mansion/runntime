@@ -99,6 +99,21 @@ A caught error is `unknown`: anything can be thrown, not only an `Error`.
 }
 ```
 
+## Hook that renames instead of a field named like the checkpoint
+
+```ts
+// Bad: the module invents a name and the hook maps every key to it
+class DecoderLayer extends nn.Module {
+  readonly crossAttn: DecoderCrossAttn;
+}
+move(sd, `${L}.encoder_attn.o_proj.weight`, `${L}.crossAttn.out.weight`);
+
+// Good: the field is the checkpoint's key, so the tensor binds as is
+class DecoderLayer extends nn.Module {
+  readonly encoder_attn: DecoderCrossAttn;
+}
+```
+
 ## Magic number
 
 ```ts
