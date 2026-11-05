@@ -834,8 +834,8 @@ describe('normalization layers', () => {
     expect(() => new GroupNorm(3, 8)).toThrow(/numGroups 3 must divide the 8 channels/);
   });
 
-  it('RMSNorm has one scale per feature', () => {
-    expect(shapes(new RMSNorm(8))).toEqual({ scale: meta([8]) });
+  it('RMSNorm has one weight per feature', () => {
+    expect(shapes(new RMSNorm(8))).toEqual({ weight: meta([8]) });
   });
 
   it.each([

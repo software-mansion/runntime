@@ -1,26 +1,20 @@
-/** Maps the HF Moonshine v2 checkpoint onto the model's parameter tree as lazy
- *  derived tensors; nothing is fetched here.
+/** Derives what the HF Moonshine v2 checkpoint stores differently from the
+ *  model's parameters, as lazy tensors; nothing is fetched here. Every other
+ *  tensor binds under its own name, since the modules are named like the
+ *  checkpoint.
  *
- *  The notable transforms: encoder norm gamma gains back its −1 offset, CMVN's
- *  missing weight is synthesized as ones, and q/k/v stack into fused weights —
- *  scaled on the encoder, which has no rope, and unscaled on the decoder, whose
- *  rope tables carry the scale. Everything else renames.
+ *  The encoder norm gammas gain back their −1 offset, `log_k` becomes k, and
+ *  q/k/v stack into fused weights — scaled on the encoder, which has no
+ *  rope, and unscaled on the decoder, whose rope tables carry the scale.
  *
- *  Weights stay in torch layout for the core Linear and Conv1d hooks to
- *  transpose. An F16 checkpoint gives f16 decoder q/k/v; the scaled encoder
- *  q/k/v and cross-attention q, the norm gammas and the frontend constants
- *  stay f32. Derived byteLengths carry the source file bytes, so load progress
- *  still sums to the checkpoint size. */
+ *  Weights stay in torch layout for the core Linear hook to transpose. An F16
+ *  checkpoint gives f16 decoder q/k/v; the scaled encoder q/k/v and
+ *  cross-attention q, the norm gammas and k stay f32. Derived byteLengths
+ *  carry the source file bytes, so load progress still sums to the
+ *  checkpoint size. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
-import {
-  fuseQkv,
-  move,
-  moveTiedEmbedding,
-  qualify,
-  take,
-  transformDecoder,
-} from '../moonshine/stateDictHooks.ts';
+import { fuseQkv, qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
 import type { MoonshineStreamingConfig } from './config.ts';
 
 /** Stays f32 for any checkpoint: rounding gamma + 1 to f16 would drop the low
@@ -44,50 +38,34 @@ export function transformStreamingStateDict(
   cfg: MoonshineStreamingConfig,
 ): void {
   const q = (name: string) => qualify(prefix, name);
-  const [eh, dh] = [cfg.enc.hidden, cfg.dec.hidden];
-  const gammaNorm = (from: string, to: string) => sd.tensors.set(to, gammaPlusOne(take(sd, from)));
+  /** The norm at `norm` reads its `gamma` as a weight. */
+  const gammaNorm = (norm: string) =>
+    sd.tensors.set(`${norm}.weight`, gammaPlusOne(take(sd, `${norm}.gamma`)));
 
-  moveTiedEmbedding(sd, prefix);
-
-  // CMVN is a LayerNorm with no learned scale, so its weight is all ones and
-  // is not in the file.
+  const comp = q('model.encoder.embedder.comp');
+  const logK = take(sd, `${comp}.log_k`);
   sd.tensors.set(
-    q('frontend.cmvn.weight'),
-    derivedTensor([cfg.frameLen], async () => new Float32Array(cfg.frameLen).fill(1), 0),
-  );
-  const logK = take(sd, q('model.encoder.embedder.comp.log_k'));
-  sd.tensors.set(
-    q('frontend.k'),
+    `${comp}.k`,
     derivedTensor(
       [1],
       async () => Float32Array.from([Math.exp((await logK.f32())[0]!)]),
       logK.byteLength,
     ),
   );
-  move(sd, q('model.encoder.embedder.linear.weight'), q('frontend.linear.weight'));
-  move(sd, q('model.encoder.embedder.conv1.weight'), q('frontend.conv1.weight'));
-  move(sd, q('model.encoder.embedder.conv1.bias'), q('frontend.conv1.bias'));
-  move(sd, q('model.encoder.embedder.conv2.weight'), q('frontend.conv2.weight'));
-  move(sd, q('model.encoder.embedder.conv2.bias'), q('frontend.conv2.bias'));
 
   // Encoder: no rope, so the full score scale folds into the q rows.
   const encQScale = 1 / Math.sqrt(cfg.enc.headDim);
   for (let i = 0; i < cfg.enc.layers; i++) {
-    const hf = q(`model.encoder.layers.${i}`);
-    const en = q(`encoder.layers.${i}`);
-    gammaNorm(`${hf}.input_layernorm.gamma`, `${en}.norm1.weight`);
-    fuseQkv(sd, `${hf}.self_attn`, `${en}.attn.qkv.weight`, eh, encQScale);
-    move(sd, `${hf}.self_attn.o_proj.weight`, `${en}.attn.out.weight`);
-    gammaNorm(`${hf}.post_attention_layernorm.gamma`, `${en}.norm2.weight`);
-    move(sd, `${hf}.mlp.fc1.weight`, `${en}.mlp.fc1.weight`);
-    move(sd, `${hf}.mlp.fc1.bias`, `${en}.mlp.fc1.bias`);
-    move(sd, `${hf}.mlp.fc2.weight`, `${en}.mlp.fc2.weight`);
-    move(sd, `${hf}.mlp.fc2.bias`, `${en}.mlp.fc2.bias`);
+    const L = q(`model.encoder.layers.${i}`);
+    gammaNorm(`${L}.input_layernorm`);
+    fuseQkv(sd, `${L}.self_attn`, cfg.enc.hidden, encQScale);
+    gammaNorm(`${L}.post_attention_layernorm`);
   }
-  gammaNorm(q('model.encoder.final_norm.gamma'), q('encoder.norm.weight'));
+  gammaNorm(q('model.encoder.final_norm'));
 
-  move(sd, q('model.decoder.pos_emb.weight'), q('adapter.posEmb'));
-  if (eh !== dh) move(sd, q('model.decoder.proj.weight'), q('adapter.proj.weight'));
-
-  transformDecoder(sd, prefix, { layers: cfg.dec.layers, hidden: dh, headDim: cfg.dec.headDim });
+  transformDecoder(sd, prefix, {
+    layers: cfg.dec.layers,
+    hidden: cfg.dec.hidden,
+    headDim: cfg.dec.headDim,
+  });
 }

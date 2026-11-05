@@ -4,7 +4,8 @@
  *  Attention is one fused qkv matmul sliced back into q/k/v, with an unbounded
  *  window both ways. The score scale is folded into the q and k projections at
  *  load, so the kernel applies none. Positions are a learned table with the
- *  constant token-type row folded in. */
+ *  constant token-type row folded in. Module fields are named like the
+ *  checkpoint (BertModel), so `LayerNorm` is capitalized. */
 
 import {
   add,
@@ -23,40 +24,43 @@ class MinilmEmbeddings extends nn.Module<
   [readonly number[] | Value, (readonly number[] | Value)?],
   Value
 > {
-  readonly word: nn.Embedding;
-  readonly position: nn.Embedding;
-  readonly norm: nn.LayerNorm;
+  readonly word_embeddings: nn.Embedding;
+  /** The checkpoint's table plus its token-type row 0, summed at load. */
+  readonly position_embeddings: nn.Embedding;
+  readonly LayerNorm: nn.LayerNorm;
   constructor(cfg: MinilmConfig) {
     super();
-    this.word = new nn.Embedding(cfg.vocab, cfg.hidden);
-    this.position = new nn.Embedding(cfg.maxPositions, cfg.hidden);
-    this.norm = new nn.LayerNorm(cfg.hidden, cfg.eps, { bias: true });
+    this.word_embeddings = new nn.Embedding(cfg.vocab, cfg.hidden);
+    this.position_embeddings = new nn.Embedding(cfg.maxPositions, cfg.hidden);
+    this.LayerNorm = new nn.LayerNorm(cfg.hidden, cfg.eps, { bias: true });
   }
   forward(ids: readonly number[], lengths?: readonly number[]): Value;
   forward(ids: Value, positions: Value): Value;
   forward(ids: readonly number[] | Value, second?: readonly number[] | Value): Value {
     if (!Array.isArray(ids)) {
-      return this.norm.forward(
-        add(this.word.forward(ids as Value), this.position.forward(second as Value)),
+      return this.LayerNorm.forward(
+        add(
+          this.word_embeddings.forward(ids as Value),
+          this.position_embeddings.forward(second as Value),
+        ),
       );
     }
     const lengths = second as readonly number[] | undefined;
     const positions = lengths
       ? lengths.flatMap((len) => Array.from({ length: len }, (_, i) => i))
       : Array.from({ length: ids.length }, (_, i) => i);
-    return this.norm.forward(add(this.word.forward(ids), this.position.forward(positions)));
+    return this.LayerNorm.forward(
+      add(this.word_embeddings.forward(ids), this.position_embeddings.forward(positions)),
+    );
   }
 }
 
-class MinilmLayer extends nn.Module<[Value, Value?, number?], Value> {
+/** BertSelfAttention: q, k and v as one projection, scores through `mha`. */
+class SelfAttention extends nn.Module {
+  /** q | k | v rows, fused at load with the score scale split over q and k. */
   readonly qkv: nn.Linear;
   readonly mha: nn.MultiHeadAttention;
-  readonly out: nn.Linear;
-  readonly attnNorm: nn.LayerNorm;
-  readonly up: nn.Linear;
-  readonly down: nn.Linear;
-  readonly ffnNorm: nn.LayerNorm;
-  constructor(private readonly cfg: MinilmConfig) {
+  constructor(cfg: MinilmConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
     this.qkv = new nn.Linear(cfg.hidden, 3 * qw);
@@ -67,17 +71,64 @@ class MinilmLayer extends nn.Module<[Value, Value?, number?], Value> {
       windowLeft: Infinity,
       windowRight: Infinity,
     });
-    this.out = new nn.Linear(qw, cfg.hidden);
-    this.attnNorm = new nn.LayerNorm(cfg.hidden, cfg.eps, { bias: true });
-    this.up = new nn.Linear(cfg.hidden, cfg.ffn, { activation: 'gelu' });
-    this.down = new nn.Linear(cfg.ffn, cfg.hidden);
-    this.ffnNorm = new nn.LayerNorm(cfg.hidden, cfg.eps, { bias: true });
+  }
+}
+
+/** A projection and the post-LN after its residual add. */
+class Output extends nn.Module<[Value, Value], Value> {
+  readonly dense: nn.Linear;
+  readonly LayerNorm: nn.LayerNorm;
+  constructor(cfg: MinilmConfig, inFeatures: number) {
+    super();
+    this.dense = new nn.Linear(inFeatures, cfg.hidden);
+    this.LayerNorm = new nn.LayerNorm(cfg.hidden, cfg.eps, { bias: true });
+  }
+  forward(x: Value, residual: Value): Value {
+    return this.LayerNorm.forward(this.dense.forward(x, { addend: residual }));
+  }
+}
+
+class Attention extends nn.Module {
+  readonly self: SelfAttention;
+  readonly output: Output;
+  constructor(cfg: MinilmConfig) {
+    super();
+    this.self = new SelfAttention(cfg);
+    this.output = new Output(cfg, cfg.heads * cfg.headDim);
+  }
+}
+
+class Intermediate extends nn.Module {
+  readonly dense: nn.Linear;
+  constructor(cfg: MinilmConfig) {
+    super();
+    this.dense = new nn.Linear(cfg.hidden, cfg.ffn, { activation: 'gelu' });
+  }
+}
+
+class MinilmLayer extends nn.Module<[Value, Value?, number?], Value> {
+  readonly attention: Attention;
+  readonly intermediate: Intermediate;
+  readonly output: Output;
+  constructor(cfg: MinilmConfig) {
+    super();
+    this.attention = new Attention(cfg);
+    this.intermediate = new Intermediate(cfg);
+    this.output = new Output(cfg, cfg.ffn);
   }
   override forward(x: Value, segments?: Value, maxSegment?: number): Value {
-    const qkv = this.qkv.forward(x); // [T, 3·qw], columns q|k|v read in place
-    const attn = this.mha.forwardPacked(qkv, { segments, maxSegment });
-    const h = this.attnNorm.forward(this.out.forward(attn, { addend: x }));
-    return this.ffnNorm.forward(this.down.forward(this.up.forward(h), { addend: h }));
+    const { self, output } = this.attention;
+    const qkv = self.qkv.forward(x); // [T, 3·qw], columns q|k|v read in place
+    const h = output.forward(self.mha.forwardPacked(qkv, { segments, maxSegment }), x);
+    return this.output.forward(this.intermediate.dense.forward(h), h);
+  }
+}
+
+class MinilmEncoder extends nn.Module {
+  readonly layer: nn.ModuleList<MinilmLayer>;
+  constructor(cfg: MinilmConfig) {
+    super();
+    this.layer = new nn.ModuleList(Array.from({ length: cfg.layers }, () => new MinilmLayer(cfg)));
   }
 }
 
@@ -92,11 +143,11 @@ export class MinilmModel extends nn.Module<
   Value
 > {
   readonly embeddings: MinilmEmbeddings;
-  readonly layers: nn.ModuleList<MinilmLayer>;
+  readonly encoder: MinilmEncoder;
   constructor(readonly cfg: MinilmConfig = MINILM_L6) {
     super();
     this.embeddings = new MinilmEmbeddings(cfg);
-    this.layers = new nn.ModuleList(Array.from({ length: cfg.layers }, () => new MinilmLayer(cfg)));
+    this.encoder = new MinilmEncoder(cfg);
   }
   override forward(ids: readonly number[], lengths?: readonly number[]): Value;
   override forward(ids: Value, replay: MinilmReplayInputs): Value;
@@ -107,7 +158,7 @@ export class MinilmModel extends nn.Module<
     if (!Array.isArray(ids)) {
       const { positions, segments, maxSegment } = second as MinilmReplayInputs;
       let h: Value = this.embeddings.forward(ids as Value, positions);
-      for (const layer of this.layers.items) h = layer.forward(h, segments, maxSegment);
+      for (const layer of this.encoder.layer.items) h = layer.forward(h, segments, maxSegment);
       return h;
     }
     const lengths = second as readonly number[] | undefined;
@@ -133,7 +184,7 @@ export class MinilmModel extends nn.Module<
       maxSegment = Math.max(...lengths);
     }
     let h: Value = this.embeddings.forward(ids, lengths);
-    for (const layer of this.layers.items) h = layer.forward(h, segments, maxSegment);
+    for (const layer of this.encoder.layer.items) h = layer.forward(h, segments, maxSegment);
     return h;
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {

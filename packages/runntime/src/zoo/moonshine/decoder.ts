@@ -12,7 +12,8 @@
  *
  *  Score scales are folded into the weights and rope tables, so none appears
  *  here. Cross K and V are computed once per utterance and reused by every
- *  decode step. */
+ *  decode step. Module fields are named like the checkpoint; the token
+ *  embedding lives here, as in HF, and doubles as the tied LM head. */
 
 import { chunk, nn, rope, slice, swigluChunk, writeRows, type Value } from '../../core/index.ts';
 import type { MoonshineConfig } from './config.ts';
@@ -28,9 +29,10 @@ export interface SelfKV {
 }
 
 class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
+  /** q | k | v rows, fused at load. */
   readonly qkv: nn.Linear;
   readonly mha: nn.MultiHeadAttention;
-  readonly out: nn.Linear;
+  readonly o_proj: nn.Linear;
   constructor(private readonly cfg: MoonshineConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
@@ -42,7 +44,7 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
       windowLeft: Infinity,
       windowRight: 0, // causal
     });
-    this.out = new nn.Linear(qw, cfg.dModel, { bias: false });
+    this.o_proj = new nn.Linear(qw, cfg.dModel, { bias: false });
   }
   forward(x: Value, cos: Value, sin: Value, residual?: Value): Value {
     const { heads, headDim } = this.cfg;
@@ -51,7 +53,7 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
     const q = rope(qkv, cos, sin, { headDim, srcStart: 0, width: qw });
     const k = rope(qkv, cos, sin, { headDim, srcStart: qw, width: qw });
     const v = slice(qkv, 1, 2 * qw, 3 * qw);
-    return this.out.forward(this.mha.forward(q, k, v), { addend: residual });
+    return this.o_proj.forward(this.mha.forward(q, k, v), { addend: residual });
   }
   forwardStep(
     x1: Value,
@@ -70,19 +72,21 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
     const k = writeRows(cache.k, kNew, t); // [t+1, qw] view of the cache buffer
     const v = writeRows(cache.v, vNew, t);
     const ctx = this.mha.forward(q, k, v, { qPosOffset: t });
-    return this.out.forward(ctx, { addend: residual });
+    return this.o_proj.forward(ctx, { addend: residual });
   }
 }
 
 class DecoderCrossAttn extends nn.Module<[Value, CrossKV, Value?], Value> {
-  readonly q: nn.Linear;
+  /** Carries the 1/√headDim score scale, folded in at load. */
+  readonly q_proj: nn.Linear;
+  /** k | v rows, fused at load. */
   readonly kv: nn.Linear;
   readonly mha: nn.MultiHeadAttention;
-  readonly out: nn.Linear;
+  readonly o_proj: nn.Linear;
   constructor(cfg: MoonshineConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
-    this.q = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.q_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
     this.kv = new nn.Linear(cfg.dModel, 2 * qw, { bias: false });
     this.mha = new nn.MultiHeadAttention({
       qHeads: cfg.heads,
@@ -91,7 +95,7 @@ class DecoderCrossAttn extends nn.Module<[Value, CrossKV, Value?], Value> {
       windowLeft: Infinity,
       windowRight: Infinity,
     });
-    this.out = new nn.Linear(qw, cfg.dModel, { bias: false });
+    this.o_proj = new nn.Linear(qw, cfg.dModel, { bias: false });
   }
   precompute(encOut: Value): CrossKV {
     const fused = this.kv.forward(encOut); // [kvLen, 2·qw], columns k|v
@@ -99,7 +103,7 @@ class DecoderCrossAttn extends nn.Module<[Value, CrossKV, Value?], Value> {
     return { k: k!, v: v! };
   }
   forward(x: Value, cross: CrossKV, residual?: Value): Value {
-    return this.out.forward(this.mha.forward(this.q.forward(x), cross.k, cross.v), {
+    return this.o_proj.forward(this.mha.forward(this.q_proj.forward(x), cross.k, cross.v), {
       addend: residual,
     });
   }
@@ -119,25 +123,25 @@ class DecoderMlp extends nn.Module {
 }
 
 export class DecoderLayer extends nn.Module<[Value, Value, Value, CrossKV], Value> {
-  readonly norm1: nn.LayerNorm;
-  readonly selfAttn: DecoderSelfAttn;
-  readonly norm2: nn.LayerNorm;
-  readonly crossAttn: DecoderCrossAttn;
-  readonly norm3: nn.LayerNorm;
+  readonly input_layernorm: nn.LayerNorm;
+  readonly self_attn: DecoderSelfAttn;
+  readonly post_attention_layernorm: nn.LayerNorm;
+  readonly encoder_attn: DecoderCrossAttn;
+  readonly final_layernorm: nn.LayerNorm;
   readonly mlp: DecoderMlp;
   constructor(cfg: MoonshineConfig) {
     super();
-    this.norm1 = new nn.LayerNorm(cfg.dModel);
-    this.selfAttn = new DecoderSelfAttn(cfg);
-    this.norm2 = new nn.LayerNorm(cfg.dModel);
-    this.crossAttn = new DecoderCrossAttn(cfg);
-    this.norm3 = new nn.LayerNorm(cfg.dModel);
+    this.input_layernorm = new nn.LayerNorm(cfg.dModel);
+    this.self_attn = new DecoderSelfAttn(cfg);
+    this.post_attention_layernorm = new nn.LayerNorm(cfg.dModel);
+    this.encoder_attn = new DecoderCrossAttn(cfg);
+    this.final_layernorm = new nn.LayerNorm(cfg.dModel);
     this.mlp = new DecoderMlp(cfg.ffn, cfg.dModel);
   }
   forward(x: Value, cos: Value, sin: Value, cross: CrossKV): Value {
-    const h1 = this.selfAttn.forward(this.norm1.forward(x), cos, sin, x);
-    const h2 = this.crossAttn.forward(this.norm2.forward(h1), cross, h1);
-    return this.mlp.forward(this.norm3.forward(h2), h2);
+    const h1 = this.self_attn.forward(this.input_layernorm.forward(x), cos, sin, x);
+    const h2 = this.encoder_attn.forward(this.post_attention_layernorm.forward(h1), cross, h1);
+    return this.mlp.forward(this.final_layernorm.forward(h2), h2);
   }
   forwardStep(
     x1: Value,
@@ -147,24 +151,35 @@ export class DecoderLayer extends nn.Module<[Value, Value, Value, CrossKV], Valu
     cache: SelfKV,
     t: number,
   ): Value {
-    const h1 = this.selfAttn.forwardStep(this.norm1.forward(x1), cosRow, sinRow, cache, t, x1);
-    const h2 = this.crossAttn.forward(this.norm2.forward(h1), cross, h1);
-    return this.mlp.forward(this.norm3.forward(h2), h2);
+    const h1 = this.self_attn.forwardStep(
+      this.input_layernorm.forward(x1),
+      cosRow,
+      sinRow,
+      cache,
+      t,
+      x1,
+    );
+    const h2 = this.encoder_attn.forward(this.post_attention_layernorm.forward(h1), cross, h1);
+    return this.mlp.forward(this.final_layernorm.forward(h2), h2);
   }
 }
 
 export class MoonshineDecoder extends nn.Module<[Value, Value, Value, readonly CrossKV[]], Value> {
+  /** Token lookup and the tied LM head: no transposed copy exists, so tying
+   *  is exact by construction. */
+  readonly embed_tokens: nn.Embedding;
   readonly layers: nn.ModuleList<DecoderLayer>;
   readonly norm: nn.LayerNorm;
   constructor(cfg: MoonshineConfig) {
     super();
+    this.embed_tokens = new nn.Embedding(cfg.vocab, cfg.dModel);
     this.layers = new nn.ModuleList(
       Array.from({ length: cfg.decLayers }, () => new DecoderLayer(cfg)),
     );
     this.norm = new nn.LayerNorm(cfg.dModel);
   }
   precomputeCrossKV(encOut: Value): CrossKV[] {
-    return this.layers.items.map((layer) => layer.crossAttn.precompute(encOut));
+    return this.layers.items.map((layer) => layer.encoder_attn.precompute(encOut));
   }
   forward(x: Value, cos: Value, sin: Value, cross: readonly CrossKV[]): Value {
     if (cross.length !== this.layers.items.length) {

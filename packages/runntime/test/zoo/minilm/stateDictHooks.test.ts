@@ -35,6 +35,15 @@ const CHECKPOINT: Record<string, Entry> = {
   'pooler.dense.bias': { values: [0, 0], shape: [2] },
 };
 
+/** The checkpoint's tensors the hook consumes into derived ones. */
+const CONSUMED = [
+  'embeddings.token_type_embeddings.weight',
+  ...['query', 'key', 'value'].flatMap((p) => [
+    `encoder.layer.0.attention.self.${p}.weight`,
+    `encoder.layer.0.attention.self.${p}.bias`,
+  ]),
+];
+
 describe('transformMinilmStateDict', () => {
   it.for([
     { dtype: 'F32', elemBytes: 4 },
@@ -42,44 +51,45 @@ describe('transformMinilmStateDict', () => {
   ] as const)('maps a $dtype checkpoint', async ({ dtype, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
+    const before = new Map(sd.tensors);
     transformMinilmStateDict(sd, '', CFG);
     const get = (name: string) => sd.tensors.get(name)!;
 
-    // Renamed keys only: pooler and position_ids are gone.
+    // Every other tensor stays as it is, the pooler and position_ids too.
+    const untouched = Object.keys(CHECKPOINT).filter(
+      (name) => !CONSUMED.includes(name) && name !== 'embeddings.position_embeddings.weight',
+    );
     expect([...sd.tensors.keys()].sort()).toEqual(
       [
-        'embeddings.word.weight',
-        'embeddings.position.weight',
-        'embeddings.norm.weight',
-        'embeddings.norm.bias',
-        ...['qkv', 'out', 'attnNorm', 'up', 'down', 'ffnNorm'].flatMap((m) => [
-          `layers.0.${m}.weight`,
-          `layers.0.${m}.bias`,
-        ]),
+        ...untouched,
+        'embeddings.position_embeddings.weight',
+        'encoder.layer.0.attention.self.qkv.weight',
+        'encoder.layer.0.attention.self.qkv.bias',
       ].sort(),
     );
+    for (const name of untouched) expect(get(name)).toBe(before.get(name));
 
     // q|k|v rows in that order, q and k times 0.5, v as is. Derived
     // tensors are f32 on every checkpoint.
-    const qkvWeight = get('layers.0.qkv.weight');
+    const qkvWeight = get('encoder.layer.0.attention.self.qkv.weight');
     expect(qkvWeight.shape).toEqual([6, 2]);
     expect(qkvWeight.byteLength).toBe(12 * elemBytes);
     expect(await contents(qkvWeight)).toEqual({
       type: 'f32',
       values: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 9, 10, 11, 12],
     });
-    const qkvBias = get('layers.0.qkv.bias');
+    const qkvBias = get('encoder.layer.0.attention.self.qkv.bias');
     expect(qkvBias.shape).toEqual([6]);
     expect(qkvBias.byteLength).toBe(6 * elemBytes);
     expect(await contents(qkvBias)).toEqual({ type: 'f32', values: [0.5, 1, 1.5, 2, 5, 6] });
 
     // position + tokenType row 0: [1 + 10, 2 + 20, 3 + 10, 4 + 20].
-    const position = get('embeddings.position.weight');
+    const position = get('embeddings.position_embeddings.weight');
     expect(position.shape).toEqual([2, 2]);
     expect(position.byteLength).toBe(8 * elemBytes);
     expect(await contents(position)).toEqual({ type: 'f32', values: [11, 22, 13, 24] });
 
-    // The dropped pooler (6 elems) and position_ids (2) are the only bytes lost.
-    expect(sd.totalBytes()).toBe(total - 8 * elemBytes);
+    // Nothing is dropped: every derived tensor carries its sources' bytes.
+    expect(sd.totalBytes()).toBe(total);
   });
 });

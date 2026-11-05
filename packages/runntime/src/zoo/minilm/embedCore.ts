@@ -56,7 +56,7 @@ export interface MinilmEmbedCore {
 export function createMinilmEmbedCore(model: MinilmModel): MinilmEmbedCore {
   // The selector multiplies the hidden states, so it follows the model's
   // dtype; the index planes stay f32.
-  const actDtype = model.embeddings.norm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
+  const actDtype = model.embeddings.LayerNorm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
   const pooler = (data: Float32Array, dims: [number, number]): Value =>
     tensor(data, { elems: data.length, dtype: actDtype, dims });
   // The replay mechanics live in core; this is the MiniLM-specific config.

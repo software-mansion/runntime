@@ -138,7 +138,7 @@ export class Linear extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const name = prefix ? `${prefix}.weight` : 'weight';
     const tensor = sd.tensors.get(name);
-    if (!tensor) return; // missing keys are the strict check's job, not ours
+    if (!tensor) return; // missing keys are the key check's job, not ours
     // Without this a square wrong-layout weight loads silently transposed.
     if (
       tensor.shape.length !== 2 ||
@@ -272,7 +272,7 @@ export class Conv1d extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const name = prefix ? `${prefix}.weight` : 'weight';
     const tensor = sd.tensors.get(name);
-    if (!tensor) return; // a missing key is reported by the strict key check
+    if (!tensor) return; // a missing key is reported by the key check
     // Without this a weight with equal in/out channels loads scrambled.
     if (
       tensor.shape.length !== 3 ||
@@ -673,16 +673,16 @@ export class BatchNorm2d extends Module {
 
 /** RMSNorm over the last dim of width `n`. */
 export class RMSNorm extends Module {
-  readonly scale: Parameter;
+  readonly weight: Parameter;
   constructor(
     readonly n: number,
     readonly eps = 1e-6,
   ) {
     super();
-    this.scale = new Parameter({ elems: n, dtype: 'f32', dims: [n] });
+    this.weight = new Parameter({ elems: n, dtype: 'f32', dims: [n] });
   }
   forward(x: Value): Value {
-    return rmsNorm(x, this.scale.value, this.eps);
+    return rmsNorm(x, this.weight.value, this.eps);
   }
 }
 
