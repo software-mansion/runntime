@@ -42,7 +42,7 @@ function ropeOrder(rows: number, block: number): number[] {
   });
 }
 
-/** Each layer's RMSNorms, renamed `weight` → `scale`. */
+/** Each layer's RMSNorms. */
 const LAYER_NORMS = [
   'input_layernorm',
   'post_attention_layernorm',
@@ -135,10 +135,10 @@ export function transformEmbeddingGemma2StateDict(
       put(`${L}.${n}.weight`, take(`${L}.ple_block.${n}.weight`));
     }
     put(
-      `${L}.post_per_layer_input_norm.scale`,
+      `${L}.post_per_layer_input_norm.weight`,
       take(`${L}.ple_block.post_per_layer_input_norm.weight`),
     );
-    for (const n of LAYER_NORMS) put(`${L}.${n}.scale`, take(`${L}.${n}.weight`));
+    for (const n of LAYER_NORMS) put(`${L}.${n}.weight`, take(`${L}.${n}.weight`));
     const s = take(`${L}.layer_scalar`);
     // Derived, so the CPU parameter binds f32 rather than raw bf16 bits.
     put(
@@ -150,9 +150,9 @@ export function transformEmbeddingGemma2StateDict(
     'ple.per_layer_model_projection.weight',
     scaleWeight(take('ple.per_layer_model_projection.weight'), cfg.hidden ** -0.5),
   );
-  put('ple.per_layer_projection_norm.scale', take('ple.per_layer_projection_norm.weight'));
+  put('ple.per_layer_projection_norm.weight', take('ple.per_layer_projection_norm.weight'));
   put('embed_tokens.weight', take('embed_tokens.weight'));
-  put('norm.scale', take('norm.weight'));
+  put('norm.weight', take('norm.weight'));
   put('embedding_projection.weight', take('embedding_projection.weight'));
   io.done();
 }
@@ -190,9 +190,9 @@ export function transformEmbeddingGemma2VisionStateDict(
     for (const n of ['gate_proj', 'up_proj', 'down_proj']) {
       put(`${L}.${n}.weight`, take(`${S}.mlp.${n}.linear.weight`));
     }
-    for (const n of LAYER_NORMS) put(`${L}.${n}.scale`, take(`${S}.${n}.weight`));
+    for (const n of LAYER_NORMS) put(`${L}.${n}.weight`, take(`${S}.${n}.weight`));
   }
-  put('embedding_pre_projection_norm.scale', ones(hidden));
+  put('embedding_pre_projection_norm.weight', ones(hidden));
   put('embedding_projection.weight', take('embed_vision.embedding_projection.weight'));
   done();
 }
@@ -254,11 +254,11 @@ export function transformEmbeddingGemma2AudioStateDict(
     const L = `layers.${i}`;
     const T = `${S}layers.${i}`;
     for (const ff of ['feed_forward1', 'feed_forward2']) {
-      put(`${L}.${ff}.pre_layer_norm.scale`, take(`${T}.${ff}.pre_layer_norm.weight`));
+      put(`${L}.${ff}.pre_layer_norm.weight`, take(`${T}.${ff}.pre_layer_norm.weight`));
       clipped(`${T}.${ff}.ffw_layer_1`, `${L}.${ff}.ffw_layer_1`);
       clipped(`${T}.${ff}.ffw_layer_2`, `${L}.${ff}.ffw_layer_2`);
       put(
-        `${L}.${ff}.post_layer_norm.scale`,
+        `${L}.${ff}.post_layer_norm.weight`,
         scaleWeight(take(`${T}.${ff}.post_layer_norm.weight`), cfg.residualWeight),
       );
     }
@@ -313,22 +313,22 @@ export function transformEmbeddingGemma2AudioStateDict(
     );
 
     const C = `${T}.lconv1d`;
-    put(`${L}.lconv.pre_layer_norm.scale`, take(`${C}.pre_layer_norm.weight`));
+    put(`${L}.lconv.pre_layer_norm.weight`, take(`${C}.pre_layer_norm.weight`));
     clipped(`${C}.linear_start`, `${L}.lconv.linear_start`);
     // [hidden, 1, K] → [K, hidden].
     put(
       `${L}.lconv.conv`,
       transposeWeight(reshapeWeight(take(`${C}.depthwise_conv1d.weight`), [hidden, K])),
     );
-    put(`${L}.lconv.conv_norm.scale`, take(`${C}.conv_norm.weight`));
+    put(`${L}.lconv.conv_norm.weight`, take(`${C}.conv_norm.weight`));
     clipped(`${C}.linear_end`, `${L}.lconv.linear_end`);
     for (const n of ['norm_pre_attn', 'norm_post_attn', 'norm_out']) {
-      put(`${L}.${n}.scale`, take(`${T}.${n}.weight`));
+      put(`${L}.${n}.weight`, take(`${T}.${n}.weight`));
     }
   }
   put('output_proj.weight', take(`${S}output_proj.weight`));
   put('output_proj.bias', take(`${S}output_proj.bias`));
-  put('embedding_pre_projection_norm.scale', ones(cfg.outputDim));
+  put('embedding_pre_projection_norm.weight', ones(cfg.outputDim));
   put('embedding_projection.weight', take('embed_audio.embedding_projection.weight'));
   done();
 }

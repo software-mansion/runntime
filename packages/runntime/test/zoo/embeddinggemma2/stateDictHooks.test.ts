@@ -79,18 +79,18 @@ describe('transformEmbeddingGemma2StateDict', () => {
     [`${L(i)}.mlp.down_proj.weight`]: `layers.${i}.down_proj.weight`,
     [`${L(i)}.ple_block.per_layer_input_gate.weight`]: `layers.${i}.per_layer_input_gate.weight`,
     [`${L(i)}.ple_block.per_layer_projection.weight`]: `layers.${i}.per_layer_projection.weight`,
-    [`${L(i)}.ple_block.post_per_layer_input_norm.weight`]: `layers.${i}.post_per_layer_input_norm.scale`,
-    [`${L(i)}.input_layernorm.weight`]: `layers.${i}.input_layernorm.scale`,
-    [`${L(i)}.post_attention_layernorm.weight`]: `layers.${i}.post_attention_layernorm.scale`,
-    [`${L(i)}.pre_feedforward_layernorm.weight`]: `layers.${i}.pre_feedforward_layernorm.scale`,
-    [`${L(i)}.post_feedforward_layernorm.weight`]: `layers.${i}.post_feedforward_layernorm.scale`,
+    [`${L(i)}.ple_block.post_per_layer_input_norm.weight`]: `layers.${i}.post_per_layer_input_norm.weight`,
+    [`${L(i)}.input_layernorm.weight`]: `layers.${i}.input_layernorm.weight`,
+    [`${L(i)}.post_attention_layernorm.weight`]: `layers.${i}.post_attention_layernorm.weight`,
+    [`${L(i)}.pre_feedforward_layernorm.weight`]: `layers.${i}.pre_feedforward_layernorm.weight`,
+    [`${L(i)}.post_feedforward_layernorm.weight`]: `layers.${i}.post_feedforward_layernorm.weight`,
   });
   const RENAMED: Record<string, string> = {
     ...layerRenamed(0),
     ...layerRenamed(1),
-    [`${S}ple.per_layer_projection_norm.weight`]: 'ple.per_layer_projection_norm.scale',
+    [`${S}ple.per_layer_projection_norm.weight`]: 'ple.per_layer_projection_norm.weight',
     [`${S}embed_tokens.weight`]: 'embed_tokens.weight',
-    [`${S}norm.weight`]: 'norm.scale',
+    [`${S}norm.weight`]: 'norm.weight',
     [`${S}embedding_projection.weight`]: 'embedding_projection.weight',
   };
   /** Layer `i`'s attention: q over `heads` heads of `d` rows, k and v over
@@ -201,10 +201,10 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     [`${T}.mlp.gate_proj.linear.weight`]: 'layers.0.gate_proj.weight',
     [`${T}.mlp.up_proj.linear.weight`]: 'layers.0.up_proj.weight',
     [`${T}.mlp.down_proj.linear.weight`]: 'layers.0.down_proj.weight',
-    [`${T}.input_layernorm.weight`]: 'layers.0.input_layernorm.scale',
-    [`${T}.post_attention_layernorm.weight`]: 'layers.0.post_attention_layernorm.scale',
-    [`${T}.pre_feedforward_layernorm.weight`]: 'layers.0.pre_feedforward_layernorm.scale',
-    [`${T}.post_feedforward_layernorm.weight`]: 'layers.0.post_feedforward_layernorm.scale',
+    [`${T}.input_layernorm.weight`]: 'layers.0.input_layernorm.weight',
+    [`${T}.post_attention_layernorm.weight`]: 'layers.0.post_attention_layernorm.weight',
+    [`${T}.pre_feedforward_layernorm.weight`]: 'layers.0.pre_feedforward_layernorm.weight',
+    [`${T}.post_feedforward_layernorm.weight`]: 'layers.0.post_feedforward_layernorm.weight',
     'embed_vision.embedding_projection.weight': 'embedding_projection.weight',
   };
   const CHECKPOINT: Record<string, Entry> = {
@@ -233,7 +233,7 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
         'pos_y.weight',
         'layers.0.qkv.weight',
         'layers.0.qkv_norm',
-        'embedding_pre_projection_norm.scale',
+        'embedding_pre_projection_norm.weight',
       ],
     );
 
@@ -270,7 +270,7 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     });
 
     // Ones download nothing and are exact in f16.
-    const pre = get('embedding_pre_projection_norm.scale');
+    const pre = get('embedding_pre_projection_norm.weight');
     expect(pre.shape).toEqual([2]);
     expect(pre.byteLength).toBe(0);
     expect(await contents(pre)).toEqual({ type: 'f16', values: [1, 1] });
@@ -315,13 +315,13 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     [`${sub}layer0.norm.weight`]: 'norm0.weight',
     [`${sub}layer1.norm.weight`]: 'norm1.weight',
     [`${sub}input_proj_linear.weight`]: 'input_proj.weight',
-    [`${T}.feed_forward1.pre_layer_norm.weight`]: 'layers.0.feed_forward1.pre_layer_norm.scale',
-    [`${T}.feed_forward2.pre_layer_norm.weight`]: 'layers.0.feed_forward2.pre_layer_norm.scale',
-    [`${T}.lconv1d.pre_layer_norm.weight`]: 'layers.0.lconv.pre_layer_norm.scale',
-    [`${T}.lconv1d.conv_norm.weight`]: 'layers.0.lconv.conv_norm.scale',
-    [`${T}.norm_pre_attn.weight`]: 'layers.0.norm_pre_attn.scale',
-    [`${T}.norm_post_attn.weight`]: 'layers.0.norm_post_attn.scale',
-    [`${T}.norm_out.weight`]: 'layers.0.norm_out.scale',
+    [`${T}.feed_forward1.pre_layer_norm.weight`]: 'layers.0.feed_forward1.pre_layer_norm.weight',
+    [`${T}.feed_forward2.pre_layer_norm.weight`]: 'layers.0.feed_forward2.pre_layer_norm.weight',
+    [`${T}.lconv1d.pre_layer_norm.weight`]: 'layers.0.lconv.pre_layer_norm.weight',
+    [`${T}.lconv1d.conv_norm.weight`]: 'layers.0.lconv.conv_norm.weight',
+    [`${T}.norm_pre_attn.weight`]: 'layers.0.norm_pre_attn.weight',
+    [`${T}.norm_post_attn.weight`]: 'layers.0.norm_post_attn.weight',
+    [`${T}.norm_out.weight`]: 'layers.0.norm_out.weight',
     [`${A}output_proj.weight`]: 'output_proj.weight',
     [`${A}output_proj.bias`]: 'output_proj.bias',
     'embed_audio.embedding_projection.weight': 'embedding_projection.weight',
@@ -378,14 +378,14 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
         ...clipNames,
         'conv0.weight',
         'conv1.weight',
-        'layers.0.feed_forward1.post_layer_norm.scale',
-        'layers.0.feed_forward2.post_layer_norm.scale',
+        'layers.0.feed_forward1.post_layer_norm.weight',
+        'layers.0.feed_forward2.post_layer_norm.weight',
         'layers.0.qkv.weight',
         'layers.0.qkv.clip',
         'layers.0.rel',
         'layers.0.q_scale',
         'layers.0.lconv.conv',
-        'embedding_pre_projection_norm.scale',
+        'embedding_pre_projection_norm.weight',
       ],
     );
 
@@ -409,8 +409,8 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
 
     // Times the residual weight 0.5, so f32 on every checkpoint.
     for (const [name, values] of [
-      ['layers.0.feed_forward1.post_layer_norm.scale', [1, 2, 3, 4]],
-      ['layers.0.feed_forward2.post_layer_norm.scale', [0.5, 1.5, 2.5, 3.5]],
+      ['layers.0.feed_forward1.post_layer_norm.weight', [1, 2, 3, 4]],
+      ['layers.0.feed_forward2.post_layer_norm.weight', [0.5, 1.5, 2.5, 3.5]],
     ] as const) {
       const norm = get(name);
       expect(norm.shape).toEqual([4]);
@@ -458,7 +458,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     expect(lconv.byteLength).toBe(8 * elemBytes);
     expect(await contents(lconv)).toEqual({ type, values: [1, 3, 5, 7, 2, 4, 6, 8] });
 
-    expect(await contents(get('embedding_pre_projection_norm.scale'))).toEqual({
+    expect(await contents(get('embedding_pre_projection_norm.weight'))).toEqual({
       type: 'f16',
       values: [1, 1],
     });

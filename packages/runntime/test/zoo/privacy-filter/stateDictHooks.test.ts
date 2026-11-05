@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { transformHfPrivacyFilterStateDict } from '../../../src/zoo/privacy-filter/stateDictHooks.ts';
+import {
+  renameExportedNormScales,
+  transformHfPrivacyFilterStateDict,
+} from '../../../src/zoo/privacy-filter/stateDictHooks.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
 const ZERO = { values: [0, 0], shape: [2] };
 
 /** Tensors the hook only renames, HF name → ours. */
 const RENAMED: Record<string, string> = {
-  'model.layers.0.input_layernorm.weight': 'block.0.attn.norm.scale',
-  'model.layers.0.post_attention_layernorm.weight': 'block.0.mlp.norm.scale',
+  'model.layers.0.input_layernorm.weight': 'block.0.attn.norm.weight',
+  'model.layers.0.post_attention_layernorm.weight': 'block.0.mlp.norm.weight',
   'model.layers.0.self_attn.o_proj.weight': 'block.0.attn.out.weight',
   'model.layers.0.self_attn.o_proj.bias': 'block.0.attn.out.bias',
   'model.layers.0.mlp.router.weight': 'block.0.mlp.gate.weight',
@@ -15,7 +18,7 @@ const RENAMED: Record<string, string> = {
   'model.layers.0.self_attn.sinks': 'block.0.attn.sinks',
   'model.layers.0.mlp.experts.down_proj_bias': 'block.0.mlp.outBias',
   'model.embed_tokens.weight': 'embedding.weight',
-  'model.norm.weight': 'norm.scale',
+  'model.norm.weight': 'norm.weight',
   'score.weight': 'unembedding.weight',
 };
 
@@ -107,5 +110,25 @@ describe('transformHfPrivacyFilterStateDict', () => {
 
     // The dropped score.bias (2 elems) is the only byte loss.
     expect(sd.totalBytes()).toBe(total - 2 * elemBytes);
+  });
+});
+
+describe('renameExportedNormScales', () => {
+  it('renames every RMSNorm scale of an exported file to weight', async () => {
+    const sd = await checkpoint('F32', {
+      'block.0.attn.norm.scale': ZERO,
+      'block.0.mlp.norm.scale': ZERO,
+      'norm.scale': ZERO,
+      'block.0.attn.qkv.weight': ZERO,
+    });
+    const before = new Map(sd.tensors);
+    renameExportedNormScales(sd);
+    expect([...sd.tensors.keys()].sort()).toEqual([
+      'block.0.attn.norm.weight',
+      'block.0.attn.qkv.weight',
+      'block.0.mlp.norm.weight',
+      'norm.weight',
+    ]);
+    expect(sd.tensors.get('norm.weight')).toBe(before.get('norm.scale'));
   });
 });
