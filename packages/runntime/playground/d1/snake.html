@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>d1 plays snake</title>
+    <style>
+      body {
+        font:
+          14px system-ui,
+          sans-serif;
+        background: #1b1b1f;
+        color: #eee;
+        display: flex;
+        gap: 24px;
+        padding: 24px;
+      }
+      canvas {
+        border: 1px solid #444;
+        image-rendering: pixelated;
+      }
+      .panel {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-width: 300px;
+      }
+      button {
+        font-size: 16px;
+        padding: 6px 18px;
+      }
+      .bar {
+        display: grid;
+        grid-template-columns: 50px 1fr 60px;
+        align-items: center;
+        gap: 8px;
+      }
+      .bar i {
+        display: block;
+        height: 12px;
+        background: #3c3;
+      }
+      .bar b {
+        font-weight: normal;
+        text-align: right;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="board"></canvas>
+    <div class="panel">
+      <h2 style="margin: 0">d1-omni-600M plays snake</h2>
+      <label
+        >State:
+        <select id="mode">
+          <option value="text">text (ASCII board)</option>
+          <option value="image">image (the canvas)</option>
+        </select></label
+      >
+      <label
+        ><input type="checkbox" id="safe" checked /> safety net (hide moves that lose at
+        once)</label
+      >
+      <button id="start" disabled>Play</button>
+      <div id="status"></div>
+      <div id="probs"></div>
+    </div>
+    <script type="module" src="./snake.ts"></script>
+  </body>
+</html>
