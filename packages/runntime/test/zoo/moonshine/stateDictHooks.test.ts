@@ -10,40 +10,40 @@ const CFG = { ...MOONSHINE_TINY, dModel: 2, encLayers: 1, decLayers: 1, headDim:
 const square = (values: number[]): Entry => ({ values, shape: [2, 2] });
 const ZERO = square([0, 0, 0, 0]);
 
-/** Tensors the hook only renames, HF name → ours. */
-const RENAMED: Record<string, string> = {
-  'model.decoder.embed_tokens.weight': 'embedding.weight',
-  'model.encoder.conv1.weight': 'stem.conv1.weight',
-  'model.encoder.groupnorm.weight': 'stem.groupnorm.weight',
-  'model.encoder.groupnorm.bias': 'stem.groupnorm.bias',
-  'model.encoder.conv2.weight': 'stem.conv2.weight',
-  'model.encoder.conv2.bias': 'stem.conv2.bias',
-  'model.encoder.conv3.weight': 'stem.conv3.weight',
-  'model.encoder.conv3.bias': 'stem.conv3.bias',
-  'model.encoder.layers.0.input_layernorm.weight': 'encoder.layers.0.norm1.weight',
-  'model.encoder.layers.0.self_attn.o_proj.weight': 'encoder.layers.0.attn.out.weight',
-  'model.encoder.layers.0.post_attention_layernorm.weight': 'encoder.layers.0.norm2.weight',
-  'model.encoder.layers.0.mlp.fc1.weight': 'encoder.layers.0.mlp.fc1.weight',
-  'model.encoder.layers.0.mlp.fc1.bias': 'encoder.layers.0.mlp.fc1.bias',
-  'model.encoder.layers.0.mlp.fc2.weight': 'encoder.layers.0.mlp.fc2.weight',
-  'model.encoder.layers.0.mlp.fc2.bias': 'encoder.layers.0.mlp.fc2.bias',
-  'model.encoder.layer_norm.weight': 'encoder.norm.weight',
-  'model.decoder.layers.0.input_layernorm.weight': 'decoder.layers.0.norm1.weight',
-  'model.decoder.layers.0.self_attn.o_proj.weight': 'decoder.layers.0.selfAttn.out.weight',
-  'model.decoder.layers.0.post_attention_layernorm.weight': 'decoder.layers.0.norm2.weight',
-  'model.decoder.layers.0.encoder_attn.o_proj.weight': 'decoder.layers.0.crossAttn.out.weight',
-  'model.decoder.layers.0.final_layernorm.weight': 'decoder.layers.0.norm3.weight',
-  'model.decoder.layers.0.mlp.fc1.weight': 'decoder.layers.0.mlp.fc1.weight',
-  'model.decoder.layers.0.mlp.fc1.bias': 'decoder.layers.0.mlp.fc1.bias',
-  'model.decoder.layers.0.mlp.fc2.weight': 'decoder.layers.0.mlp.fc2.weight',
-  'model.decoder.layers.0.mlp.fc2.bias': 'decoder.layers.0.mlp.fc2.bias',
-  'model.decoder.norm.weight': 'decoder.norm.weight',
-};
+/** Tensors the hook leaves as they are, under their own names. */
+const UNTOUCHED = [
+  'model.decoder.embed_tokens.weight',
+  'model.encoder.conv1.weight',
+  'model.encoder.groupnorm.weight',
+  'model.encoder.groupnorm.bias',
+  'model.encoder.conv2.weight',
+  'model.encoder.conv2.bias',
+  'model.encoder.conv3.weight',
+  'model.encoder.conv3.bias',
+  'model.encoder.layers.0.input_layernorm.weight',
+  'model.encoder.layers.0.self_attn.o_proj.weight',
+  'model.encoder.layers.0.post_attention_layernorm.weight',
+  'model.encoder.layers.0.mlp.fc1.weight',
+  'model.encoder.layers.0.mlp.fc1.bias',
+  'model.encoder.layers.0.mlp.fc2.weight',
+  'model.encoder.layers.0.mlp.fc2.bias',
+  'model.encoder.layer_norm.weight',
+  'model.decoder.layers.0.input_layernorm.weight',
+  'model.decoder.layers.0.self_attn.o_proj.weight',
+  'model.decoder.layers.0.post_attention_layernorm.weight',
+  'model.decoder.layers.0.encoder_attn.o_proj.weight',
+  'model.decoder.layers.0.final_layernorm.weight',
+  'model.decoder.layers.0.mlp.fc1.weight',
+  'model.decoder.layers.0.mlp.fc1.bias',
+  'model.decoder.layers.0.mlp.fc2.weight',
+  'model.decoder.layers.0.mlp.fc2.bias',
+  'model.decoder.norm.weight',
+  'proj_out.weight',
+];
 
 /** A one-layer Moonshine checkpoint with HF names. Every value is exact in f16. */
 const CHECKPOINT: Record<string, Entry> = {
-  ...Object.fromEntries(Object.keys(RENAMED).map((name) => [name, ZERO])),
-  'proj_out.weight': ZERO,
+  ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
   'model.encoder.layers.0.self_attn.q_proj.weight': square([1, 2, 3, 4]),
   'model.encoder.layers.0.self_attn.k_proj.weight': square([5, 6, 7, 8]),
   'model.encoder.layers.0.self_attn.v_proj.weight': square([9, 10, 11, 12]),
@@ -67,24 +67,23 @@ describe('transformMoonshineStateDict', () => {
     const get = (name: string) => sd.tensors.get(name)!;
 
     const fused = [
-      'encoder.layers.0.attn.qkv.weight',
-      'decoder.layers.0.selfAttn.qkv.weight',
-      'decoder.layers.0.crossAttn.q.weight',
-      'decoder.layers.0.crossAttn.kv.weight',
+      'model.encoder.layers.0.self_attn.qkv.weight',
+      'model.decoder.layers.0.self_attn.qkv.weight',
+      'model.decoder.layers.0.encoder_attn.q_proj.weight',
+      'model.decoder.layers.0.encoder_attn.kv.weight',
     ];
-    // proj_out is tied to the embedding and dropped.
-    expect([...sd.tensors.keys()].sort()).toEqual([...Object.values(RENAMED), ...fused].sort());
-    for (const [hf, ours] of Object.entries(RENAMED)) expect(get(ours)).toBe(before.get(hf));
+    expect([...sd.tensors.keys()].sort()).toEqual([...UNTOUCHED, ...fused].sort());
+    for (const name of UNTOUCHED) expect(get(name)).toBe(before.get(name));
 
     // Self-attention q|k|v rows in that order, unscaled: rope carries the scale.
-    const encQkv = get('encoder.layers.0.attn.qkv.weight');
+    const encQkv = get('model.encoder.layers.0.self_attn.qkv.weight');
     expect(encQkv.shape).toEqual([6, 2]);
     expect(encQkv.byteLength).toBe(12 * elemBytes);
     expect(await contents(encQkv)).toEqual({
       type,
       values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
     });
-    const decQkv = get('decoder.layers.0.selfAttn.qkv.weight');
+    const decQkv = get('model.decoder.layers.0.self_attn.qkv.weight');
     expect(decQkv.shape).toEqual([6, 2]);
     expect(decQkv.byteLength).toBe(12 * elemBytes);
     expect(await contents(decQkv)).toEqual({
@@ -94,17 +93,17 @@ describe('transformMoonshineStateDict', () => {
 
     // Cross-attention q times 1/√headDim = 0.5, f32 on every checkpoint;
     // k|v stacked as is.
-    const crossQ = get('decoder.layers.0.crossAttn.q.weight');
+    const crossQ = get('model.decoder.layers.0.encoder_attn.q_proj.weight');
     expect(crossQ.shape).toEqual([2, 2]);
     expect(crossQ.byteLength).toBe(4 * elemBytes);
     expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5] });
-    const crossKv = get('decoder.layers.0.crossAttn.kv.weight');
+    const crossKv = get('model.decoder.layers.0.encoder_attn.kv.weight');
     expect(crossKv.shape).toEqual([4, 2]);
     expect(crossKv.byteLength).toBe(8 * elemBytes);
     expect(await contents(crossKv)).toEqual({ type, values: [2, 4, 6, 8, 10, 20, 30, 40] });
 
-    // The dropped proj_out (4 elems) is the only byte loss.
-    expect(sd.totalBytes()).toBe(total - 4 * elemBytes);
+    // Nothing is dropped: the fused tensors carry their parts' bytes.
+    expect(sd.totalBytes()).toBe(total);
   });
 
   it('rejects a projection whose width is not dModel', async () => {

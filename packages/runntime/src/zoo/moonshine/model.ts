@@ -1,9 +1,11 @@
-/** The full Moonshine module tree. No constructor takes a sequence length —
- *  rope tables and cross K/V arrive as forward arguments — and one
- *  loadStateDict binds the whole checkpoint.
+/** The full Moonshine module tree, named like the HF checkpoint:
+ *  `model.encoder` and `model.decoder` under MoonshineForConditionalGeneration.
+ *  No constructor takes a sequence length — rope tables and cross K/V arrive
+ *  as forward arguments — and one loadStateDict binds the whole checkpoint.
  *
- *  The embedding weight serves as both token lookup and the tied LM head. No
- *  transposed copy exists, so tying is exact by construction. */
+ *  The decoder's embedding weight serves as both token lookup and the tied LM
+ *  head, so a checkpoint that also stores the tied `proj_out.weight` gets it
+ *  reported as unread. */
 
 import {
   argmaxDot,
@@ -16,22 +18,26 @@ import {
   type Value,
 } from '../../core/index.ts';
 import type { MoonshineConfig } from './config.ts';
-import { ConvStem } from './convStem.ts';
 import { MoonshineEncoder } from './encoder.ts';
 import { MoonshineDecoder } from './decoder.ts';
 import { transformMoonshineStateDict } from './stateDictHooks.ts';
 
-export class MoonshineModel extends nn.Module {
-  readonly embedding: nn.Embedding;
-  readonly stem: ConvStem;
+/** HF's MoonshineModel: the encoder and decoder pair. */
+export class MoonshineEncoderDecoder extends nn.Module {
   readonly encoder: MoonshineEncoder;
   readonly decoder: MoonshineDecoder;
-  constructor(readonly cfg: MoonshineConfig) {
+  constructor(cfg: MoonshineConfig) {
     super();
-    this.embedding = new nn.Embedding(cfg.vocab, cfg.dModel);
-    this.stem = new ConvStem(cfg);
     this.encoder = new MoonshineEncoder(cfg);
     this.decoder = new MoonshineDecoder(cfg);
+  }
+}
+
+export class MoonshineModel extends nn.Module {
+  readonly model: MoonshineEncoderDecoder;
+  constructor(readonly cfg: MoonshineConfig) {
+    super();
+    this.model = new MoonshineEncoderDecoder(cfg);
   }
 
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
@@ -39,15 +45,15 @@ export class MoonshineModel extends nn.Module {
   }
 
   embed(ids: readonly number[]): Value {
-    return this.embedding.forward(ids);
+    return this.model.decoder.embed_tokens.forward(ids);
   }
 
   embedFrom(ids: Value): Value {
-    return gatherRowsFrom(this.embedding.weight.value, ids);
+    return gatherRowsFrom(this.model.decoder.embed_tokens.weight.value, ids);
   }
 
   logitsLast(h: Value): Value {
-    const w = this.embedding.weight.value;
+    const w = this.model.decoder.embed_tokens.weight.value;
     if (w.shape.dtype !== h.shape.dtype) {
       throw new Error(
         `MoonshineModel.logitsLast: embedding is ${w.shape.dtype} but h is ${h.shape.dtype}`,
@@ -58,10 +64,12 @@ export class MoonshineModel extends nn.Module {
   }
 
   nextTokenId(h1: Value): Value {
-    return argmaxDot(this.embedding.weight.value, h1);
+    return argmaxDot(this.model.decoder.embed_tokens.weight.value, h1);
   }
 
   forward(): Value {
-    throw new Error('MoonshineModel: use stem/encoder/decoder forwards, embed() and logitsLast()');
+    throw new Error(
+      'MoonshineModel: use model.encoder/model.decoder forwards, embed() and logitsLast()',
+    );
   }
 }
