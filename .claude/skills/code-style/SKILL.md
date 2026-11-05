@@ -42,7 +42,12 @@ Short bad/good pairs are in [examples.md](examples.md).
 - Keep logic in pure functions: data in, result out. The code that runs
   the GPU, fetches files or holds state calls them.
 - Match the file: naming, error messages, how options and defaults are
-  destructured. If you see a better way, do not mix two styles: change
+  destructured.
+- A model's module fields mirror the checkpoint's tensor names, in its
+  case and nesting (`self_attn`, `LayerNorm`, `model.decoder`), so a
+  parameter's path is its state-dict key. Only derived tensors (a fused
+  `qkv`, a CPU-computed table) take a name of their own, under the
+  checkpoint-named parent. If you see a better way, do not mix two styles: change
   every place in its own PR, or suggest it and leave it.
 - Keep a concept in one place. Two copies of the same logic drift apart.
 
