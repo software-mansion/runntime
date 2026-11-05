@@ -1,16 +1,16 @@
 /** Lazy reshaping helpers for `transformStateDict` hooks: concatenate, split,
- *  permute, scale, transpose and reshape checkpoint tensors without fetching
- *  them.
+ *  permute, scale, transpose, reshape and dequantize checkpoint tensors
+ *  without fetching them.
  *
  *  F16 sources give f16 halfwords and F32 sources give f32, except
- *  `scaleWeight`, which always gives f32. BF16 decodes to
+ *  `scaleWeight` and `dequantize`, which always give f32. BF16 decodes to
  *  f32, which is exact; a derived tensor's Uint16Array means f16, so bf16 bits
  *  have no derived form. Each output's byteLength is its share of the source
  *  bytes, so load progress still sums to the checkpoint size.
  *
- *  A QuantTensor source gives a QuantTensor: the helpers move its ints and
- *  scales together and never dequantize. Whatever would split a scale group
- *  (a column split off the group grid, a reshape of the last dim, a
+ *  A QuantTensor source gives a QuantTensor, except in `dequantize`: the
+ *  helpers move its ints and scales together. Whatever would split a scale
+ *  group (a column split off the group grid, a reshape of the last dim, a
  *  transpose) throws CHECKPOINT_MISMATCH. */
 import { RunntimeError } from '../error.ts';
 import { f16ToF32 } from './convert.ts';
@@ -383,4 +383,21 @@ export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTens
   // Every LazyTensor is a plain object whose readers close over their own
   // source, so a shallow copy shares the data and reads it the same way.
   return { ...t, shape: [...shape] };
+}
+
+/** The values of `t` as f32 in `shape`, each int times the scale of its group.
+ *  Throws CHECKPOINT_MISMATCH when the element counts differ. */
+export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): LazyTensor {
+  if (numel(shape) !== numel(t.shape)) {
+    throw mismatch('dequantize', `cannot give [${t.shape.join(', ')}] shape [${shape.join(', ')}]`);
+  }
+  return derivedTensor(
+    [...shape],
+    async () => {
+      const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
+      const f32 = toF32(scales);
+      return Float32Array.from(ints, (q, i) => q * f32[Math.floor(i / t.groupSize)]!);
+    },
+    t.byteLength,
+  );
 }

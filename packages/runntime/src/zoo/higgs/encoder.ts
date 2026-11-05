@@ -147,8 +147,9 @@ class FeatureProjection extends nn.Module {
 
 /** HuBERT's conv position embedding: a grouped conv with weight norm, as one
  *  conv per group of channels, then GELU. An even kernel pads one frame less
- *  on the right, the frame torch cuts. The load folds the weight norm and
- *  splits the weight and bias into the groups. */
+ *  on the right, the frame torch cuts. The load folds the weight norm, or
+ *  takes the checkpoint's folded weight, and splits the weight and bias into
+ *  the groups. */
 class PositionConv extends nn.Module {
   readonly convs: nn.ModuleList<nn.Conv1d>;
   constructor(
@@ -172,9 +173,23 @@ class PositionConv extends nn.Module {
     );
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    const bias = take(sd, prefix, 'conv.bias');
+    const { hidden, groups } = this;
+    const width = hidden / groups;
+    const sizes = Array<number>(groups).fill(width);
+    const weights = splitRows(this.weight(sd, prefix), sizes);
+    const biases = splitRows(bias, sizes);
+    for (let i = 0; i < groups; i++) {
+      sd.tensors.set(at(prefix, `convs.${i}.weight`), weights[i]!);
+      sd.tensors.set(at(prefix, `convs.${i}.bias`), biases[i]!);
+    }
+  }
+  /** The checkpoint's folded weight, or its weight norm folded. Each group's
+   *  conv checks the shape of its rows. */
+  private weight(sd: LazyStateDict, prefix: string): LazyTensor {
+    if (sd.tensors.has(at(prefix, 'conv.weight'))) return take(sd, prefix, 'conv.weight');
     const g = take(sd, prefix, 'conv.parametrizations.weight.original0');
     const v = take(sd, prefix, 'conv.parametrizations.weight.original1');
-    const bias = take(sd, prefix, 'conv.bias');
     const { hidden, kernel, groups } = this;
     const width = hidden / groups;
     if (
@@ -187,13 +202,7 @@ class PositionConv extends nn.Module {
           `expected [1,1,${kernel}] and [${hidden},${width},${kernel}]`,
       );
     }
-    const sizes = Array<number>(groups).fill(width);
-    const weights = splitRows(foldWeightNorm(g, v), sizes);
-    const biases = splitRows(bias, sizes);
-    for (let i = 0; i < groups; i++) {
-      sd.tensors.set(at(prefix, `convs.${i}.weight`), weights[i]!);
-      sd.tensors.set(at(prefix, `convs.${i}.bias`), biases[i]!);
-    }
+    return foldWeightNorm(g, v);
   }
   override forward(x: Value): Value {
     const width = this.hidden / this.groups;
