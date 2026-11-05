@@ -101,7 +101,7 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
     const { cos, sin } = inp.rope[this.type];
     const window = this.type === 'sliding' ? slidingWindow : Infinity;
     const postNorm = (norm: nn.RMSNorm, y: Value, residual: Value, scale?: number) =>
-      rmsNorm(y, norm.scale.value, norm.eps, { residual, scale });
+      rmsNorm(y, norm.weight.value, norm.eps, { residual, scale });
 
     // Attention: qkv, one grouped norm for all heads, rope q and k. Columns
     // of n: q heads, then k heads, then v heads.
@@ -171,7 +171,7 @@ class Ple extends nn.Module<[Value], Value> {
    *  hidden^-½ scale is folded into the projection at load. */
   override forward(x: Value): Value {
     const norm = this.per_layer_projection_norm;
-    return rmsNorm(this.per_layer_model_projection.forward(x), norm.scale.value, norm.eps, {
+    return rmsNorm(this.per_layer_model_projection.forward(x), norm.weight.value, norm.eps, {
       group: this.cfg.pleDim,
     });
   }

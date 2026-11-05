@@ -86,7 +86,7 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
     const { hidden, heads, headDim: d, eps } = this.cfg;
     const w = heads * d;
     const postNorm = (norm: nn.RMSNorm, y: Value, residual: Value) =>
-      rmsNorm(y, norm.scale.value, norm.eps, { residual });
+      rmsNorm(y, norm.weight.value, norm.eps, { residual });
 
     // One grouped norm for every head, then q and k roped in one dispatch.
     const qkv = this.qkv.forward(this.input_layernorm.forward(x));

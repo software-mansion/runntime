@@ -87,7 +87,7 @@ class FeedForward extends nn.Module<[Value], Value> {
   override forward(x: Value): Value {
     const h = silu(this.ffw_layer_1.forward(this.pre_layer_norm.forward(x)));
     const post = this.post_layer_norm;
-    return rmsNorm(this.ffw_layer_2.forward(h), post.scale.value, post.eps, { residual: x });
+    return rmsNorm(this.ffw_layer_2.forward(h), post.weight.value, post.eps, { residual: x });
   }
 }
 
@@ -169,7 +169,7 @@ class AudioLayer extends nn.Module<[Value], Value> {
       softcap: logitCap,
     });
     const norm = this.norm_post_attn;
-    x = rmsNorm(this.post.forward(a), norm.scale.value, norm.eps, { residual: x });
+    x = rmsNorm(this.post.forward(a), norm.weight.value, norm.eps, { residual: x });
     x = this.lconv.forward(x);
     return this.norm_out.forward(this.feed_forward2.forward(x));
   }
