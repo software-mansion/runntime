@@ -87,7 +87,8 @@ export async function encodeImage(
   const { patch, pool, headDim, ropeTheta } = model.cfg;
   const [cols, rows] = patchGrid(image.width, image.height, maxTokens, patch, pool);
   const p = cols * rows;
-  // A norm scale, not a Linear weight: a quantized weight is quantW either way.
+  // The pre-projection norm's weight, not a Linear's: a quantized Linear
+  // weight is quantW either way.
   const act =
     model.embed_vision.embedding_pre_projection_norm.shape.dtype === 'f16' ? 'f16' : 'f32';
   const upload = (data: Float32Array, r: number, dtype: 'f32' | 'f16') =>
