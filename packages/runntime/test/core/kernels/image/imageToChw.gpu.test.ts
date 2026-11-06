@@ -1,5 +1,5 @@
 import { d } from 'typegpu';
-import { describe, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import {
   createImageToChw,
   type FitMode,
@@ -176,6 +176,28 @@ describe('imageToChw kernel', () => {
     // The external texture path may go through a YUV or color conversion,
     // so allow one byte of error.
     expectClose(got, fitRef(bytes, w, h, args), { atol: 1.01 / 255, rtol: 0 });
+  });
+
+  // Work after the fit reads the image size from here: an external texture
+  // has none on the CPU.
+  it.each([
+    { name: 'a texture', external: false },
+    { name: 'an external texture', external: true },
+  ])('writes the size of $name', async ({ external }) => {
+    const [w, h] = [13, 7];
+    const bytes = randomRgba(w, h, 2);
+    let src: GPUTexture | GPUExternalTexture = sourceTexture(bytes, w, h, 'rgba8unorm');
+    if (external) {
+      const canvas = new OffscreenCanvas(w, h);
+      canvas
+        .getContext('2d')!
+        .putImageData(new ImageData(new Uint8ClampedArray(bytes), w, h), 0, 0);
+      const frame = new VideoFrame(canvas, { timestamp: 0 });
+      onTestFinished(() => frame.close());
+      src = root.device.importExternalTexture({ source: frame });
+    }
+    await run(src, { ...PLAIN, mode: 'stretch', outW: 4, outH: 4 });
+    expect(await imageToChw.size.read()).toEqual([w, h]);
   });
 
   // The kernel is the GPU twin of the CPU preprocessor: both must give the
