@@ -14,8 +14,9 @@ describe('attnFlash kernel', () => {
   // flash: qLen > 1, subgroups, headDim % 16 == 0. Picked in
   // gpu/dispatch/attention.ts before every other prefill route.
 
-  // 8 lanes per row when headDim % 32 == 0, 4 otherwise. Keys per block: 32,
-  // or 16 for f32 heads wider than 32, fewer past 128.
+  // 8 lanes per row when headDim % 32 == 0, 4 otherwise. Keys per block: 8
+  // with 8 lanes, 32 with 4 (16 for f32 heads wider than 32), fewer past 128.
+  // Two query heads on one kv head share a workgroup with 8 lanes up to 128.
   const HEAD_DIMS = [
     { headDim: 16, lanes: 4 },
     { headDim: 32, lanes: 8 },
@@ -126,7 +127,7 @@ describe('attnFlash kernel', () => {
     { name: 'no subgroups (rows)', c: { qLen: 37, kvLen: 37, qHeads: 2, kvHeads: 1, headDim: 64 } },
   ])('$name: headDim 64', ({ c }) => checkSdpa(withoutSubgroups, c));
 
-  // Known bug: flash dispatches [ceil(qLen / 16), qHeads] workgroups with no
+  // Known bug: flash dispatches ceil(qLen / 16) workgroups of rows with no
   // 2-D split, so past 65535 × 16 rows its grid passes the per-dimension
   // limit: the dispatch fails validation and the output comes back all 0,
   // with no error. The batch fallback only checks row-heads past

@@ -1,8 +1,9 @@
 /** Prefill attention (more than one query row) for head sizes that are a
  *  multiple of 16. Needs subgroups.
  *
- *  A workgroup handles 16 rows of one head. It loads a block of keys and
- *  values into workgroup memory once, and all 16 rows use it. Each row is
+ *  A workgroup handles 16 rows of one head, or of two heads that share a kv
+ *  head. It loads a block of keys and values into workgroup memory once, and
+ *  all its rows use it. Each row is
  *  split across 4 or 8 lanes, which add up q·k with subgroup shuffles.
  *  Windows, segments, sinks and the key bias work as in the rows kernel.
  *
@@ -64,14 +65,29 @@ export function attnFlashLanes(headDim: number): number {
   return headDim % 32 === 0 ? 8 : headDim % 16 === 0 ? 4 : 0;
 }
 
-/** Bytes of one key or value tile for heads past 128. */
+/** Widest head whose q, output and scores stay in registers. */
+const REGISTER_HEAD_DIM = 128;
+
+/** Bytes of one key or value tile for heads past REGISTER_HEAD_DIM. */
 const TILE_BYTES = 8192;
 
-/** Keys per block, so the key and value tiles fit in 16 KiB of workgroup
- *  memory: 32, 16 for f32 heads wider than 32, fewer for heads past 128. */
+/** Keys per block: 8 with 8 lanes, which keeps the scores in registers, and
+ *  32 with 4 lanes, 16 for f32 heads wider than 32. Wider heads take fewer,
+ *  so the key and value tiles fit in workgroup memory. */
 function tileKeys(headDim: number, f16: boolean): number {
-  if (headDim > 128) return Math.max(1, Math.floor(TILE_BYTES / (headDim * (f16 ? 2 : 4))));
+  if (headDim > REGISTER_HEAD_DIM) {
+    return Math.max(1, Math.floor(TILE_BYTES / (headDim * (f16 ? 2 : 4))));
+  }
+  if (attnFlashLanes(headDim) === 8) return 8;
   return !f16 && headDim > 32 ? 16 : 32;
+}
+
+/** q heads per workgroup: 2 when they come in pairs that share a kv head, so
+ *  every key and value read from workgroup memory feeds both. Only with 8
+ *  lanes and heads up to REGISTER_HEAD_DIM, where both fit in registers. */
+function headsPerGroup(qHeads: number, kvHeads: number, headDim: number): number {
+  const pairs = Math.floor(qHeads / kvHeads) % 2 === 0;
+  return pairs && attnFlashLanes(headDim) === 8 && headDim <= REGISTER_HEAD_DIM ? 2 : 1;
 }
 
 function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
@@ -85,6 +101,7 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
   const tileK = tileKeys(hd, f16);
   const lanes = TILE_Q * lpq;
   const group = Math.floor(qHeads / kvHeads);
+  const hp = headsPerGroup(qHeads, kvHeads, hd);
   const packed = (cfg.qkvPacked ?? 0) > 0;
   const qStride4 = packed ? (qHeads + 2 * kvHeads) * hd4 : qHeads * hd4;
   const kvStride4 = packed ? qStride4 : kvHeads * hd4;
@@ -111,9 +128,9 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
   })(({ lid, wid }) => {
     'use gpu';
     const D = L.$.dims;
-    const h = wid.y;
-    const kvh = d.u32(h / group);
-    const qSub = d.u32(lid / lpq);
+    const h0 = wid.y * hp;
+    const kvh = std.intdiv(h0, group);
+    const qSub = std.intdiv(lid, lpq);
     const lane = lid % lpq;
     const row = wid.x * TILE_Q + qSub;
     const rowValid = row < D.qLen;
@@ -138,25 +155,28 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
       }
     }
 
-    const qBase4 = rowC * qStride4 + h * hd4 + lane * slice;
-    const qr = d.arrayOf(d.vec4f, slice)();
-    const o = d.arrayOf(d.vec4f, slice)();
-    for (const c of tgpu.unroll(std.range(slice))) {
-      qr[c] = d.vec4f(L.$.q[qBase4 + c]!);
+    // Head j of the workgroup holds q, out and scores at j·slice and j·tileK.
+    const qBase4 = rowC * qStride4 + h0 * hd4 + lane * slice;
+    const qr = d.arrayOf(d.vec4f, hp * slice)();
+    const o = d.arrayOf(d.vec4f, hp * slice)();
+    const m = d.arrayOf(d.f32, hp)();
+    const l = d.arrayOf(d.f32, hp)();
+    for (const j of tgpu.unroll(std.range(hp))) {
+      for (const c of tgpu.unroll(std.range(slice))) {
+        qr[j * slice + c] = d.vec4f(L.$.q[qBase4 + j * hd4 + c]!);
+      }
+      m[j] = d.f32(NEG_SEED);
+      if (hasSinks > 0) {
+        m[j] = L.$.sinks[h0 + j]! * LN2;
+        l[j] = d.f32(1);
+      }
     }
 
-    let m = d.f32(NEG_SEED);
-    let l = d.f32(0);
-    if (hasSinks > 0) {
-      m = L.$.sinks[h]! * LN2;
-      l = d.f32(1);
-    }
-
-    const s = d.arrayOf(d.f32, tileK)();
+    const s = d.arrayOf(d.f32, hp * tileK)();
     for (let t0 = kStart; t0 < kStop; t0 += tileK) {
       std.workgroupBarrier();
       for (let i = lid; i < tileK * hd4; i += lanes) {
-        const kj = t0 + d.u32(i / hd4);
+        const kj = t0 + std.intdiv(i, hd4);
         const col = i % hd4;
         let kv = d.vec4f();
         let vv = d.vec4f();
@@ -176,51 +196,79 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
       }
       std.workgroupBarrier();
 
-      let tileMax = d.f32(MASKED);
+      // Each key and value read from workgroup memory feeds every head.
+      const part = d.arrayOf(d.f32, hp)();
+      const tileMax = d.arrayOf(d.f32, hp)();
+      for (const j of tgpu.unroll(std.range(hp))) {
+        tileMax[j] = d.f32(MASKED);
+      }
       for (const kk of tgpu.unroll(std.range(tileK))) {
-        let part = d.f32(0);
-        for (const c of tgpu.unroll(std.range(slice))) {
-          part += std.dot(qr[c]!, d.vec4f(kTile.$[kk * hd4 + lane * slice + c]!));
+        for (const j of tgpu.unroll(std.range(hp))) {
+          part[j] = d.f32(0);
         }
-        part += std.subgroupShuffleXor(part, 1);
-        part += std.subgroupShuffleXor(part, 2);
-        if (lpq > 4) {
-          part += std.subgroupShuffleXor(part, 4);
+        for (const c of tgpu.unroll(std.range(slice))) {
+          const kv = d.vec4f(kTile.$[kk * hd4 + lane * slice + c]!);
+          for (const j of tgpu.unroll(std.range(hp))) {
+            part[j] = part[j]! + std.dot(qr[j * slice + c]!, kv);
+          }
         }
         const kj = t0 + kk;
-        if (hasKeyBias > 0) {
-          part += keyBiasAt(kj, D.biasStart, D.biasEnd, D.bias);
+        const seen = kj >= band.x && kj < band.y;
+        for (const j of tgpu.unroll(std.range(hp))) {
+          let x = part[j]!;
+          x += std.subgroupShuffleXor(x, 1);
+          x += std.subgroupShuffleXor(x, 2);
+          if (lpq > 4) {
+            x += std.subgroupShuffleXor(x, 4);
+          }
+          if (hasKeyBias > 0) {
+            x += keyBiasAt(kj, D.biasStart, D.biasEnd, D.bias);
+          }
+          s[j * tileK + kk] = std.select(d.f32(MASKED), x, seen);
+          tileMax[j] = std.max(tileMax[j]!, s[j * tileK + kk]!);
         }
-        s[kk] = std.select(d.f32(MASKED), part, kj >= band.x && kj < band.y);
-        tileMax = std.max(tileMax, s[kk]!);
       }
-      const mNew = std.max(m, tileMax);
-      const corr = std.exp(m - mNew);
-      let pSum = d.f32(0);
-      for (const kk of tgpu.unroll(std.range(tileK))) {
-        const p = std.select(d.f32(0), std.exp(s[kk]! - mNew), s[kk]! > d.f32(MASKED));
-        s[kk] = p;
-        pSum += p;
-      }
-      l = l * corr + pSum;
-      m = mNew;
-      for (const c of tgpu.unroll(std.range(slice))) {
-        let acc = o[c]! * corr;
+      const corr = d.arrayOf(d.f32, hp)();
+      for (const j of tgpu.unroll(std.range(hp))) {
+        const mNew = std.max(m[j]!, tileMax[j]!);
+        corr[j] = std.exp(m[j]! - mNew);
+        let pSum = d.f32(0);
         for (const kk of tgpu.unroll(std.range(tileK))) {
-          acc += s[kk]! * d.vec4f(vTile.$[kk * hd4 + lane * slice + c]!);
+          const sk = s[j * tileK + kk]!;
+          const p = std.select(d.f32(0), std.exp(sk - mNew), sk > d.f32(MASKED));
+          s[j * tileK + kk] = p;
+          pSum += p;
         }
-        o[c] = d.vec4f(acc);
+        l[j] = l[j]! * corr[j]! + pSum;
+        m[j] = mNew;
+      }
+      for (const c of tgpu.unroll(std.range(slice))) {
+        const acc = d.arrayOf(d.vec4f, hp)();
+        for (const j of tgpu.unroll(std.range(hp))) {
+          acc[j] = o[j * slice + c]! * corr[j]!;
+        }
+        for (const kk of tgpu.unroll(std.range(tileK))) {
+          const vv = d.vec4f(vTile.$[kk * hd4 + lane * slice + c]!);
+          for (const j of tgpu.unroll(std.range(hp))) {
+            acc[j] = acc[j]! + s[j * tileK + kk]! * vv;
+          }
+        }
+        for (const j of tgpu.unroll(std.range(hp))) {
+          o[j * slice + c] = d.vec4f(acc[j]!);
+        }
       }
     }
 
     if (rowValid) {
-      const invL = std.select(d.f32(0), 1 / l, l > 0);
-      const oBase4 = row * qHeads * hd4 + h * hd4 + lane * slice;
-      for (const c of tgpu.unroll(std.range(slice))) {
-        if (f16) {
-          L.$.out[oBase4 + c] = d.vec4h(o[c]! * invL) as unknown as d.v4f;
-        } else {
-          L.$.out[oBase4 + c] = d.vec4f(o[c]! * invL);
+      const oBase4 = row * qHeads * hd4 + h0 * hd4 + lane * slice;
+      for (const j of tgpu.unroll(std.range(hp))) {
+        const invL = std.select(d.f32(0), 1 / l[j]!, l[j]! > 0);
+        for (const c of tgpu.unroll(std.range(slice))) {
+          if (f16) {
+            L.$.out[oBase4 + j * hd4 + c] = d.vec4h(o[j * slice + c]! * invL) as unknown as d.v4f;
+          } else {
+            L.$.out[oBase4 + j * hd4 + c] = d.vec4f(o[j * slice + c]! * invL);
+          }
         }
       }
     }
@@ -232,11 +280,19 @@ export function createAttnFlashPipeline(root: TgpuRoot, cfg: AttnGeoCfg, elem: E
   return root.createComputePipeline({ compute: makeAttnFlashKernel(cfg, elem) });
 }
 
-/** One workgroup per 16 rows of one head. */
+/** One workgroup per 16 rows of one head, or of two heads that share a kv head. */
 export function attnFlashHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnFlashPipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; keyBias?: KeyBias },
+  args: {
+    qLen: number;
+    kvLen: number;
+    qPosOffset: number;
+    qHeads: number;
+    kvHeads: number;
+    headDim: number;
+    keyBias?: KeyBias;
+  },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -262,5 +318,8 @@ export function attnFlashHandle(
     segs: buffers.segs ?? filler,
     dims,
   });
-  return makeHandle(pipeline, 'attnFlash', bindGroup, [Math.ceil(args.qLen / TILE_Q), args.qHeads]);
+  return makeHandle(pipeline, 'attnFlash', bindGroup, [
+    Math.ceil(args.qLen / TILE_Q),
+    args.qHeads / headsPerGroup(args.qHeads, args.kvHeads, args.headDim),
+  ]);
 }
