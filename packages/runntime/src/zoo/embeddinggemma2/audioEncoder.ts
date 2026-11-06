@@ -195,7 +195,8 @@ export async function encodeAudio(
   const { mels } = model.cfg;
   const tokens = audioTokens(samples.length);
   const frames = frameCount(samples.length);
-  const act = model.input_proj.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
+  // A norm scale, not a Linear weight: a quantized weight is quantW either way.
+  const act = model.embedding_pre_projection_norm.scale.shape.dtype === 'f16' ? 'f16' : 'f32';
   const patches = convPatches(logMel(samples, frames, mels), frames, mels);
   const taps = convTaps(Math.ceil(frames / 2), mels / 2);
   const inputs: EmbeddingGemma2AudioInputs = {
