@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACT_CODE, conv1d, gluConv1d } from '../../../../../src/core/graph/ops.ts';
-import { input, meta } from '../../values.ts';
+import { input, meta, quantWeight } from '../../values.ts';
 
 // x is time-major [T, C_in]; w is tap-major [kernelSize·C_in, C_out]
 const T = 10;
@@ -34,8 +34,60 @@ describe('conv1d', () => {
     const bias = input([COUT]);
     const c = conv1d(x, w, { kernelSize: 3, stride: 1, bias, activation: 'gelu' });
     expect(c.pending?.inputs).toEqual([x, w, bias]);
-    // attrs: kernel, stride, padLeft, padRight, hasBias, act, dilation
-    expect(c.pending?.attrs?.slice(4)).toEqual([1, ACT_CODE.gelu, 1]);
+    // attrs: kernel, stride, padLeft, padRight, hasBias, act, dilation, bits,
+    // groupSize
+    expect(c.pending?.attrs?.slice(4)).toEqual([1, ACT_CODE.gelu, 1, 0, 0]);
+  });
+
+  it('takes a quantW weight with its scales before the bias', () => {
+    const w = quantWeight(3 * 8, 4, 8);
+    const scales = input([2, 4]);
+    const bias = input([4]);
+    const c = conv1d(input([T, 8]), w, {
+      kernelSize: 3,
+      stride: 1,
+      bias,
+      scales,
+      bits: 8,
+      groupSize: 4,
+    });
+    expect(c.shape).toEqual(meta([8, 4]));
+    expect(c.pending?.inputs).toEqual([expect.anything(), w, scales, bias]);
+    expect(c.pending?.attrs?.slice(7)).toEqual([8, 4]);
+  });
+
+  it.each([
+    {
+      name: 'a quantW weight without scales',
+      opts: { bits: 8 as const, groupSize: 4 },
+      err: /quantW weights need scales, bits and groupSize/,
+    },
+    {
+      name: 'C_in not a multiple of groupSize',
+      opts: { scales: input([2, 4]), bits: 8 as const, groupSize: 12 },
+      err: /C_in a multiple of groupSize/,
+    },
+    {
+      name: 'kernelSize·C_in not a multiple of 8',
+      x: input([T, 4]),
+      w: quantWeight(3 * 4, 4, 8),
+      opts: { scales: input([1, 4]), bits: 8 as const, groupSize: 4 },
+      err: /kernelSize·C_in a multiple of 8/,
+    },
+    {
+      name: 'scales of the wrong size',
+      opts: { scales: input([1, 4]), bits: 8 as const, groupSize: 4 },
+      err: /scales must be f32 \[C_in\/groupSize, C_out\] = \[2, 4\]/,
+    },
+  ])('refuses $name', ({ x = input([T, 8]), w = quantWeight(3 * 8, 4, 8), opts, err }) => {
+    expect(() => conv1d(x, w, { kernelSize: 3, stride: 1, ...opts })).toThrow(err);
+  });
+
+  it('refuses scales on a float weight', () => {
+    const w = weight(3);
+    expect(() =>
+      conv1d(x, w, { kernelSize: 3, stride: 1, scales: input([1, COUT]), bits: 8, groupSize: 4 }),
+    ).toThrow(/scales\/bits\/groupSize apply to quantW weights only/);
   });
 
   it('widens the window by the dilation', () => {

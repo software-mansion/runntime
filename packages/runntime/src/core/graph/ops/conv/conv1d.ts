@@ -1,5 +1,9 @@
 import { pending, Value } from '../../value.ts';
-import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from '../shared.ts';
+import {
+  MATMUL_QUANT_TILED_BK,
+  matmulQuantTiledEligible,
+} from '../../../kernels/matmul/matmulQuantTiled.ts';
+import { ACT_CODE, FLOAT_DTYPES, want2d, wantQuantW, type SlotAct } from '../shared.ts';
 
 /** Strided, dilated 1-D convolution over time-major [T_in, C_in], with w
  *  tap-major [kernelSize·C_in, C_out]. Tap j reads frame j·dilation of the
@@ -10,7 +14,11 @@ import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from '../shared.ts';
  *  Passing both is an error, and every pad must stay below the span — an
  *  output frame computed from padding alone is a model bug.
  *
- *  `bias` and `activation` fold into the epilogue as act(conv + bias). */
+ *  `bias` and `activation` fold into the epilogue as act(conv + bias).
+ *
+ *  A quantW w takes f32 `scales` [C_in / groupSize, C_out], `bits` and
+ *  `groupSize`: each group of groupSize input channels has one scale per
+ *  output channel, shared by every tap. */
 export function conv1d(
   x: Value,
   w: Value,
@@ -23,17 +31,44 @@ export function conv1d(
     padRight?: number;
     bias?: Value;
     activation?: SlotAct;
+    scales?: Value;
+    bits?: 8 | 4;
+    groupSize?: number;
   },
 ): Value {
-  const { kernelSize, stride, padding, bias, activation } = opts;
+  const { kernelSize, stride, padding, bias, activation, scales, bits, groupSize } = opts;
   const dilation = opts.dilation ?? 1;
   if (padding !== undefined && (opts.padLeft !== undefined || opts.padRight !== undefined)) {
     throw new Error('conv1d: padding excludes padLeft/padRight — give one form or the other');
   }
   const [tIn, cIn, dtype] = want2d('conv1d', x, FLOAT_DTYPES);
-  const [wRows, cOut, wDtype] = want2d('conv1d.w', w, FLOAT_DTYPES);
-  if (wDtype !== dtype) {
-    throw new Error(`conv1d: weight dtype ${wDtype} must match the input's ${dtype}`);
+  const quant = w.shape.dtype === 'quantW';
+  let wRows: number;
+  let cOut: number;
+  if (quant) {
+    if (!scales || !bits || !groupSize) {
+      throw new Error('conv1d: quantW weights need scales, bits and groupSize');
+    }
+    [wRows, cOut] = wantQuantW('conv1d', w, scales, bits);
+    if (!matmulQuantTiledEligible(kernelSize * cIn, cOut, groupSize, cIn)) {
+      throw new Error(
+        `conv1d: a quantW weight needs groupSize a multiple of 4, C_in a multiple of groupSize, kernelSize·C_in a multiple of ${MATMUL_QUANT_TILED_BK} and C_out of 4, got C_in ${cIn}, C_out ${cOut}, groupSize ${groupSize}`,
+      );
+    }
+    if (scales.shape.elems !== (cIn / groupSize) * cOut) {
+      throw new Error(
+        `conv1d: scales must be f32 [C_in/groupSize, C_out] = [${cIn / groupSize}, ${cOut}]`,
+      );
+    }
+  } else {
+    if (scales || bits || groupSize) {
+      throw new Error('conv1d: scales/bits/groupSize apply to quantW weights only');
+    }
+    let wDtype: string;
+    [wRows, cOut, wDtype] = want2d('conv1d.w', w, FLOAT_DTYPES);
+    if (wDtype !== dtype) {
+      throw new Error(`conv1d: weight dtype ${wDtype} must match the input's ${dtype}`);
+    }
   }
   if (!Number.isInteger(kernelSize) || kernelSize < 1 || !Number.isInteger(stride) || stride < 1) {
     throw new Error(
@@ -86,9 +121,9 @@ export function conv1d(
   return pending(
     { elems: tOut * cOut, dtype, dims: [tOut, cOut] },
     'conv1d',
-    [x, w, ...(bias ? [bias] : [])],
+    [x, w, ...(scales ? [scales] : []), ...(bias ? [bias] : [])],
     undefined,
-    [kernelSize, stride, padLeft, padRight, bias ? 1 : 0, act, dilation],
+    [kernelSize, stride, padLeft, padRight, bias ? 1 : 0, act, dilation, bits ?? 0, groupSize ?? 0],
   );
 }
 

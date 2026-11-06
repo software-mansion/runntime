@@ -69,6 +69,25 @@ export function want2d<D extends EagerDtype>(
   return [dims[0]!, dims[1]!, dtype];
 }
 
+/** The [rows, cols] of a 2D quantW weight with its f32 `scales`, checked
+ *  against `bits`: int8 packs 4 columns to a word, int4 8. */
+export function wantQuantW(name: string, w: Value, scales: Value, bits: number): [number, number] {
+  const wd = w.shape.dims;
+  if (!wd || wd.length !== 2) throw new Error(`${name}: quantW weight must be 2D`);
+  if (scales.shape.dtype !== 'f32') throw new Error(`${name}: scales must be f32`);
+  const [r, n] = [wd[0]!, wd[1]!];
+  if (bits !== 8 && bits !== 4) throw new Error(`${name}: bits must be 8 or 4, got ${bits}`);
+  const perU32 = bits === 8 ? 4 : 8;
+  if (n % perU32 !== 0)
+    throw new Error(`${name}: cols ${n} must be divisible by ${perU32} for int${bits} packing`);
+  if (w.shape.elems !== (r * n) / perU32) {
+    throw new Error(
+      `${name}: quantW weight elems ${w.shape.elems} != rows*cols/${perU32} = ${(r * n) / perU32} words`,
+    );
+  }
+  return [r, n];
+}
+
 /** wantND flattened to [c, h, w, dtype]. */
 export function want3d<D extends EagerDtype>(
   name: string,

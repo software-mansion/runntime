@@ -443,8 +443,9 @@ function unpackInt4(bytes: Uint8Array): Int8Array {
 
 /** The int weight `name` paired with its F16 `scale`, checked against the
  *  file's quantization setting. bits 8 needs I8; bits 4 needs U8, where U8
- *  means packed bytes of two signed nibbles, not unsigned values. Any other
- *  pairing throws CHECKPOINT_MISMATCH. */
+ *  means packed bytes of two signed nibbles, not unsigned values. A setting
+ *  without bits or groupSize takes them from the dtype and the scale's shape.
+ *  Any other pairing throws CHECKPOINT_MISMATCH. */
 function fileQuantTensor(
   name: string,
   info: SafeTensorInfo,
@@ -455,14 +456,22 @@ function fileQuantTensor(
   const bad = (why: string): never => {
     throw new RunntimeError('CHECKPOINT_MISMATCH', `safetensors: quantized tensor ${name} ${why}`);
   };
-  const { bits, groupSize } = quant;
+  const bits = quant.bits ?? (info.dtype === 'I8' ? 8 : 4);
   const dtype = bits === 8 ? 'I8' : 'U8';
   if (info.dtype !== dtype) bad(`is ${info.dtype}, but int${bits} is stored as ${dtype}`);
   if (info.shape.length !== 2) bad(`needs a 2D shape, got [${info.shape.join(', ')}]`);
   const out = info.shape[0]!;
   const cols = bits === 8 ? info.shape[1]! : info.shape[1]! * 2;
-  if (cols % groupSize !== 0) bad(`has ${cols} columns, not a multiple of groupSize ${groupSize}`);
   if (!scale) return bad(`has no ${name}_scale`);
+  const groups = scale.shape.length === 2 ? scale.shape[1]! : 0;
+  const groupSize = quant.groupSize ?? cols / groups;
+  if (!Number.isInteger(groupSize) || groupSize <= 0) {
+    bad(
+      `needs an F16 ${name}_scale [${out}, groups] with groups dividing ${cols}, ` +
+        `got ${scale.dtype} [${scale.shape.join(', ')}]`,
+    );
+  }
+  if (cols % groupSize !== 0) bad(`has ${cols} columns, not a multiple of groupSize ${groupSize}`);
   const scaleShape = [out, cols / groupSize];
   if (scale.dtype !== 'F16' || scale.shape.join() !== scaleShape.join()) {
     bad(
@@ -577,14 +586,17 @@ function bf16Tensor(bits: Uint16Array, shape: number[]): FileTensor {
 }
 
 /** Metadata key of a quantized file: a JSON string
- *  `{"version":1,"bits":8|4,"groupSize":N,"scheme":"symmetric"}`. */
+ *  `{"version":1,"bits":8|4,"groupSize":N,"scheme":"symmetric"}`. bits and
+ *  groupSize are optional: without them, each int weight's bits come from its
+ *  dtype and its groupSize from its scale's shape. */
 const QUANT_METADATA_KEY = 'runntime.quant';
 
 /** How a quantized file stores its int weights: `bits` per value, one f16
- *  scale per `groupSize` values along each row. */
+ *  scale per `groupSize` values along each row. A field the file leaves out
+ *  comes from each tensor. */
 interface QuantConfig {
-  bits: 4 | 8;
-  groupSize: number;
+  bits?: 4 | 8;
+  groupSize?: number;
 }
 
 /** The file's quantization setting, or undefined for a float file. Throws
@@ -610,8 +622,11 @@ function quantConfigOf(metadata: Record<string, string>): QuantConfig | undefine
   }
   const { version, bits, groupSize, scheme } = json as Record<string, unknown>;
   if (version !== 1) return bad('has a version other than 1');
-  if (bits !== 4 && bits !== 8) return bad('needs bits 4 or 8');
-  if (typeof groupSize !== 'number' || !Number.isSafeInteger(groupSize) || groupSize <= 0) {
+  if (bits !== undefined && bits !== 4 && bits !== 8) return bad('needs bits 4 or 8');
+  if (
+    groupSize !== undefined &&
+    (typeof groupSize !== 'number' || !Number.isSafeInteger(groupSize) || groupSize <= 0)
+  ) {
     return bad('needs a positive integer groupSize');
   }
   if (scheme !== 'symmetric') return bad("needs scheme 'symmetric'");

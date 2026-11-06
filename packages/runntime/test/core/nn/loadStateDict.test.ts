@@ -275,8 +275,8 @@ describe('a quantized tensor', () => {
     await expect(load(new NotLinear(), { weight: quant }, upload)).rejects.toMatchObject({
       code: 'CHECKPOINT_MISMATCH',
       message:
-        "loadStateDict: 'weight' is quantized (int8), but only a Linear weight loads quantized " +
-        `and this parameter holds ${dtype}`,
+        "loadStateDict: 'weight' is quantized (int8), but only a Linear, Conv1d or " +
+        `ConvTranspose1d weight loads quantized and this parameter holds ${dtype}`,
     });
     expect(upload).not.toHaveBeenCalled();
     expect(ints).not.toHaveBeenCalled();

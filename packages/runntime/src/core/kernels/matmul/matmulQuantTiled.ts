@@ -3,7 +3,13 @@
  *  f32 group scales. a, bias, addend and out are f16 or f32; sums are f32.
  *
  *  Each step unpacks a slice of W into workgroup memory as floats, so the
- *  inner loop is a plain float matmul with matmulTiledVec4's tiling. */
+ *  inner loop is a plain float matmul with matmulTiledVec4's tiling. A
+ *  loader reads a, so conv1d runs on this kernel too.
+ *
+ *  Row k of W uses scale row (k mod period) / groupSize. For a Linear, period
+ *  is K. For a conv, K holds the input channels of each tap in turn and
+ *  period is the input channel count, so a group of channels has one scale
+ *  for all taps. */
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
@@ -11,6 +17,7 @@ import { type KernelHandle, makeHandle } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
+import { type LoadA, stridedLoadA } from './matmulTiledVec4.ts';
 import {
   columnWord,
   deqRow,
@@ -18,7 +25,7 @@ import {
   type MatmulQuantCfg,
 } from '../quantCommon.ts';
 
-const Dims = d.struct({ m: d.u32 });
+const Dims = d.struct({ m: d.u32, aRows: d.u32 });
 
 function makeLayout(elem: Elem) {
   return tgpu.bindGroupLayout({
@@ -42,6 +49,21 @@ function layoutFor(elem: Elem): ReturnType<typeof makeLayout> {
   return l;
 }
 
+const loadASlot = tgpu.slot<LoadA>();
+
+/** The layout every pipeline of this kernel binds, so a loader can read a and
+ *  aRows. */
+export function matmulQuantTiledLayout(elem: Elem): ReturnType<typeof makeLayout> {
+  return layoutFor(elem);
+}
+
+export interface MatmulQuantTiledCfg extends MatmulQuantCfg {
+  /** Distance between rows of a, in values. K when omitted. */
+  aStride?: number;
+  /** Rows of W after which the scale rows start again. K when omitted. */
+  period?: number;
+}
+
 // Each workgroup computes a BM×BN tile of out, each thread TM rows × TN
 // groups of 4 columns.
 const BM = 32;
@@ -53,13 +75,20 @@ const TN = 1;
 export const MATMUL_QUANT_TILED_BK = 8;
 const BK = MATMUL_QUANT_TILED_BK;
 
-/** Whether a [M,K]·[K,N] quantW matmul can use this kernel. */
-export function matmulQuantTiledEligible(k: number, n: number, groupSize: number): boolean {
-  return k % BK === 0 && n % 4 === 0 && groupSize % 4 === 0 && k % groupSize === 0;
+/** Whether a [M,K]·[K,N] quantW matmul with scale period `period` can use
+ *  this kernel. */
+export function matmulQuantTiledEligible(
+  k: number,
+  n: number,
+  groupSize: number,
+  period = k,
+): boolean {
+  return k % BK === 0 && n % 4 === 0 && groupSize % 4 === 0 && period % groupSize === 0;
 }
 
-function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
+function makeMatmulQuantTiledKernel(cfg: MatmulQuantTiledCfg, elem: Elem) {
   const { k, n, bits, groupSize, hasBias, hasAdd } = cfg;
+  const period = cfg.period ?? k;
   const layout = layoutFor(elem);
   const storeVec4 = elem.vec4;
   const bk4 = BK / 4;
@@ -99,7 +128,7 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
           const am = mBase + std.intdiv(e, bk4);
           let v = storeVec4();
           if (am < m) {
-            v = storeVec4(layout.$.a[am * k4 + t * bk4 + (e % bk4)]!);
+            v = storeVec4(loadASlot.$(am, t * bk4 + (e % bk4)));
           }
           tileA.$[e] = storeVec4(v);
         }
@@ -120,7 +149,8 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
               bk % 4,
               bits,
             );
-            wv = storeVec4(q * layout.$.scales[std.intdiv(bk, groupSize) * n4 + bc4]!);
+            const row = std.intdiv(bk % period, groupSize);
+            wv = storeVec4(q * layout.$.scales[row * n4 + bc4]!);
           }
           tileB.$[e] = storeVec4(wv);
         }
@@ -170,18 +200,23 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
   });
 }
 
-/** One pipeline per dtype, K, N, bits, group size, epilogue and activation. */
+/** One pipeline per dtype, K, N, bits, group size, scale period, loader,
+ *  epilogue and activation. `loadA` reads a; by default it reads rows
+ *  aStride apart. */
 export function createMatmulQuantTiledPipeline(
   root: TgpuRoot,
-  cfg: MatmulQuantCfg,
+  cfg: MatmulQuantTiledCfg,
   elem: Elem = F32_ELEM,
+  loadA: LoadA = stridedLoadA(elem, cfg.aStride ?? cfg.k, layoutFor(elem)),
 ) {
   return root
     .with(actSlot, activationFor(cfg.act))
+    .with(loadASlot, loadA)
     .createComputePipeline({ compute: makeMatmulQuantTiledKernel(cfg, elem) });
 }
 
-/** One workgroup per 32×32 output tile. */
+/** One workgroup per 32×32 output tile. aRows is how many rows a's buffer
+ *  holds, for loaders that bound-check it. */
 export function matmulQuantTiledHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createMatmulQuantTiledPipeline>,
@@ -189,8 +224,9 @@ export function matmulQuantTiledHandle(
   n: number,
   buffers: MatmulQuantBuffers,
   elem: Elem = F32_ELEM,
+  aRows = m,
 ): KernelHandle {
-  const dims = cachedUniform(root, Dims, { m });
+  const dims = cachedUniform(root, Dims, { m, aRows });
   // Absent epilogue operands alias `a`; those pipelines never read them.
   const bindGroup = cachedBindGroup(root, layoutFor(elem), {
     ...buffers,

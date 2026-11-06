@@ -4,6 +4,11 @@ import { elemFor } from '../../kernels/elem.ts';
 import { conv1dHandle, conv1dLoadA, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
 import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
 import {
+  createMatmulQuantTiledPipeline,
+  matmulQuantTiledHandle,
+  matmulQuantTiledLayout,
+} from '../../kernels/matmul/matmulQuantTiled.ts';
+import {
   createMatmulTiledVec4Pipeline,
   matmulTiledVec4Eligible,
   matmulTiledVec4Handle,
@@ -44,24 +49,19 @@ import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 
 export const conv1dSpec = defineSpec({
   attrs: (p) => {
-    const [kernel, stride, padLeft, padRight, hasBias, act, dilation] = p.attrs as [
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-    ];
-    return { kernel, stride, padLeft, padRight, hasBias, act, dilation };
+    const [kernel, stride, padLeft, padRight, hasBias, act, dilation, bits, groupSize] =
+      p.attrs as [number, number, number, number, number, number, number, number, number];
+    return { kernel, stride, padLeft, padRight, hasBias, act, dilation, bits, groupSize };
   },
   cfg: (node, attrs) => {
     const cIn = node.pending!.inputs[0]!.shape.dims![1]!;
     const cOut = node.shape.dims![1]!;
-    // An output frame reads kernel·cIn inputs, so the conv runs as the tiled
-    // matmul. Unpadded and undilated they are contiguous; otherwise
-    // conv1dLoadA maps each tap to its input frame.
-    const gemm = cIn % 4 === 0 && matmulTiledVec4Eligible(attrs.kernel * cIn, cOut);
+    // An output frame reads kernel·cIn inputs, so the conv runs as a tiled
+    // matmul: matmulQuantTiled for a quantW weight, matmulTiledVec4
+    // otherwise. Unpadded and undilated, those inputs are contiguous;
+    // otherwise conv1dLoadA finds each tap's input frame.
+    const gemm =
+      attrs.bits > 0 || (cIn % 4 === 0 && matmulTiledVec4Eligible(attrs.kernel * cIn, cOut));
     const mapped = attrs.padLeft > 0 || attrs.padRight > 0 || attrs.dilation > 1;
     return {
       kernel: attrs.kernel,
@@ -73,29 +73,70 @@ export const conv1dSpec = defineSpec({
       hasBias: attrs.hasBias,
       act: attrs.act,
       gemm: gemm ? (mapped ? 2 : 1) : 0,
+      bits: attrs.bits,
+      groupSize: attrs.groupSize,
     };
   },
   pipeline: (root, dtype, cfg) =>
-    cfg.gemm
-      ? createMatmulTiledVec4Pipeline(
+    cfg.bits > 0
+      ? createMatmulQuantTiledPipeline(
           root,
           {
             k: cfg.kernel * cfg.cIn,
             n: cfg.cOut,
+            bits: cfg.bits,
+            groupSize: cfg.groupSize,
             hasBias: cfg.hasBias,
             hasAdd: 0,
             act: cfg.act,
             aStride: cfg.stride * cfg.cIn,
+            period: cfg.cIn,
           },
           elemFor(dtype),
-          cfg.gemm === 2 ? conv1dLoadA(elemFor(dtype), cfg) : undefined,
+          cfg.gemm === 2
+            ? conv1dLoadA(elemFor(dtype), cfg, matmulQuantTiledLayout(elemFor(dtype)))
+            : undefined,
         )
-      : createConv1dPipeline(root, cfg, elemFor(dtype)),
+      : cfg.gemm
+        ? createMatmulTiledVec4Pipeline(
+            root,
+            {
+              k: cfg.kernel * cfg.cIn,
+              n: cfg.cOut,
+              hasBias: cfg.hasBias,
+              hasAdd: 0,
+              act: cfg.act,
+              aStride: cfg.stride * cfg.cIn,
+            },
+            elemFor(dtype),
+            cfg.gemm === 2 ? conv1dLoadA(elemFor(dtype), cfg) : undefined,
+          )
+        : createConv1dPipeline(root, cfg, elemFor(dtype)),
   encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
     const dtype = node.shape.dtype;
     const tIn = node.pending!.inputs[0]!.shape.dims![0]!;
     const [tOut, cOut] = node.shape.dims as [number, number];
-    const bias = attrs.hasBias === 1 ? narrowFloat(inputs[2]!, dtype) : undefined;
+    const quant = cfg.bits > 0;
+    const bias = attrs.hasBias === 1 ? narrowFloat(inputs[quant ? 3 : 2]!, dtype) : undefined;
+    if (quant) {
+      return [
+        matmulQuantTiledHandle(
+          ctx.root,
+          pipeline,
+          tOut,
+          cOut,
+          {
+            a: narrowFloat(inputs[0]!, dtype),
+            w: narrow(inputs[1]!, 'u32'),
+            scales: narrow(inputs[2]!, 'f32'),
+            bias,
+            out: narrowFloat(out, dtype),
+          },
+          elemFor(dtype),
+          tIn,
+        ),
+      ];
+    }
     if (cfg.gemm) {
       return [
         matmulTiledVec4Handle(

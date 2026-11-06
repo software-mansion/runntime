@@ -4,6 +4,7 @@ import { conv1d, type SlotAct } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../../gpu.ts';
 import { ACTIVATION_REF } from '../matmul/checkMatmul.ts';
+import { randomQuantWeight } from '../matmul/quantW.ts';
 
 const { root, ex } = await gpu();
 
@@ -67,6 +68,45 @@ async function checkConv1d(c: Case, dtype: 'f32' | 'f16') {
   const k = c.kernelSize * c.cIn;
   const tol = dtype === 'f16' ? { atol: 2e-3, rtol: 2e-3 } : { atol: 1e-6 * k, rtol: 1e-5 };
   expectClose(got, conv1dRef(x, w, c, bias), tol);
+}
+
+/** conv1d with a quantW weight against conv1dRef on its dequantized values.
+ *  The weight's rows hold each tap's input channels in turn, so a group of
+ *  groupSize channels has one scale in every tap. */
+async function checkQuantConv1d(
+  c: Case & { bits: 4 | 8; groupSize: number },
+  dtype: 'f32' | 'f16',
+) {
+  const { cIn, cOut, kernelSize, bits, groupSize } = c;
+  const round = dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
+  const meta = (rows: number, cols: number) => ({ ...matrix(rows, cols), dtype });
+  const k = kernelSize * cIn;
+  const weight = randomQuantWeight(
+    root,
+    { experts: 1, k, n: cOut, bits, groupSize, period: cIn },
+    2,
+  );
+  const x = round(randomF32(c.tIn * cIn, 1));
+  const bias = c.bias ? round(randomF32(cOut, 3)) : undefined;
+  const got = await toArray(
+    conv1d(upload(root, x, meta(c.tIn, cIn)), weight.w, {
+      kernelSize,
+      stride: c.stride,
+      dilation: c.dilation,
+      padLeft: c.padLeft,
+      padRight: c.padRight,
+      bias: bias && upload(root, bias, meta(1, cOut)),
+      activation: c.activation,
+      scales: upload(root, weight.scales, [cIn / groupSize, cOut]),
+      bits,
+      groupSize,
+    }),
+    ex,
+  );
+  // The f16 route stores dequantized weights in f16 before the f32 sums.
+  const tol =
+    dtype === 'f16' ? { atol: 2e-3 * Math.sqrt(k), rtol: 5e-3 } : { atol: 1e-6 * k, rtol: 1e-5 };
+  expectClose(got, conv1dRef(x, Float32Array.from(weight.dequant), c, bias), tol);
 }
 
 describe('conv1d kernel', () => {
@@ -262,6 +302,120 @@ describe('conv1d kernel', () => {
   )('$dtype $route with $name', async ({ dtype, c, bias, activation }, ctx) => {
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
     await checkConv1d({ ...c, bias, activation }, dtype);
+  });
+
+  // A quantW weight always takes matmulQuantTiled: gemm when unpadded and
+  // undilated, mapped gemm otherwise, with no minimum K.
+  const QUANT_SHAPES: { name: string; c: Case & { bits: 4 | 8; groupSize: number } }[] = [
+    {
+      name: 'int8, stride 2 (gemm)',
+      c: { tIn: 70, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, bits: 8, groupSize: 8 },
+    },
+    {
+      name: 'int8, all channels in one group (gemm)',
+      c: { tIn: 40, cIn: 32, cOut: 12, kernelSize: 3, stride: 1, bits: 8, groupSize: 32 },
+    },
+    {
+      name: 'int8, 1×1 under the float tiled minimum K (gemm)',
+      c: { tIn: 50, cIn: 32, cOut: 32, kernelSize: 1, stride: 1, bits: 8, groupSize: 8 },
+    },
+    {
+      name: 'int8, same padding (mapped gemm)',
+      c: {
+        tIn: 45,
+        cIn: 16,
+        cOut: 20,
+        kernelSize: 7,
+        stride: 1,
+        padLeft: 3,
+        padRight: 3,
+        bits: 8,
+        groupSize: 8,
+      },
+    },
+    {
+      name: 'int8, dilation 3 (mapped gemm)',
+      c: {
+        tIn: 50,
+        cIn: 16,
+        cOut: 16,
+        kernelSize: 7,
+        stride: 1,
+        dilation: 3,
+        padLeft: 9,
+        padRight: 9,
+        bits: 8,
+        groupSize: 4,
+      },
+    },
+    {
+      name: 'int8, C_in 4, two taps per K step (mapped gemm)',
+      c: {
+        tIn: 30,
+        cIn: 4,
+        cOut: 8,
+        kernelSize: 16,
+        stride: 1,
+        padLeft: 5,
+        padRight: 7,
+        bits: 8,
+        groupSize: 4,
+      },
+    },
+    {
+      name: 'int8, stride 2 with padding (mapped gemm)',
+      c: {
+        tIn: 41,
+        cIn: 16,
+        cOut: 12,
+        kernelSize: 5,
+        stride: 2,
+        padLeft: 2,
+        padRight: 2,
+        bits: 8,
+        groupSize: 8,
+      },
+    },
+    {
+      name: 'int4, stride 2 (gemm)',
+      c: { tIn: 70, cIn: 16, cOut: 40, kernelSize: 4, stride: 2, bits: 4, groupSize: 8 },
+    },
+    {
+      name: 'int4, same padding (mapped gemm)',
+      c: {
+        tIn: 45,
+        cIn: 32,
+        cOut: 16,
+        kernelSize: 5,
+        stride: 1,
+        padLeft: 2,
+        padRight: 2,
+        bits: 4,
+        groupSize: 16,
+      },
+    },
+  ];
+  it.for((['f32', 'f16'] as const).flatMap((dtype) => QUANT_SHAPES.map((s) => ({ dtype, ...s }))))(
+    '$dtype quantW $name',
+    async ({ dtype, c }, ctx) => {
+      if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+      await checkQuantConv1d(c, dtype);
+    },
+  );
+
+  it.for(
+    (['f32', 'f16'] as const).flatMap((dtype) =>
+      [
+        { route: 'gemm', c: { tIn: 40, cIn: 16, cOut: 12, kernelSize: 4, stride: 2 } },
+        {
+          route: 'mapped gemm',
+          c: { tIn: 40, cIn: 16, cOut: 12, kernelSize: 4, stride: 1, padLeft: 3, padRight: 3 },
+        },
+      ].flatMap((r) => EPILOGUES.map((e) => ({ dtype, ...r, ...e }))),
+    ),
+  )('$dtype quantW $route with $name', async ({ dtype, c, bias, activation }, ctx) => {
+    if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkQuantConv1d({ ...c, bias, activation, bits: 8, groupSize: 8 }, dtype);
   });
 
   // padding 'same' with an even kernel pads one more on the right, as torch does.
