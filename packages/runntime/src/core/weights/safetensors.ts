@@ -586,14 +586,14 @@ function bf16Tensor(bits: Uint16Array, shape: number[]): FileTensor {
 }
 
 /** Metadata key of a quantized file: a JSON string
- *  `{"version":1,"bits":8|4,"groupSize":N,"scheme":"symmetric"}`, or
- *  `{"version":2,"scheme":"symmetric"}`, where each int weight's bits come
- *  from its dtype and its groupSize from its scale's shape. */
+ *  `{"version":1,"bits":8|4,"groupSize":N,"scheme":"symmetric"}`. bits and
+ *  groupSize are optional: without them, each int weight's bits come from its
+ *  dtype and its groupSize from its scale's shape. */
 const QUANT_METADATA_KEY = 'runntime.quant';
 
 /** How a quantized file stores its int weights: `bits` per value, one f16
- *  scale per `groupSize` values along each row. Empty in version 2, where
- *  each tensor sets both. */
+ *  scale per `groupSize` values along each row. A field the file leaves out
+ *  comes from each tensor. */
 interface QuantConfig {
   bits?: 4 | 8;
   groupSize?: number;
@@ -621,18 +621,15 @@ function quantConfigOf(metadata: Record<string, string>): QuantConfig | undefine
     return bad('is not a JSON object');
   }
   const { version, bits, groupSize, scheme } = json as Record<string, unknown>;
-  if (version !== 1 && version !== 2) return bad('has a version other than 1 or 2');
-  if (scheme !== 'symmetric') return bad("needs scheme 'symmetric'");
-  if (version === 2) {
-    if (bits !== undefined || groupSize !== undefined) {
-      return bad('sets bits or groupSize, which version 2 takes from each tensor');
-    }
-    return {};
-  }
-  if (bits !== 4 && bits !== 8) return bad('needs bits 4 or 8');
-  if (typeof groupSize !== 'number' || !Number.isSafeInteger(groupSize) || groupSize <= 0) {
+  if (version !== 1) return bad('has a version other than 1');
+  if (bits !== undefined && bits !== 4 && bits !== 8) return bad('needs bits 4 or 8');
+  if (
+    groupSize !== undefined &&
+    (typeof groupSize !== 'number' || !Number.isSafeInteger(groupSize) || groupSize <= 0)
+  ) {
     return bad('needs a positive integer groupSize');
   }
+  if (scheme !== 'symmetric') return bad("needs scheme 'symmetric'");
   return { bits, groupSize };
 }
 
