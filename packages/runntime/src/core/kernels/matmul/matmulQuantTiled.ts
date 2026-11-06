@@ -107,9 +107,10 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantTiledCfg, elem: Elem) {
   const lanes = colThreads * (BM / TM);
   const k4 = k / 4;
   const n4 = n / 4;
-  const aVecs = Math.ceil((BM * bk4) / lanes);
-  const bUnits = Math.ceil((BK * bn4) / lanes);
   const tiles = k / BK;
+  if (BM * bk4 !== lanes || BK * bn4 !== lanes) {
+    throw new Error('matmulQuantTiled: each tile needs one vec4 per thread');
+  }
   // Words per packed 4×4 block of W.
   const tileWords = bits / 2;
   const cw1 = columnWord(1, bits);
@@ -130,40 +131,49 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantTiledCfg, elem: Elem) {
 
     const accs = d.arrayOf(d.vec4f, TM * TN)();
     const bv = d.arrayOf(d.vec4f, 4 * TN)();
+    // Thread lid fills slot lid of each tile.
+    const am = mBase + std.intdiv(lid, bk4);
+    const aCol = lid % bk4;
+    const bRow = std.intdiv(lid, bn4);
+    const bc4 = nBase4 + (lid % bn4);
+    let ra = storeVec4();
+    let w0 = d.u32(0);
+    let w1 = d.u32(0);
+    let w2 = d.u32(0);
+    let w3 = d.u32(0);
+    let scale = d.vec4f();
+    if (am < m) {
+      ra = storeVec4(loadASlot.$(am, aCol));
+    }
+    if (bc4 < n4) {
+      const wb = (bc4 * k4 + std.intdiv(bRow, 4)) * tileWords;
+      w0 = layout.$.w[wb]!;
+      w1 = layout.$.w[wb + cw1]!;
+      w2 = layout.$.w[wb + cw2]!;
+      w3 = layout.$.w[wb + cw3]!;
+      scale = scaleAtSlot.$(bRow, bc4);
+    }
     for (const t of std.range(tiles)) {
-      for (const i of tgpu.unroll(std.range(aVecs))) {
-        const e = lid + i * lanes;
-        if (e < BM * bk4) {
-          const am = mBase + std.intdiv(e, bk4);
-          let v = storeVec4();
-          if (am < m) {
-            v = storeVec4(loadASlot.$(am, t * bk4 + (e % bk4)));
-          }
-          tileA.$[e] = storeVec4(v);
-        }
-      }
-      for (const i of tgpu.unroll(std.range(bUnits))) {
-        const e = lid + i * lanes;
-        if (e < BK * bn4) {
-          const bk = t * BK + std.intdiv(e, bn4);
-          const bc4 = nBase4 + (e % bn4);
-          let wv = storeVec4();
-          if (bc4 < n4) {
-            const wb = (bc4 * k4 + std.intdiv(bk, 4)) * tileWords;
-            const q = deqRow(
-              layout.$.w[wb]!,
-              layout.$.w[wb + cw1]!,
-              layout.$.w[wb + cw2]!,
-              layout.$.w[wb + cw3]!,
-              bk % 4,
-              bits,
-            );
-            wv = storeVec4(q * scaleAtSlot.$(bk, bc4));
-          }
-          tileB.$[e] = storeVec4(wv);
-        }
-      }
+      tileA.$[lid] = storeVec4(ra);
+      tileB.$[lid] = storeVec4(deqRow(w0, w1, w2, w3, bRow % 4, bits) * scale);
       std.workgroupBarrier();
+      // The next tile's loads are in flight while this one computes.
+      const tn = t + 1;
+      if (tn < tiles) {
+        ra = storeVec4();
+        if (am < m) {
+          ra = storeVec4(loadASlot.$(am, tn * bk4 + aCol));
+        }
+        if (bc4 < n4) {
+          const bk = tn * BK + bRow;
+          const wb = (bc4 * k4 + std.intdiv(bk, 4)) * tileWords;
+          w0 = layout.$.w[wb]!;
+          w1 = layout.$.w[wb + cw1]!;
+          w2 = layout.$.w[wb + cw2]!;
+          w3 = layout.$.w[wb + cw3]!;
+          scale = scaleAtSlot.$(bk, bc4);
+        }
+      }
 
       for (const kv of tgpu.unroll(std.range(bk4))) {
         for (const j of tgpu.unroll(std.range(TN))) {
