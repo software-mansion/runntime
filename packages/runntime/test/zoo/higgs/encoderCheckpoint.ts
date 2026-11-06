@@ -1,5 +1,11 @@
 import type { HiggsEncoderConfig } from '../../../src/zoo/higgs/config.ts';
 import { randomF32 } from '../../gpu.ts';
+import {
+  dequantizeWeight,
+  mixedQuantFile,
+  quantizeWeight,
+  type BitsQuantEntry,
+} from '../../core/weights/checkpoint.ts';
 
 /** The real encoder's layout, small. */
 export const CFG: HiggsEncoderConfig = {
@@ -132,4 +138,65 @@ export function checkpoint(cfg: HiggsEncoderConfig = CFG): Sd {
   conv('acoustic_decoder.conv1', ac.latent, last, ac.kernel);
   conv('decoder_semantic.conv1', hu.hidden, hu.hidden, k, false);
   return sd;
+}
+
+/** CFG with every conv but the two on one input channel, and every Linear,
+ *  loadable quantized. */
+export const QUANT_CFG: HiggsEncoderConfig = {
+  ...CFG,
+  acoustic: { ...CFG.acoustic, channels: 8, latent: 8 },
+  hubert: { ...CFG.hubert, ffn: 16 },
+};
+
+/** Input channels per scale group of an acoustic conv. */
+const CONV_GROUP = 4;
+/** Values per scale group of a Linear. */
+const LINEAR_GROUP = 4;
+
+const POS = 'semantic_model.encoder.pos_conv_embed.conv';
+
+/** The position conv's weight norm folded, [hidden, width, kernel], in f64. */
+function foldedPositionWeight(sd: Sd): { data: Float32Array; shape: number[] } {
+  const g = sd[`${POS}.parametrizations.weight.original0`]!.data;
+  const { data: v, shape } = sd[`${POS}.parametrizations.weight.original1`]!;
+  const kernel = shape[2]!;
+  const norm = new Float64Array(kernel);
+  v.forEach((x, i) => (norm[i % kernel]! += x * x));
+  return { data: v.map((x, i) => (x * g[i % kernel]!) / Math.sqrt(norm[i % kernel]!)), shape };
+}
+
+/** `sd` as a quantized file the way the codec's int files hold it: the
+ *  position conv as its folded weight, the convs in int8, the acoustic ones
+ *  in groups of input channels and HuBERT's and the semantic ones with one
+ *  scale per output channel, and every Linear but the quantizer's in `bits`,
+ *  in small groups. Also `sd` with each of those replaced by its dequantized
+ *  values. The quantizer, norms, biases and Snake alphas stay float. */
+export function quantize(sd: Sd, bits: 4 | 8): { file: Uint8Array; dequantized: Sd } {
+  const source: Sd = { ...sd, [`${POS}.weight`]: foldedPositionWeight(sd) };
+  delete source[`${POS}.parametrizations.weight.original0`];
+  delete source[`${POS}.parametrizations.weight.original1`];
+  const entries: Record<string, BitsQuantEntry> = {};
+  const floats: Sd = {};
+  const dequantized: Sd = { ...source };
+  for (const [name, { data, shape }] of Object.entries(source)) {
+    const encoder = /^(acoustic_encoder|semantic_model|encoder_semantic|fc)\./.test(name);
+    if (!encoder || !name.endsWith('.weight') || shape.length === 1) {
+      floats[name] = { data, shape };
+      continue;
+    }
+    // torch [out, in, kernel] is [out, in·kernel] in the file, the same order.
+    const [cOut, cIn, kernel = 1] = shape as [number, number, number?];
+    const cols = cIn * kernel;
+    const groupSize =
+      shape.length === 2
+        ? LINEAR_GROUP
+        : name.startsWith('acoustic_encoder.') && cIn % CONV_GROUP === 0
+          ? CONV_GROUP * kernel
+          : cols;
+    const entryBits = shape.length === 2 ? bits : 8;
+    const entry = quantizeWeight(data, [cOut, cols], entryBits, groupSize);
+    entries[name] = { ...entry, bits: entryBits };
+    dequantized[name] = { data: dequantizeWeight(entry), shape };
+  }
+  return { file: mixedQuantFile(entries, floats), dequantized };
 }

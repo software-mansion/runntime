@@ -11,8 +11,8 @@
 
 import {
   add,
+  dequantize,
   derivedTensor,
-  f16ToF32,
   nn,
   RunntimeError,
   type LazyStateDict,
@@ -104,11 +104,8 @@ interface Codebook {
 
 /** A weight's values: as stored, or a quantized weight's ints times the
  *  scale of their group. */
-async function weightValues(t: LazyTensor): Promise<Float32Array> {
-  if (t.kind !== 'quant') return t.f32();
-  const [ints, stored] = await Promise.all([t.ints(), t.scales()]);
-  const scales = stored instanceof Uint16Array ? f16ToF32(stored) : stored;
-  return Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / t.groupSize)]!);
+function weightValues(t: LazyTensor): Promise<Float32Array> {
+  return (t.kind === 'quant' ? dequantize(t) : t).f32();
 }
 
 /** The decoder input for code i of codebook k is embed_k[i]·project_out_kᵀ·
