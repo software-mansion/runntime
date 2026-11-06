@@ -1,3 +1,6 @@
+/** runntime/core: the engine the zoo is built on. Experimental: exports,
+ *  names and signatures can change in any release, minor or patch. */
+
 // --- Weights & IO ---
 export {
   bf16ToF16Bits,

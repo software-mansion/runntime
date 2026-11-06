@@ -15,7 +15,8 @@ pnpm monorepo, Node 22 or newer:
   `create<Task>()` runner per task and the Hub weight registry in `models.ts`.
   `src/zoo/transformers` is the transformers.js plugin, one loader per model.
   `src/core` is the engine (graph ops, kernels, dispatch, buffer pool, weight
-  loading). Only `runntime/zoo` and `runntime/zoo/transformers` are published.
+  loading), published as `runntime/core`. Core is experimental: its API can
+  change in any release.
 - `apps/docs`: the Starlight docs site, the only user-facing documentation.
   See `apps/docs/AGENTS.md` before working there.
 - `scripts/sync-readme.mjs`: copies the root `README.md` into the package on
