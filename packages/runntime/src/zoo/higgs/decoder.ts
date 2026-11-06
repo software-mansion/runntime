@@ -12,6 +12,7 @@
 import {
   add,
   derivedTensor,
+  f16ToF32,
   nn,
   RunntimeError,
   type LazyStateDict,
@@ -101,9 +102,19 @@ interface Codebook {
   bias: LazyTensor;
 }
 
+/** A weight's values: as stored, or a quantized weight's ints times the
+ *  scale of their group. */
+async function weightValues(t: LazyTensor): Promise<Float32Array> {
+  if (t.kind !== 'quant') return t.f32();
+  const [ints, stored] = await Promise.all([t.ints(), t.scales()]);
+  const scales = stored instanceof Uint16Array ? f16ToF32(stored) : stored;
+  return Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / t.groupSize)]!);
+}
+
 /** The decoder input for code i of codebook k is embed_k[i]·project_out_kᵀ·
  *  fc2ᵀ plus a bias shared by every frame: fc2's bias and each project_out
- *  bias through fc2. Both come out as derived tensors, computed in f64. */
+ *  bias through fc2. Both come out as derived tensors, computed in f64. A
+ *  quantized project_out or fc2 weight folds as its dequantized values. */
 function foldCodebooks(
   books: Codebook[],
   fc2W: LazyTensor,
@@ -128,7 +139,7 @@ function foldCodebooks(
   // tensors share it.
   let transposed: Promise<Float64Array> | undefined;
   const fc2T = () =>
-    (transposed ??= fc2W.f32().then((w) => {
+    (transposed ??= weightValues(fc2W).then((w) => {
       const t = new Float64Array(hidden * latent);
       for (let o = 0; o < latent; o++) {
         for (let j = 0; j < hidden; j++) t[j * latent + o] = w[o * hidden + j]!;
@@ -144,7 +155,7 @@ function foldCodebooks(
       const m = new Float64Array(dim * latent);
       const row = new Float64Array(latent);
       for (const [k, b] of books.entries()) {
-        const w = await b.weight.f32();
+        const w = await weightValues(b.weight);
         const e = await b.embed.f32();
         // m = project_outᵀ·fc2ᵀ, [dim, latent].
         m.fill(0);
