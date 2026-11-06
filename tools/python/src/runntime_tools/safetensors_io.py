@@ -74,7 +74,9 @@ def _read_file(path: Path) -> Checkpoint:
 
 
 def write_safetensors(path: Path, tensors: Mapping[str, Tensor], metadata: Mapping[str, str]) -> None:
-    """Writes `tensors` in their order, with `metadata` in the header."""
+    """Writes `tensors` in their order, with `metadata` in the header. Writes
+    to a temporary file and renames it over `path`, so `path` can be the file
+    the tensors are memory-mapped from."""
     header: dict[str, object] = {"__metadata__": dict(metadata)} if metadata else {}
     offset = 0
     for name, tensor in tensors.items():
@@ -86,11 +88,17 @@ def write_safetensors(path: Path, tensors: Mapping[str, Tensor], metadata: Mappi
         offset += tensor.data.nbytes
     encoded = json.dumps(header, separators=(",", ":")).encode()
     encoded += b" " * (-len(encoded) % HEADER_ALIGNMENT_BYTES)
-    with path.open("wb") as file:
-        file.write(struct.pack("<Q", len(encoded)))
-        file.write(encoded)
-        for tensor in tensors.values():
-            file.write(tensor.data.tobytes())
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        with temporary.open("wb") as file:
+            file.write(struct.pack("<Q", len(encoded)))
+            file.write(encoded)
+            for tensor in tensors.values():
+                file.write(tensor.data.tobytes())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def to_float32(tensor: Tensor) -> NDArray[np.float32]:

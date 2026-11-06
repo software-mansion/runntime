@@ -21,6 +21,14 @@ def test_quantize_writes_the_golden_file(bits: Bits, tmp_path: Path) -> None:
     assert destination.read_bytes() == (GOLDEN / f"tiny.int{bits}.safetensors").read_bytes()
 
 
+def test_quantize_can_overwrite_its_source(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "model.safetensors"
+    checkpoint.write_bytes((GOLDEN / "tiny.safetensors").read_bytes())
+    assert main(["quantize", str(checkpoint), str(checkpoint), "--bits", "8", "--group-size", "32"]) == 0
+    assert checkpoint.read_bytes() == (GOLDEN / "tiny.int8.safetensors").read_bytes()
+    assert list(tmp_path.iterdir()) == [checkpoint]
+
+
 def test_golden_file_reads_back_with_the_safetensors_library() -> None:
     with (
         safe_open(GOLDEN / "tiny.int4.safetensors", "numpy") as quantized,
