@@ -86,6 +86,8 @@ def quantize_checkpoint(source: Path, destination: Path, options: Options) -> li
     """Quantizes the selected tensors of `source` into `destination` and
     returns one report line per tensor, in file order."""
     checkpoint = read_checkpoint(source)
+    if QUANT_METADATA_KEY in checkpoint.metadata:
+        raise ValueError(f"{source} is already quantized, run on the float checkpoint")
     tensors: dict[str, Tensor] = {}
     report: list[str] = []
     quantized_count = 0

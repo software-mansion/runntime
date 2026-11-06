@@ -78,6 +78,14 @@ def test_quantize_fails_when_no_tensor_is_selected(tmp_path: Path, capsys: pytes
     assert not destination.exists()
 
 
+def test_quantize_fails_on_a_quantized_source(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    destination = tmp_path / "out.safetensors"
+    argv = ["quantize", str(GOLDEN / "tiny.int8.safetensors"), str(destination), "--bits", "4", "--exclude", "none"]
+    assert main(argv) == 1
+    assert "is already quantized" in capsys.readouterr().err
+    assert not destination.exists()
+
+
 def test_f16_stores_the_float_tensors_that_stay_as_f16(tmp_path: Path) -> None:
     destination = tmp_path / "out.safetensors"
     argv = ["quantize", str(GOLDEN / "tiny.safetensors"), str(destination), "--bits", "8", "--f16"]
