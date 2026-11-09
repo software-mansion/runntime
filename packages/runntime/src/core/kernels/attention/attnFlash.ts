@@ -85,7 +85,7 @@ function tileKeys(headDim: number, f16: boolean): number {
 /** q heads per workgroup: 2 when they come in pairs that share a kv head, so
  *  every key and value read from workgroup memory feeds both. Only with 8
  *  lanes and heads up to REGISTER_HEAD_DIM, where both fit in registers. */
-function headsPerGroup(qHeads: number, kvHeads: number, headDim: number): number {
+function headsPerWorkgroup(qHeads: number, kvHeads: number, headDim: number): number {
   const pairs = Math.floor(qHeads / kvHeads) % 2 === 0;
   return pairs && attnFlashLanes(headDim) === 8 && headDim <= REGISTER_HEAD_DIM ? 2 : 1;
 }
@@ -101,7 +101,7 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
   const tileK = tileKeys(hd, f16);
   const lanes = TILE_Q * lpq;
   const group = Math.floor(qHeads / kvHeads);
-  const hp = headsPerGroup(qHeads, kvHeads, hd);
+  const hp = headsPerWorkgroup(qHeads, kvHeads, hd);
   const packed = (cfg.qkvPacked ?? 0) > 0;
   const qStride4 = packed ? (qHeads + 2 * kvHeads) * hd4 : qHeads * hd4;
   const kvStride4 = packed ? qStride4 : kvHeads * hd4;
@@ -320,6 +320,6 @@ export function attnFlashHandle(
   });
   return makeHandle(pipeline, 'attnFlash', bindGroup, [
     Math.ceil(args.qLen / TILE_Q),
-    args.qHeads / headsPerGroup(args.qHeads, args.kvHeads, args.headDim),
+    args.qHeads / headsPerWorkgroup(args.qHeads, args.kvHeads, args.headDim),
   ]);
 }
