@@ -26,6 +26,11 @@ export interface LoadOptions {
   onBytes?: (chunkBytes: number) => void;
   /** Stops the load between steps. A step already running finishes first. */
   signal?: AbortSignal;
+  /** Runs the model once on a blank input before returning, which compiles
+   *  the kernels and fails the load with EXECUTION_FAILED when the GPU
+   *  errors or returns unusable output. With false, the first call pays the
+   *  compile time and a broken device shows up there. Default: true. */
+  warmUp?: boolean;
 }
 
 /** Throws LOAD_ABORTED when the signal is already aborted. */

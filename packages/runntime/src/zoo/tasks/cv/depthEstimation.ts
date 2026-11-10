@@ -116,7 +116,7 @@ export async function createDepthEstimator(
 
     throwIfAborted(opts.signal);
     const estimator = scope.track(
-      await createEstimator(sd, { variant, onProgress: opts.onProgress }),
+      await createEstimator(sd, { variant, onProgress: opts.onProgress, warmUp: opts.warmUp }),
     );
     const { inputSize } = estimator;
     const { mean, std } = DEPTHART_CONFIGS[estimator.variant];

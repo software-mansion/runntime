@@ -34,6 +34,7 @@ export async function loadPrivacyFilterModel(
   sd: LazyStateDict,
   opts: {
     onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    warmUp?: boolean;
   } = {},
 ): Promise<LoadedPrivacyFilterModel> {
   const device = defaultRoot().device;
@@ -97,7 +98,7 @@ export async function loadPrivacyFilterModel(
       : 'f32';
   try {
     await model.loadStateDict(sd, { onProgress: opts.onProgress });
-    await warmUp(device, () => toArray(model.forward([1000])));
+    if (opts.warmUp !== false) await warmUp(device, () => toArray(model.forward([1000])));
   } catch (err) {
     model.dispose();
     throw err;
@@ -110,11 +111,13 @@ export async function createDetector(
   opts: {
     biases?: ViterbiBiases;
     onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    warmUp?: boolean;
   } = {},
 ): Promise<Detector> {
   const device = defaultRoot().device;
   const { model, weightFormat } = await loadPrivacyFilterModel(sd, {
     onProgress: opts.onProgress,
+    warmUp: opts.warmUp,
   });
   const tokenizer = createTokenizer();
   const info = buildLabelInfo(V2_NER_CLASS_NAMES);

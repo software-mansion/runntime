@@ -72,6 +72,7 @@ export async function createEstimator(
   opts: {
     variant?: DepthartVariant;
     onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    warmUp?: boolean;
   } = {},
 ): Promise<Estimator> {
   const root = defaultRoot();
@@ -147,7 +148,9 @@ export async function createEstimator(
       // forward() ends in toChw(..., 'f32'), so the map is f32.
       read(f.target.buffer as F32Buffer);
     };
-    await warmUp(root.device, () => run(new Float32Array(3 * size * size), size, size));
+    if (opts.warmUp !== false) {
+      await warmUp(root.device, () => run(new Float32Array(3 * size * size), size, size));
+    }
     return { variant, inputSize: size, run, encode, dispose };
   } catch (err) {
     dispose();
