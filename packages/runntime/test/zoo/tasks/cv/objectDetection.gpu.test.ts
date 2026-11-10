@@ -73,6 +73,9 @@ describe('encodeDetectObjects', () => {
   );
 
   // The route the docs show: a camera frame imported as an external texture.
+  // Chrome's colour conversion of the frame is checked in the imageToChw
+  // kernel test; the random net barely moves with its input, so this case
+  // checks the fit, the size readback and the decode of a frame.
   it.for([
     { name: 'the input size', w: 64, h: 64 },
     { name: 'a wide frame, letterboxed', w: 96, h: 48 },
