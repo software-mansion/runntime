@@ -43,6 +43,8 @@ const externalLayout = tgpu.bindGroupLayout({
   src: { externalTexture: d.textureExternal() },
 });
 
+// A texel stands for a byte, but a float format can hold any value and a
+// video frame's YUV->RGB conversion overshoots [0, 1] on saturated colors.
 const textureSource = {
   size: (): d.v2u => {
     'use gpu';
@@ -50,7 +52,7 @@ const textureSource = {
   },
   load: (p: d.v2i): d.v4f => {
     'use gpu';
-    return std.textureLoad(textureLayout.$.src, p, 0);
+    return std.saturate(std.textureLoad(textureLayout.$.src, p, 0));
   },
 };
 
@@ -61,7 +63,7 @@ const externalSource = {
   },
   load: (p: d.v2i): d.v4f => {
     'use gpu';
-    return std.textureLoad(externalLayout.$.src, p);
+    return std.saturate(std.textureLoad(externalLayout.$.src, p));
   },
 };
 

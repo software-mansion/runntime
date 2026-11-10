@@ -149,7 +149,8 @@ wait for the GPU. Work you submit after it sees the map.
 - a texture: a `GPUTexture`, a TypeGPU texture with `sampled` usage, or a
   `GPUExternalTexture` from a video. It is fitted like an `ImageBuffer`,
   with the estimator's `resizeMode`, and each value 0-1 counts as a byte
-  0-255. Formats: `rgba8unorm`, `bgra8unorm`, `rgb10a2unorm`,
+  0-255; values outside 0-1 are clamped. Formats: `rgba8unorm`,
+  `bgra8unorm`, `rgb10a2unorm`,
   `rgba16float`, `rgba32float`. sRGB formats are rejected: the GPU would
   turn their values linear, which the model was not trained on.
 - a buffer holding the model input as is: 3×448×448 f32, normalized RGB,
