@@ -21,6 +21,7 @@ import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
 import {
+  encodeInput,
   encodeWith,
   unwrapSource,
   unwrapTarget,
@@ -168,33 +169,23 @@ export async function createDepthEstimator(
             'normalize: only a texture target is rescaled',
           );
         }
-        try {
-          encodeWith(encoder, (enc) =>
-            estimator.encode(
-              enc,
-              (input) => {
-                if ('tensor' in src) {
-                  enc.copyBufferToBuffer(src.tensor, 0, root.unwrap(input), 0, inputBytes);
-                } else {
-                  imageToChw.encode(enc, src.image, input, preprocessor.gpuArgs);
-                }
-              },
-              (depth) => {
-                if ('tensor' in dst) {
-                  enc.copyBufferToBuffer(root.unwrap(depth), 0, dst.tensor, 0, outputBytes);
-                } else {
-                  mapToTexture.encode(enc, depth, dst.image, {
-                    width: inputSize,
-                    height: inputSize,
-                    normalize,
-                  });
-                }
-              },
-            ),
-          );
-        } catch (err) {
-          rethrowRunError(err);
-        }
+        encodeWith(encoder, (enc) =>
+          estimator.encode(
+            enc,
+            (input) => encodeInput(enc, src, input, inputBytes, imageToChw, preprocessor.gpuArgs),
+            (depth) => {
+              if ('tensor' in dst) {
+                enc.copyBufferToBuffer(root.unwrap(depth), 0, dst.tensor, 0, outputBytes);
+              } else {
+                mapToTexture.encode(enc, depth, dst.image, {
+                  width: inputSize,
+                  height: inputSize,
+                  normalize,
+                });
+              }
+            },
+          ),
+        );
       },
       dispose() {
         disposed = true;

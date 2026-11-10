@@ -1,5 +1,6 @@
-/** GPU in, GPU out: the types every runner's encode<Verb> method takes, and
- *  how they are unwrapped from TypeGPU and checked. */
+/** GPU in, GPU out: the types every runner's encode<Verb> method takes, how
+ *  they are unwrapped from TypeGPU and checked, and the recording the
+ *  methods share. */
 
 import {
   isBuffer,
@@ -11,7 +12,14 @@ import {
   type TgpuCommandEncoder,
   type TgpuTexture,
 } from 'typegpu';
-import { defaultRoot, RunntimeError } from '../../core/index.ts';
+import {
+  defaultRoot,
+  RunntimeError,
+  type createImageToChw,
+  type F32Buffer,
+  type ImageToChwArgs,
+} from '../../core/index.ts';
+import { rethrowRunError } from '../errors.ts';
 
 /** An image already on the GPU. A texel's [0, 1] value stands for a byte
  *  0–255, as in an ImageBuffer. */
@@ -116,19 +124,42 @@ export function unwrapStorageTarget(target: GpuTensor<d.BaseData>, bytes: number
   return raw;
 }
 
-/** Runs `record` on the caller's encoder, or on a new one it then submits. */
+/** Runs `record` on the caller's encoder, or on a new one it then submits.
+ *  @throws RunntimeError `EXECUTION_FAILED` for any error that is not a
+ *  RunntimeError, with the error as cause. */
 export function encodeWith(
   encoder: GpuEncoder | undefined,
   record: (encoder: GPUCommandEncoder) => void,
 ): void {
-  const root = defaultRoot();
-  if (encoder !== undefined) {
-    record('resourceType' in encoder ? root.unwrap(encoder) : encoder);
+  try {
+    const root = defaultRoot();
+    if (encoder !== undefined) {
+      record('resourceType' in encoder ? root.unwrap(encoder) : encoder);
+      return;
+    }
+    const own = root.device.createCommandEncoder();
+    record(own);
+    root.device.queue.submit([own.finish()]);
+  } catch (err) {
+    rethrowRunError(err);
+  }
+}
+
+/** Records what writes the model input `input`: a tensor source is copied
+ *  as-is, `bytes` of it, and an image is fitted by `imageToChw` with `args`. */
+export function encodeInput(
+  encoder: GPUCommandEncoder,
+  source: Unwrapped<GPUTexture | GPUExternalTexture>,
+  input: F32Buffer,
+  bytes: number,
+  imageToChw: ReturnType<typeof createImageToChw>,
+  args: ImageToChwArgs,
+): void {
+  if ('tensor' in source) {
+    encoder.copyBufferToBuffer(source.tensor, 0, defaultRoot().unwrap(input), 0, bytes);
     return;
   }
-  const own = root.device.createCommandEncoder();
-  record(own);
-  root.device.queue.submit([own.finish()]);
+  imageToChw.encode(encoder, source.image, input, args);
 }
 
 function unwrap(

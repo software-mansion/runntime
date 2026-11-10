@@ -12,9 +12,9 @@ import {
   type DetectionList,
   type U32Buffer,
 } from '../../../../core/index.ts';
-import { rethrowRunError } from '../../../errors.ts';
 import type { Detector, Yolo26Input } from '../../../yolo26/detector.ts';
 import {
+  encodeInput,
   encodeWith,
   unwrapSource,
   unwrapStorageTarget,
@@ -79,39 +79,29 @@ export function createDetectionEncoder<T extends d.AnyWgslData>(
           `maxDetections: expected an integer from 1 to ${capacity}, what the target holds, got ${maxDetections}`,
         );
       }
-      try {
-        encodeWith(encoder, (enc) =>
-          detector.encode(
-            enc,
-            (input) => {
-              if ('tensor' in src) {
-                enc.copyBufferToBuffer(src.tensor, 0, root.unwrap(input), 0, inputBytes);
-              } else {
-                imageToChw.encode(enc, src.image, input, preprocessor.gpuArgs);
-              }
-            },
-            ([p3, p4, p5, proto]) =>
-              decode.encode(
-                enc,
-                [p3!, p4!, p5!],
-                proto,
-                'tensor' in src ? inputImage : imageToChw.size,
-                out,
-                {
-                  numClasses,
-                  numExtra: extra.numExtra,
-                  confidenceThreshold,
-                  maxDetections,
-                  mode: 'tensor' in src ? 'stretch' : mode,
-                  cropFraction,
-                  maskSize: extra.maskSize,
-                },
-              ),
-          ),
-        );
-      } catch (err) {
-        rethrowRunError(err);
-      }
+      encodeWith(encoder, (enc) =>
+        detector.encode(
+          enc,
+          (input) => encodeInput(enc, src, input, inputBytes, imageToChw, preprocessor.gpuArgs),
+          ([p3, p4, p5, proto]) =>
+            decode.encode(
+              enc,
+              [p3!, p4!, p5!],
+              proto,
+              'tensor' in src ? inputImage : imageToChw.size,
+              out,
+              {
+                numClasses,
+                numExtra: extra.numExtra,
+                confidenceThreshold,
+                maxDetections,
+                mode: 'tensor' in src ? 'stretch' : mode,
+                cropFraction,
+                maskSize: extra.maskSize,
+              },
+            ),
+        ),
+      );
     },
     dispose(): void {
       imageToChw.dispose();

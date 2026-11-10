@@ -26,6 +26,7 @@ import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
 import {
+  encodeInput,
   encodeWith,
   unwrapSource,
   unwrapStorageTarget,
@@ -201,23 +202,13 @@ export async function createImageClassifier(
             `encodeClassify: topk must be an integer from 1 to ${capacity}, what the target holds, got ${topk}`,
           );
         }
-        try {
-          encodeWith(encoder, (enc) =>
-            classifier.encode(
-              enc,
-              (input) => {
-                if ('tensor' in src) {
-                  enc.copyBufferToBuffer(src.tensor, 0, root.unwrap(input), 0, inputBytes);
-                } else {
-                  imageToChw.encode(enc, src.image, input, preprocessor.gpuArgs);
-                }
-              },
-              (logits) => softmaxTopK.encode(enc, logits, out, { n: numClasses, k: topk }),
-            ),
-          );
-        } catch (err) {
-          rethrowRunError(err);
-        }
+        encodeWith(encoder, (enc) =>
+          classifier.encode(
+            enc,
+            (input) => encodeInput(enc, src, input, inputBytes, imageToChw, preprocessor.gpuArgs),
+            (logits) => softmaxTopK.encode(enc, logits, out, { n: numClasses, k: topk }),
+          ),
+        );
       },
       dispose() {
         disposed = true;
