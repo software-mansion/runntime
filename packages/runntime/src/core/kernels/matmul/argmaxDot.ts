@@ -46,7 +46,7 @@ function makeArgmaxDotVariant(elem: Elem) {
     const cols = config.$.cols;
     const tid = lid.x;
     const kl = tid % KL;
-    const rl = d.u32(tid / KL);
+    const rl = std.intdiv(tid, KL);
 
     // Rows scan in increasing order, so a strict > keeps the lowest winning
     // index. The step condition is workgroup-uniform, so every thread reaches

@@ -100,8 +100,8 @@ function makeAttnDecodeKernel(cfg: AttnDecodeCfg, elem: Elem) {
     const tid = lid.x;
     const slot = flatWorkgroupId(wid);
     const h = slot % qHeads;
-    const row = d.u32(slot / qHeads);
-    const kvh = d.u32(h / group);
+    const row = std.intdiv(slot, qHeads);
+    const kvh = std.intdiv(h, group);
     const qBase = row * qWidth + h * hd;
     const qPos = D.qPosOffset + row;
 
@@ -280,8 +280,8 @@ function makeAttnDecodeSplitKernel(cfg: AttnDecodeCfg, elem: Elem) {
     const tid = lid.x;
     const chunkSlot = flatWorkgroupId(wid);
     const chunk = chunkSlot % D.chunks;
-    const h = d.u32(chunkSlot / D.chunks);
-    const kvh = d.u32(h / group);
+    const h = std.intdiv(chunkSlot, D.chunks);
+    const kvh = std.intdiv(h, group);
     const qBase = h * hd; // qLen = 1 → row 0
     const qPos = D.qPosOffset;
 
@@ -306,7 +306,7 @@ function makeAttnDecodeSplitKernel(cfg: AttnDecodeCfg, elem: Elem) {
     const end = std.min(qPos + windowRight, D.kvLen - 1);
     const range = end + 1 - std.min(lo, end + 1); // 0 when the band is empty
     // A floor of 1 keeps `myLo + chunkLen − 1` from wrapping.
-    const chunkLen = std.max(d.u32((range + D.chunks - 1) / D.chunks), 1);
+    const chunkLen = std.max(std.intdiv(range + D.chunks - 1, D.chunks), 1);
     const myLo = lo + chunk * chunkLen;
     const myEnd = std.min(myLo + chunkLen - 1, end);
     for (let j = myLo + tid; j <= myEnd; j += WORKGROUP_SIZE) {

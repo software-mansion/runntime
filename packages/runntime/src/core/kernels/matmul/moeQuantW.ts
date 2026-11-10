@@ -85,7 +85,7 @@ const tileDots = (w0: number, w1: number, w2: number, w3: number, x: d.v4f) => {
 /** Word offset of column c inside a weight tile. */
 const colWord = (c: number) => {
   'use gpu';
-  return d.u32((c * config.$.bits * 4) / 32);
+  return std.intdiv(c * config.$.bits * 4, 32);
 };
 
 /** Adds partialA (and partialB) over the K lanes of each unit, so lane 0
@@ -126,11 +126,11 @@ const moeUpKernel = tgpu.computeFn({
   'use gpu';
   const C = config.$;
   const lane = lid % K_LANES;
-  const unit = wid.x * UNITS + d.u32(lid / K_LANES);
+  const unit = wid.x * UNITS + std.intdiv(lid, K_LANES);
   // The grid is at most 65535 rows high; longer inputs loop.
   const rows = moeUpLayout.$.dims.tokens * MOE_SLOTS;
   for (let row = wid.y; row < rows; row += MAX_WORKGROUPS_PER_DIM) {
-    const t = d.u32(row / MOE_SLOTS);
+    const t = std.intdiv(row, MOE_SLOTS);
     const expert = d.u32(moeUpLayout.$.route[t * 2 * MOE_SLOTS + (row % MOE_SLOTS)]!);
 
     let glu = d.vec4f();
@@ -140,7 +140,7 @@ const moeUpKernel = tgpu.computeFn({
       const sRow = expert * C.kg;
       for (let k4 = lane; k4 < C.k4count; k4 += K_LANES) {
         const x = moeUpLayout.$.x[t * C.k4count + k4]!;
-        const s = (sRow + d.u32(k4 / C.g4)) * C.n4 + unit;
+        const s = (sRow + std.intdiv(k4, C.g4)) * C.n4 + unit;
         const tb = wBase + k4 * C.tileWords;
         const g = tileDots(
           moeUpLayout.$.gluW[tb]!,
@@ -192,7 +192,7 @@ const moeDownKernel = tgpu.computeFn({
   'use gpu';
   const C = config.$;
   const lane = lid % K_LANES;
-  const unit = wid.x * UNITS + d.u32(lid / K_LANES);
+  const unit = wid.x * UNITS + std.intdiv(lid, K_LANES);
   // The grid is at most 65535 rows high; longer inputs loop.
   for (let t = wid.y; t < moeDownLayout.$.dims.tokens; t += MAX_WORKGROUPS_PER_DIM) {
     const r = t * 2 * MOE_SLOTS;
@@ -208,7 +208,7 @@ const moeDownKernel = tgpu.computeFn({
         let dot = d.vec4f();
         for (let k4 = lane; k4 < C.k4count; k4 += K_LANES) {
           const tb = wBase + k4 * C.tileWords;
-          const sc = (sRow + d.u32(k4 / C.g4)) * C.n4 + unit;
+          const sc = (sRow + std.intdiv(k4, C.g4)) * C.n4 + unit;
           const v = tileDots(
             moeDownLayout.$.w[tb]!,
             moeDownLayout.$.w[tb + colWord(1)]!,

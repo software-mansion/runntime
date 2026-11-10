@@ -58,10 +58,10 @@ function makeConvTranspose2dKernel(cfg: ConvTranspose2dCfg, elem: Elem) {
       return;
     }
     const wo = idx % wOut;
-    const ho = d.u32(idx / wOut) % hOut;
-    const co = d.u32(idx / (wOut * hOut));
-    const hi = d.u32(ho / k); // explicit integer division (codebase convention)
-    const wi = d.u32(wo / k);
+    const ho = std.intdiv(idx, wOut) % hOut;
+    const co = std.intdiv(idx, wOut * hOut);
+    const hi = std.intdiv(ho, k);
+    const wi = std.intdiv(wo, k);
     const di = ho % k;
     const dj = wo % k;
     const rowBase = (co * k * k + di * k + dj) * cIn;
@@ -69,7 +69,7 @@ function makeConvTranspose2dKernel(cfg: ConvTranspose2dCfg, elem: Elem) {
     const plane = dims.h * dims.w;
     let acc = d.f32(0);
     if (paired) {
-      const wordBase = d.u32(rowBase / 2); // rowBase is even when cIn is
+      const wordBase = std.intdiv(rowBase, 2); // rowBase is even when cIn is
       for (const c2 of std.range(cIn / 2)) {
         const pair = std.unpack2x16float(layout.$.w[wordBase + c2]!);
         const xb = 2 * c2 * plane + xPix;
@@ -78,7 +78,7 @@ function makeConvTranspose2dKernel(cfg: ConvTranspose2dCfg, elem: Elem) {
     } else {
       for (const ci of std.range(cIn)) {
         const flat = rowBase + ci;
-        const pair = std.unpack2x16float(layout.$.w[d.u32(flat / 2)]!);
+        const pair = std.unpack2x16float(layout.$.w[std.intdiv(flat, 2)]!);
         const wv = std.select(pair.x, pair.y, flat % 2 === 1);
         acc += wv * d.f32(layout.$.x[ci * plane + xPix]!);
       }

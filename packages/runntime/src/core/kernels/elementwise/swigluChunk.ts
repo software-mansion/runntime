@@ -36,7 +36,7 @@ function makeSwigluChunkVariant(elem: Elem) {
     const half = layout.$.dims.half;
     const i = flatIndex(gid);
     if (i >= total) return;
-    const row = d.u32(i / half);
+    const row = std.intdiv(i, half);
     const c = i % half;
     const base = row * 2 * half;
     const hidden = d.f32(layout.$.x[base + c]!);

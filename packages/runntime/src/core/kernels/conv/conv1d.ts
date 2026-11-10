@@ -73,7 +73,7 @@ function makeConv1dVariant(elem: Elem) {
     if (idx >= tOut * C.c4c) {
       return;
     }
-    const frame = d.u32(idx / C.c4c);
+    const frame = std.intdiv(idx, C.c4c);
     const ch0 = (idx % C.c4c) * 4;
     const windowStart = frame * C.stride; // in padded coordinates
 
