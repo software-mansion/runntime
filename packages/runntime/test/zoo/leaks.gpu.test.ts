@@ -14,8 +14,16 @@ import { HiggsDecoder } from '../../src/zoo/higgs/decoder.ts';
 import { MINILM_L6 } from '../../src/zoo/minilm/config.ts';
 import { createMinilmEmbedCore } from '../../src/zoo/minilm/embedCore.ts';
 import { MinilmModel } from '../../src/zoo/minilm/model.ts';
+import { MOBILENETV4_CONV_S } from '../../src/zoo/mobilenetv4/config.ts';
 import { MobileNetV4Model } from '../../src/zoo/mobilenetv4/model.ts';
+import { createImageClassifier } from '../../src/zoo/tasks/cv/imageClassification.ts';
+import { createInstanceSegmenter } from '../../src/zoo/tasks/cv/instanceSegmentation.ts';
+import { createKeypointDetector } from '../../src/zoo/tasks/cv/keypointDetection.ts';
+import { createObjectDetector } from '../../src/zoo/tasks/cv/objectDetection.ts';
+import { Yolo26Model, type Yolo26Task } from '../../src/zoo/yolo26/model.ts';
 import { buffersSince, gpu, liveBuffers, randomF32, repeated, requireFeature } from '../gpu.ts';
+import { randomSafetensors } from './randomWeights.ts';
+import { randomRgba, rgbaTexture } from './tasks/cv/images.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
  *  call per shape records replays and fills the pool. */
@@ -51,7 +59,7 @@ interface Runner {
 interface LeakCase {
   name: string;
   needs?: GPUFeatureName;
-  build(root: TgpuRoot): Runner;
+  build(root: TgpuRoot): Runner | Promise<Runner>;
   /** Buffers a known leak, not fixed yet, leaves behind after dispose. */
   leftOnDispose?: string[];
   /** Buffers a known leak, not fixed yet, leaves behind on every warm call. */
@@ -84,6 +92,39 @@ const TINY_HIGGS = {
   strides: [2],
   kernel: 3,
 };
+
+/** YOLO26-n at the smallest input, for the encode* methods: 84 cells. */
+const YOLO_INPUT_SIZE = 64;
+
+/** A YOLO26-n `task` checkpoint with random weights, in memory. */
+function yoloWeights(task: Yolo26Task) {
+  const template = new Yolo26Model('n', { task });
+  // Scaled down so f16 activations stay finite through the random layers.
+  const weights = randomSafetensors(template, { scale: 0.1 });
+  template.dispose();
+  return weights;
+}
+
+/** A runner's encode<Verb> method on a texture source, the route a video
+ *  frame takes, waited for on the queue: the method itself does not wait. */
+function encodeRunner(
+  root: TgpuRoot,
+  runner: { dispose(): void },
+  target: { destroy(): void },
+  encode: (source: GPUTexture) => void,
+): Runner {
+  const source = rgbaTexture(root, randomRgba(96, 48, 5), 96, 48);
+  return {
+    call: () => {
+      encode(source);
+      return root.device.queue.onSubmittedWorkDone();
+    },
+    dispose: () => {
+      runner.dispose();
+      target.destroy();
+    },
+  };
+}
 
 /** The uploads one MiniLM batch call of 5 tokens never frees, in the order
  *  they are made: the [5, 2] segments from MinilmModel.forward, the [2, 5]
@@ -181,6 +222,67 @@ const CASES: LeakCase[] = [
     // toArray keeps its 8-sample result out of the pool.
     leftPerCall: ['32 B, usage 140'],
   },
+  {
+    name: 'image classifier, encodeClassify',
+    needs: 'shader-f16',
+    async build(root) {
+      const { numClasses, headHidden } = MOBILENETV4_CONV_S;
+      const template = new MobileNetV4Model(MOBILENETV4_CONV_S, { root });
+      const weights = randomSafetensors(template, {
+        scale: 0.1,
+        // The checkpoint holds the classifier as [out, in]; the model keeps it [in, out].
+        shapes: { 'classifier.weight': [numClasses, headHidden] },
+      });
+      template.dispose();
+      const runner = await createImageClassifier({ modelPath: weights });
+      const target = root.createBuffer(runner.schemas.output(5)).$usage('storage');
+      return encodeRunner(root, runner, target, (source) =>
+        runner.encodeClassify({ source, target }),
+      );
+    },
+  },
+  {
+    name: 'object detector, encodeDetectObjects',
+    needs: 'shader-f16',
+    async build(root) {
+      const runner = await createObjectDetector({
+        modelPath: yoloWeights('detect'),
+        inputSize: YOLO_INPUT_SIZE,
+      });
+      const target = root.createBuffer(runner.schemas.output(20)).$usage('storage');
+      return encodeRunner(root, runner, target, (source) =>
+        runner.encodeDetectObjects({ source, target }),
+      );
+    },
+  },
+  {
+    name: 'keypoint detector, encodeDetectKeypoints',
+    needs: 'shader-f16',
+    async build(root) {
+      const runner = await createKeypointDetector({
+        modelPath: yoloWeights('pose'),
+        inputSize: YOLO_INPUT_SIZE,
+      });
+      const target = root.createBuffer(runner.schemas.output(20)).$usage('storage');
+      return encodeRunner(root, runner, target, (source) =>
+        runner.encodeDetectKeypoints({ source, target }),
+      );
+    },
+  },
+  {
+    name: 'instance segmenter, encodeSegmentInstances',
+    needs: 'shader-f16',
+    async build(root) {
+      const runner = await createInstanceSegmenter({
+        modelPath: yoloWeights('segment'),
+        inputSize: YOLO_INPUT_SIZE,
+      });
+      const target = root.createBuffer(runner.schemas.output(20)).$usage('storage');
+      return encodeRunner(root, runner, target, (source) =>
+        runner.encodeSegmentInstances({ source, target }),
+      );
+    },
+  },
 ];
 
 describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = [] }) => {
@@ -189,12 +291,12 @@ describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = 
     if (needs) requireFeature(ctx, root, needs);
     // A throwaway run first: pipelines and the readback staging buffer belong
     // to the root and outlive every model.
-    const first = build(root);
+    const first = await build(root);
     await first.call();
     first.dispose();
 
     const before = liveBuffers();
-    const runner = build(root);
+    const runner = await build(root);
     await runner.call();
     runner.dispose();
     expect(buffersSince(before)).toEqual(leftOnDispose);
@@ -203,7 +305,7 @@ describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = 
   it('stops allocating once warm', async (ctx) => {
     const { root } = await gpu();
     if (needs) requireFeature(ctx, root, needs);
-    const runner = build(root);
+    const runner = await build(root);
     try {
       for (let i = 0; i < WARM_CALLS; i++) await runner.call();
       const before = liveBuffers();
