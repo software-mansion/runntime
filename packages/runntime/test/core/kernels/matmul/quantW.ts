@@ -10,8 +10,8 @@ import { randomF32 } from '../../../gpu.ts';
  *  dequantizes to. */
 export interface QuantWeight {
   w: Value;
-  /** f32 [period / groupSize, N]: one scale per group of rows in each
-   *  column, the same in every period of rows. */
+  /** f32 [E·K / groupSize, N] by default: one scale per group of rows in
+   *  each column. */
   scales: Float32Array;
   /** q · scale for row r and column c at [r·N + c], in f64. */
   dequant: Float64Array;
@@ -42,9 +42,16 @@ function packQuantW(q: Int8Array, experts: number, k: number, n: number, bits: 4
   return words;
 }
 
+/** Where a weight's scales are: `count` of them, the one of row r and
+ *  column c at `at(r, c)`. */
+export interface ScaleIndex {
+  count: number;
+  at: (row: number, col: number) => number;
+}
+
 /** Random ints over the full signed range of `bits` and positive scales,
- *  packed and uploaded. Row r takes scale row (r mod period) / groupSize,
- *  period E·K when omitted. The buffer is destroyed when the test ends. */
+ *  packed and uploaded. Row r takes scale row r / groupSize unless `scaleIndex`
+ *  says otherwise. The buffer is destroyed when the test ends. */
 export function randomQuantWeight(
   root: TgpuRoot,
   {
@@ -53,8 +60,18 @@ export function randomQuantWeight(
     n,
     bits,
     groupSize,
-    period = experts * k,
-  }: { experts: number; k: number; n: number; bits: 4 | 8; groupSize: number; period?: number },
+    scaleIndex = {
+      count: ((experts * k) / groupSize) * n,
+      at: (r, c) => Math.floor(r / groupSize) * n + c,
+    },
+  }: {
+    experts: number;
+    k: number;
+    n: number;
+    bits: 4 | 8;
+    groupSize: number;
+    scaleIndex?: ScaleIndex;
+  },
   seed: number,
 ): QuantWeight {
   const rows = experts * k;
@@ -62,13 +79,10 @@ export function randomQuantWeight(
   const q = Int8Array.from(randomF32(rows * n, seed), (v) =>
     Math.min(half - 1, Math.floor(v * half)),
   );
-  const scales = randomF32((period / groupSize) * n, seed + 1).map(
-    (v) => (Math.abs(v) + 0.1) / half,
-  );
+  const scales = randomF32(scaleIndex.count, seed + 1).map((v) => (Math.abs(v) + 0.1) / half);
   const dequant = new Float64Array(rows * n);
   for (let r = 0; r < rows; r++) {
-    const row = Math.floor((r % period) / groupSize);
-    for (let c = 0; c < n; c++) dequant[r * n + c] = q[r * n + c]! * scales[row * n + c]!;
+    for (let c = 0; c < n; c++) dequant[r * n + c] = q[r * n + c]! * scales[scaleIndex.at(r, c)]!;
   }
   const words = packQuantW(q, experts, k, n, bits);
   const buffer = uploadU32(root, words);

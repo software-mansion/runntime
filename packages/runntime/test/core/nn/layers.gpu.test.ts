@@ -179,45 +179,32 @@ interface ConvCase {
   kernel: number;
   stride: number;
   padding: number;
-  /** Input channels per scale group, each group spanning every tap. */
-  group: number;
+  /** Values of a torch row per scale. */
+  groupSize: number;
   bias: boolean;
   activation?: 'gelu';
 }
 
-/** A conv loaded from a quantized file [out, in·kernel] matches the same conv
- *  loaded with the dequantized floats, int · f16 scale, in torch's layout. A
- *  transposed conv's file holds the kernel reversed. */
+/** A conv loaded from a quantized file of its torch weight, [out, in·kernel]
+ *  or a transposed conv's [in, out·kernel], matches the same conv loaded
+ *  with the dequantized floats, int · f16 scale. */
 async function checkQuantizedConv(c: ConvCase, bits: 4 | 8, dtype: 'f32' | 'f16') {
-  const { tIn, cIn, cOut, kernel, stride, padding, group } = c;
+  const { tIn, cIn, cOut, kernel, stride, padding, groupSize } = c;
   const half = 2 ** (bits - 1);
-  const cols = cIn * kernel;
-  const groupSize = group * kernel;
-  const ints = Array.from(randomF32(cOut * cols, 1), (v) =>
+  const [rows, cols] = c.kind === 'conv' ? [cOut, cIn * kernel] : [cIn, cOut * kernel];
+  const ints = Array.from(randomF32(rows * cols, 1), (v) =>
     Math.min(half - 1, Math.floor(v * half)),
   );
   const scales = roundF16(
-    randomF32((cOut * cols) / groupSize, 2).map((v) => (Math.abs(v) + 0.1) / half),
+    randomF32((rows * cols) / groupSize, 2).map((v) => (Math.abs(v) + 0.1) / half),
   );
   const bias = roundF16(randomF32(cOut, 3));
   const xs = roundF16(randomF32(tIn * cIn, 4));
-  // [out, in, kernel] dequantized; a transposed conv's torch weight is [in,
-  // out, kernel] with the kernel the other way round.
   const dequant = Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);
-  const torchWeight =
-    c.kind === 'conv'
-      ? { data: dequant, shape: [cOut, cIn, kernel] }
-      : {
-          data: Float32Array.from({ length: dequant.length }, (_, i) => {
-            const [ci, o, t] = [
-              Math.floor(i / (cOut * kernel)),
-              Math.floor(i / kernel) % cOut,
-              i % kernel,
-            ];
-            return dequant[(o * cIn + ci) * kernel + kernel - 1 - t]!;
-          }),
-          shape: [cIn, cOut, kernel],
-        };
+  const torchWeight = {
+    data: dequant,
+    shape: c.kind === 'conv' ? [cOut, cIn, kernel] : [cIn, cOut, kernel],
+  };
   const make = () =>
     c.kind === 'conv'
       ? new Conv1d(cIn, cOut, kernel, { stride, padding, bias: c.bias, activation: c.activation })
@@ -229,7 +216,7 @@ async function checkQuantizedConv(c: ConvCase, bits: 4 | 8, dtype: 'f32' | 'f16'
     return toArray(layer.forward(upload(root, xs, { ...matrix(tIn, cIn), dtype })), ex);
   };
   const file = quantFile(bits, groupSize, {
-    weight: { ints, scales: [...scales], shape: [cOut, cols] },
+    weight: { ints, scales: [...scales], shape: [rows, cols] },
   });
   const quantSd = await fromSafetensors(bufferSource(file), { chunkBytes: 0 });
   if (c.bias) quantSd.tensors.set('bias', memoryStateDict({ bias }).tensors.get('bias')!);
@@ -246,7 +233,7 @@ async function checkQuantizedConv(c: ConvCase, bits: 4 | 8, dtype: 'f32' | 'f16'
 describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
   const CASES: ConvCase[] = [
     {
-      name: 'conv, padded, bias and gelu',
+      name: 'conv, padded, groups that end inside a channel, bias and gelu',
       kind: 'conv',
       tIn: 40,
       cIn: 16,
@@ -254,7 +241,7 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       kernel: 7,
       stride: 1,
       padding: 3,
-      group: 8,
+      groupSize: 16,
       bias: true,
       activation: 'gelu',
     },
@@ -267,7 +254,7 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       kernel: 1,
       stride: 2,
       padding: 0,
-      group: 32,
+      groupSize: 32,
       bias: false,
     },
     // 1 and 3 output channels pad up to the packing width and are cut after.
@@ -280,7 +267,7 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       kernel: 7,
       stride: 1,
       padding: 3,
-      group: 8,
+      groupSize: 56,
       bias: true,
     },
     {
@@ -292,7 +279,7 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       kernel: 3,
       stride: 1,
       padding: 1,
-      group: 4,
+      groupSize: 6,
       bias: true,
     },
     {
@@ -304,7 +291,7 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       kernel: 8,
       stride: 4,
       padding: 2,
-      group: 8,
+      groupSize: 16,
       bias: true,
     },
     {
@@ -316,7 +303,7 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       kernel: 4,
       stride: 2,
       padding: 1,
-      group: 16,
+      groupSize: 32,
       bias: false,
     },
   ];

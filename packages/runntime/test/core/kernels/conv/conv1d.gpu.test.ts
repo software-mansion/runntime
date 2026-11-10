@@ -4,7 +4,7 @@ import { conv1d, type SlotAct } from '../../../../src/core/graph/ops.ts';
 import { matrix } from '../../../../src/core/graph/value.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../../gpu.ts';
 import { ACTIVATION_REF } from '../matmul/checkMatmul.ts';
-import { randomQuantWeight } from '../matmul/quantW.ts';
+import { randomQuantWeight, type ScaleIndex } from '../matmul/quantW.ts';
 
 const { root, ex } = await gpu();
 
@@ -70,20 +70,52 @@ async function checkConv1d(c: Case, dtype: 'f32' | 'f16') {
   expectClose(got, conv1dRef(x, w, c, bias), tol);
 }
 
-/** conv1d with a quantW weight against conv1dRef on its dequantized values.
- *  The weight's rows hold each tap's input channels in turn, so a group of
- *  groupSize channels has one scale in every tap. */
-async function checkQuantConv1d(
-  c: Case & { bits: 4 | 8; groupSize: number },
-  dtype: 'f32' | 'f16',
-) {
+type QuantCase = Case & {
+  bits: 4 | 8;
+  /** Values of a torch row per scale. */
+  groupSize: number;
+  /** A ConvTranspose1d's kernel, run as this conv over kernelSize taps. */
+  transposedKernel?: number;
+};
+
+/** Where the scales of a quantW conv1d weight are, in the torch layout of a
+ *  Conv1d [C_out, C_in·kernelSize] or a ConvTranspose1d [C_in, out·kernel].
+ *  Row r, column col of the tap-major weight is one value of a torch row. */
+function convScaleIndex(c: QuantCase): ScaleIndex {
+  const { cIn, cOut, kernelSize, groupSize, transposedKernel: kernel } = c;
+  if (!kernel) {
+    const groups = (cIn * kernelSize) / groupSize;
+    return {
+      count: groups * cOut,
+      at: (r, col) => {
+        const [tap, ch] = [Math.floor(r / cIn), r % cIn];
+        return Math.floor((ch * kernelSize + tap) / groupSize) * cOut + col;
+      },
+    };
+  }
+  const stride = kernel / kernelSize;
+  const out = cOut / stride;
+  const groups = (out * kernel) / groupSize;
+  return {
+    count: cIn * groups,
+    at: (r, col) => {
+      const [i, ch] = [Math.floor(r / cIn), r % cIn];
+      const kk = (kernelSize - 1 - i) * stride + Math.floor(col / out);
+      return ch * groups + Math.floor(((col % out) * kernel + kk) / groupSize);
+    },
+  };
+}
+
+/** conv1d with a quantW weight against conv1dRef on its dequantized values. */
+async function checkQuantConv1d(c: QuantCase, dtype: 'f32' | 'f16') {
   const { cIn, cOut, kernelSize, bits, groupSize } = c;
   const round = dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
   const meta = (rows: number, cols: number) => ({ ...matrix(rows, cols), dtype });
   const k = kernelSize * cIn;
+  const scaleIndex = convScaleIndex(c);
   const weight = randomQuantWeight(
     root,
-    { experts: 1, k, n: cOut, bits, groupSize, period: cIn },
+    { experts: 1, k, n: cOut, bits, groupSize, scaleIndex },
     2,
   );
   const x = round(randomF32(c.tIn * cIn, 1));
@@ -97,9 +129,10 @@ async function checkQuantConv1d(
       padRight: c.padRight,
       bias: bias && upload(root, bias, meta(1, cOut)),
       activation: c.activation,
-      scales: upload(root, weight.scales, [cIn / groupSize, cOut]),
+      scales: upload(root, weight.scales, [1, scaleIndex.count]),
       bits,
       groupSize,
+      transposedKernel: c.transposedKernel,
     }),
     ex,
   );
@@ -306,21 +339,21 @@ describe('conv1d kernel', () => {
 
   // A quantW weight always takes matmulQuantTiled: gemm when unpadded and
   // undilated, mapped gemm otherwise, with no minimum K.
-  const QUANT_SHAPES: { name: string; c: Case & { bits: 4 | 8; groupSize: number } }[] = [
+  const QUANT_SHAPES: { name: string; c: QuantCase }[] = [
     {
       name: 'int8, stride 2 (gemm)',
-      c: { tIn: 70, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, bits: 8, groupSize: 8 },
+      c: { tIn: 70, cIn: 16, cOut: 36, kernelSize: 4, stride: 2, bits: 8, groupSize: 32 },
     },
     {
-      name: 'int8, all channels in one group (gemm)',
-      c: { tIn: 40, cIn: 32, cOut: 12, kernelSize: 3, stride: 1, bits: 8, groupSize: 32 },
+      name: 'int8, one group per torch row (gemm)',
+      c: { tIn: 40, cIn: 32, cOut: 12, kernelSize: 3, stride: 1, bits: 8, groupSize: 96 },
     },
     {
       name: 'int8, 1×1 under the float tiled minimum K (gemm)',
       c: { tIn: 50, cIn: 32, cOut: 32, kernelSize: 1, stride: 1, bits: 8, groupSize: 8 },
     },
     {
-      name: 'int8, same padding (mapped gemm)',
+      name: 'int8, same padding, groups that end inside a channel (mapped gemm)',
       c: {
         tIn: 45,
         cIn: 16,
@@ -330,7 +363,7 @@ describe('conv1d kernel', () => {
         padLeft: 3,
         padRight: 3,
         bits: 8,
-        groupSize: 8,
+        groupSize: 16,
       },
     },
     {
@@ -345,7 +378,7 @@ describe('conv1d kernel', () => {
         padLeft: 9,
         padRight: 9,
         bits: 8,
-        groupSize: 4,
+        groupSize: 28,
       },
     },
     {
@@ -359,11 +392,11 @@ describe('conv1d kernel', () => {
         padLeft: 5,
         padRight: 7,
         bits: 8,
-        groupSize: 4,
+        groupSize: 32,
       },
     },
     {
-      name: 'int8, stride 2 with padding (mapped gemm)',
+      name: 'int8, stride 2 with padding, groups of 2 values (mapped gemm)',
       c: {
         tIn: 41,
         cIn: 16,
@@ -373,12 +406,12 @@ describe('conv1d kernel', () => {
         padLeft: 2,
         padRight: 2,
         bits: 8,
-        groupSize: 8,
+        groupSize: 2,
       },
     },
     {
       name: 'int4, stride 2 (gemm)',
-      c: { tIn: 70, cIn: 16, cOut: 40, kernelSize: 4, stride: 2, bits: 4, groupSize: 8 },
+      c: { tIn: 70, cIn: 16, cOut: 40, kernelSize: 4, stride: 2, bits: 4, groupSize: 32 },
     },
     {
       name: 'int4, same padding (mapped gemm)',
@@ -391,7 +424,54 @@ describe('conv1d kernel', () => {
         padLeft: 2,
         padRight: 2,
         bits: 4,
-        groupSize: 16,
+        groupSize: 32,
+      },
+    },
+    // A ConvTranspose1d [C_in, out, kernel] runs over kernel / stride taps to
+    // stride·out channels, padded taps − 1 on each side.
+    {
+      name: 'int8, transposed kernel 8 stride 4 (mapped gemm)',
+      c: {
+        tIn: 12,
+        cIn: 16,
+        cOut: 4 * 8,
+        kernelSize: 2,
+        stride: 1,
+        padLeft: 1,
+        padRight: 1,
+        bits: 8,
+        groupSize: 32,
+        transposedKernel: 8,
+      },
+    },
+    {
+      name: 'int8, transposed kernel 16 stride 8, groups across outputs (mapped gemm)',
+      c: {
+        tIn: 9,
+        cIn: 32,
+        cOut: 8 * 12,
+        kernelSize: 2,
+        stride: 1,
+        padLeft: 1,
+        padRight: 1,
+        bits: 8,
+        groupSize: 24,
+        transposedKernel: 16,
+      },
+    },
+    {
+      name: 'int4, transposed kernel 4 stride 2 (mapped gemm)',
+      c: {
+        tIn: 10,
+        cIn: 8,
+        cOut: 2 * 8,
+        kernelSize: 2,
+        stride: 1,
+        padLeft: 1,
+        padRight: 1,
+        bits: 4,
+        groupSize: 32,
+        transposedKernel: 4,
       },
     },
   ];
@@ -415,7 +495,7 @@ describe('conv1d kernel', () => {
     ),
   )('$dtype quantW $route with $name', async ({ dtype, c, bias, activation }, ctx) => {
     if (dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
-    await checkQuantConv1d({ ...c, bias, activation, bits: 8, groupSize: 8 }, dtype);
+    await checkQuantConv1d({ ...c, bias, activation, bits: 8, groupSize: 32 }, dtype);
   });
 
   // padding 'same' with an even kernel pads one more on the right, as torch does.

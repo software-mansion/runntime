@@ -91,8 +91,8 @@ function conv1d(
   };
 }
 
-/** conv1d with a quantW weight [k·cIn, cOut] and f32 scales [cIn / group,
- *  cOut], one per group of input channels in every tap. */
+/** conv1d with a quantW weight [k·cIn, cOut] and f32 scales [k·cIn /
+ *  groupSize, cOut], one per groupSize values of a torch row [cOut, cIn·k]. */
 function conv1dQuant(
   name: string,
   tIn: number,
@@ -100,7 +100,7 @@ function conv1dQuant(
   cOut: number,
   k: number,
   bits: 8 | 4,
-  group: number,
+  groupSize: number,
   geometry: { padLeft?: number; padRight?: number; dilation?: number } = {},
   dtype: 'f32' | 'f16' = 'f32',
 ): AbCase {
@@ -109,9 +109,8 @@ function conv1dQuant(
     needs: dtype === 'f16' ? ['shader-f16'] : [],
     build: (version) => {
       const x = randMat(version, tIn, cIn, dtype);
-      // Groups of k·group rows give as many scales as the conv reads; their
-      // values do not matter for timing.
-      const { w, scales } = quantWeight(version, 1, k * cIn, cOut, bits, k * group);
+      // The scales' values do not matter for timing.
+      const { w, scales } = quantWeight(version, 1, k * cIn, cOut, bits, groupSize);
       const call = () =>
         version.lib.conv1d(x, w, {
           kernelSize: k,
@@ -119,9 +118,49 @@ function conv1dQuant(
           ...geometry,
           scales,
           bits,
-          groupSize: group,
+          groupSize,
         });
       // Built once here, so a base without quantW conv1d skips the case.
+      call();
+      return call;
+    },
+  };
+}
+
+/** A quantized ConvTranspose1d cIn→out with kernel 2·stride, as the layer
+ *  runs it: conv1d over 2 taps to stride·out channels, its scales [cIn,
+ *  out·kernel / groupSize] in torch layout. */
+function convTransposeQuant(
+  name: string,
+  tIn: number,
+  cIn: number,
+  out: number,
+  stride: number,
+  bits: 8 | 4,
+  groupSize: number,
+  dtype: 'f32' | 'f16' = 'f32',
+): AbCase {
+  const kernel = 2 * stride;
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      const x = randMat(version, tIn, cIn, dtype);
+      // As many scales as torch [cIn, out·kernel] has; their values do not
+      // matter for timing.
+      const { w, scales } = quantWeight(version, 1, 2 * cIn, stride * out, bits, groupSize);
+      const call = () =>
+        version.lib.conv1d(x, w, {
+          kernelSize: 2,
+          stride: 1,
+          padLeft: 1,
+          padRight: 1,
+          scales,
+          bits,
+          groupSize,
+          transposedKernel: kernel,
+        });
+      // Built once here, so a base without it skips the case.
       call();
       return call;
     },
@@ -331,15 +370,29 @@ abSuite('conv', [
     padRight: 1,
   }),
 
-  // conv1d with a quantW weight: matmulQuantTiled, groups of 8 channels.
-  conv1dQuant('conv1d int8 same, Higgs conv_in 256→1024 k7, 10 s', 250, 256, 1024, 7, 8, 8, {
+  // conv1d with a quantW weight: matmulQuantTiled. Groups of 56 values are 8
+  // channels of a k7 conv.
+  conv1dQuant('conv1d int8 same, Higgs conv_in 256→1024 k7, 10 s', 250, 256, 1024, 7, 8, 56, {
     padLeft: 3,
     padRight: 3,
   }),
-  conv1dQuant('conv1d int8 same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 8, 8, {
+  conv1dQuant('conv1d int8 same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 8, 56, {
     padLeft: 3,
     padRight: 3,
   }),
+  conv1dQuant(
+    'conv1d int8 same, groups of 32, Higgs residual 64ch k7, 10 s',
+    80000,
+    64,
+    64,
+    7,
+    8,
+    32,
+    {
+      padLeft: 3,
+      padRight: 3,
+    },
+  ),
   conv1dQuant(
     'conv1d int8 same f16, Higgs residual 64ch k7, 10 s',
     80000,
@@ -347,15 +400,15 @@ abSuite('conv', [
     64,
     7,
     8,
-    8,
+    56,
     { padLeft: 3, padRight: 3 },
     'f16',
   ),
-  conv1dQuant('conv1d int4 same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 4, 8, {
+  conv1dQuant('conv1d int4 same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 4, 56, {
     padLeft: 3,
     padRight: 3,
   }),
-  conv1dQuant('conv1d int8 dilated, Higgs residual 64ch k7 d9, 10 s', 80000, 64, 64, 7, 8, 8, {
+  conv1dQuant('conv1d int8 dilated, Higgs residual 64ch k7 d9, 10 s', 80000, 64, 64, 7, 8, 56, {
     padLeft: 27,
     padRight: 27,
     dilation: 9,
@@ -367,23 +420,32 @@ abSuite('conv', [
     padLeft: 3,
     padRight: 3,
   }),
-  conv1dQuant('conv1d int8 same, Higgs output 32→1 k7 as 4 columns, 10 s', 240000, 32, 4, 7, 8, 8, {
-    padLeft: 3,
-    padRight: 3,
-  }),
   conv1dQuant(
-    'conv1d int8, Higgs upsampling 1024→8·512 as 2 taps, 10 s',
-    250,
-    1024,
-    4096,
-    2,
+    'conv1d int8 same, Higgs output 32→1 k7 as 4 columns, 10 s',
+    240000,
+    32,
+    4,
+    7,
     8,
-    8,
+    56,
     {
-      padLeft: 1,
-      padRight: 1,
+      padLeft: 3,
+      padRight: 3,
     },
   ),
+  // ConvTranspose1d with a quantW weight: each column reads its own scale.
+  convTransposeQuant('convT int8, Higgs upsampling 1024→512 s8, 10 s', 250, 1024, 512, 8, 8, 32),
+  convTransposeQuant(
+    'convT int8 f16, Higgs upsampling 1024→512 s8, 10 s',
+    250,
+    1024,
+    512,
+    8,
+    8,
+    32,
+    'f16',
+  ),
+  convTransposeQuant('convT int8, Higgs upsampling 64→32 s3, 10 s', 80000, 64, 32, 3, 8, 32),
 
   // gluConv1d: its own kernel.
   gluConv1d('gluConv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5', 750, 1024, 5, 'f32'),

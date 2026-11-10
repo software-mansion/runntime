@@ -1,7 +1,13 @@
 /** Dispatch specs for the convolution kernels (kernels/conv). */
 
-import { elemFor } from '../../kernels/elem.ts';
-import { conv1dHandle, conv1dLoadA, createConv1dPipeline } from '../../kernels/conv/conv1d.ts';
+import { type Elem, elemFor } from '../../kernels/elem.ts';
+import {
+  conv1dHandle,
+  conv1dLoadA,
+  conv1dScales,
+  convTransposeScales,
+  createConv1dPipeline,
+} from '../../kernels/conv/conv1d.ts';
 import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
 import {
   createMatmulQuantTiledPipeline,
@@ -47,11 +53,49 @@ import {
 } from '../../kernels/conv/hwc4.ts';
 import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 
+/** The scale reader of a quantW conv1d: where the torch weight of a Conv1d,
+ *  or of a ConvTranspose1d when transposedKernel is set, has its scales. */
+function quantConvScales(
+  elem: Elem,
+  cfg: { cIn: number; cOut: number; kernel: number; groupSize: number; transposedKernel: number },
+) {
+  const layout = matmulQuantTiledLayout(elem);
+  const { cIn, cOut, kernel, groupSize, transposedKernel } = cfg;
+  if (transposedKernel === 0) return conv1dScales({ cIn, kernel, groupSize, n: cOut }, layout);
+  // The ConvTranspose1d's stride, not this conv's.
+  const stride = transposedKernel / kernel;
+  return convTransposeScales(
+    { cIn, out: cOut / stride, kernel: transposedKernel, stride, groupSize },
+    layout,
+  );
+}
+
 export const conv1dSpec = defineSpec({
   attrs: (p) => {
-    const [kernel, stride, padLeft, padRight, hasBias, act, dilation, bits, groupSize] =
-      p.attrs as [number, number, number, number, number, number, number, number, number];
-    return { kernel, stride, padLeft, padRight, hasBias, act, dilation, bits, groupSize };
+    const [
+      kernel,
+      stride,
+      padLeft,
+      padRight,
+      hasBias,
+      act,
+      dilation,
+      bits,
+      groupSize,
+      transposedKernel,
+    ] = p.attrs as [number, number, number, number, number, number, number, number, number, number];
+    return {
+      kernel,
+      stride,
+      padLeft,
+      padRight,
+      hasBias,
+      act,
+      dilation,
+      bits,
+      groupSize,
+      transposedKernel,
+    };
   },
   cfg: (node, attrs) => {
     const cIn = node.pending!.inputs[0]!.shape.dims![1]!;
@@ -75,6 +119,7 @@ export const conv1dSpec = defineSpec({
       gemm: gemm ? (mapped ? 2 : 1) : 0,
       bits: attrs.bits,
       groupSize: attrs.groupSize,
+      transposedKernel: attrs.transposedKernel,
     };
   },
   pipeline: (root, dtype, cfg) =>
@@ -90,12 +135,12 @@ export const conv1dSpec = defineSpec({
             hasAdd: 0,
             act: cfg.act,
             aStride: cfg.stride * cfg.cIn,
-            period: cfg.cIn,
           },
           elemFor(dtype),
           cfg.gemm === 2
             ? conv1dLoadA(elemFor(dtype), cfg, matmulQuantTiledLayout(elemFor(dtype)))
             : undefined,
+          quantConvScales(elemFor(dtype), cfg),
         )
       : cfg.gemm
         ? createMatmulTiledVec4Pipeline(

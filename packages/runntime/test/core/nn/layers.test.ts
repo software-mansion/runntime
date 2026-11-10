@@ -417,14 +417,14 @@ describe('Linear with a quantized weight', () => {
 });
 
 describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
-  /** A [out, in·kernel] int8 entry of zeros, with `groups` scales per row. */
-  const zeros = (out: number, cols: number, groups: number): QuantEntry => ({
-    ints: Array<number>(out * cols).fill(0),
-    scales: Array<number>(out * groups).fill(1),
-    shape: [out, cols],
+  /** A [rows, cols] int8 entry of zeros, with `groups` scales per row. */
+  const zeros = (rows: number, cols: number, groups: number): QuantEntry => ({
+    ints: Array<number>(rows * cols).fill(0),
+    scales: Array<number>(rows * groups).fill(1),
+    shape: [rows, cols],
   });
 
-  it('retypes a Conv1d weight to quantW [kernel·in, out] with a scale per channel group', async () => {
+  it('retypes a Conv1d weight to quantW [kernel·in, out] with its scales', async () => {
     const layer = new Conv1d(8, 4, 3);
     // groups of 12 values: 4 input channels with their 3 taps
     const sd = await quantCheckpoint(8, 12, { weight: zeros(4, 24, 2) });
@@ -462,35 +462,84 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
     );
   });
 
-  it('retypes a ConvTranspose1d weight to quantW [taps·in, stride·out]', async () => {
-    const layer = new ConvTranspose1d(8, 2, 4, { stride: 2 });
-    const sd = await quantCheckpoint(8, 16, { weight: zeros(2, 32, 2) });
+  it('packs torch [out, in, kernel] ints tap-major and transposes the scales', async () => {
+    // torch [out 4, in 4, kernel 2], value o·8 + c·2 + tap; scales [4, 2]
+    // are o + g/2, f16-exact.
+    const sd = await quantCheckpoint(8, 4, {
+      weight: {
+        ints: Array.from({ length: 32 }, (_, i) => i),
+        scales: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5],
+        shape: [4, 8],
+      },
+    });
+    new Conv1d(4, 4, 2).transformStateDict(sd, '');
+    // Row tap·4 + c of column o holds o·8 + c·2 + tap: tile rows 0..3 are
+    // tap 0, rows 4..7 tap 1.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x06040200, 0x0e0c0a08, 0x16141210, 0x1e1c1a18, 0x07050301, 0x0f0d0b09, 0x17151311,
+      0x1f1d1b19,
+    ]);
+    expect([...(await sd.tensors.get('weightScale')!.f32())]).toEqual([
+      0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5,
+    ]);
+  });
+
+  it('keeps a Conv1d group that ends inside a channel', async () => {
+    const layer = new Conv1d(8, 4, 3);
+    // groups of 4 values: a channel's 3 taps and the next channel's first
+    const sd = await quantCheckpoint(8, 4, { weight: zeros(4, 24, 6) });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer).weightScale).toEqual(meta([6, 4]));
+  });
+
+  it('retypes a ConvTranspose1d weight [in, out·kernel] to quantW [taps·in, stride·out]', async () => {
+    const layer = new ConvTranspose1d(8, 4, 4, { stride: 2 });
+    // groups of 4 values: one output's 4 kernel positions
+    const sd = await quantCheckpoint(8, 4, { weight: zeros(8, 16, 4) });
     layer.transformStateDict(sd, '');
     expect(shapes(layer)).toEqual({
-      weight: { elems: 16, dtype: 'quantW', dims: [16, 4] },
-      bias: meta([4]),
-      weightScale: meta([2, 4]),
+      weight: { elems: 32, dtype: 'quantW', dims: [16, 8] },
+      bias: meta([8]),
+      weightScale: meta([8, 4]),
     });
+  });
+
+  it('packs torch [in, out, kernel] ints by frame and tap and keeps the scales', async () => {
+    // torch [in 4, out 4, kernel 4] with stride 2, so 2 taps; value
+    // c·16 + o·4 + kk; scales [4, 2] are c + g/2, f16-exact.
+    const scales = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
+    const sd = await quantCheckpoint(8, 8, {
+      weight: { ints: Array.from({ length: 64 }, (_, i) => i), scales, shape: [4, 16] },
+    });
+    new ConvTranspose1d(4, 4, 4, { stride: 2 }).transformStateDict(sd, '');
+    // Row i·4 + c, column r·4 + o holds kernel position (1 − i)·2 + r. Tiles
+    // run frame 0 taps 0 and 1, then frame 1.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x32221202, 0x36261606, 0x3a2a1a0a, 0x3e2e1e0e, 0x30201000, 0x34241404, 0x38281808,
+      0x3c2c1c0c, 0x33231303, 0x37271707, 0x3b2b1b0b, 0x3f2f1f0f, 0x31211101, 0x35251505,
+      0x39291909, 0x3d2d1d0d,
+    ]);
+    expect([...(await sd.tensors.get('weightScale')!.f32())]).toEqual(scales);
   });
 
   it.each([
     {
-      name: 'groups that split a channel',
-      layer: () => new Conv1d(8, 4, 3),
-      file: () => quantCheckpoint(8, 4, { weight: zeros(4, 24, 6) }),
-      error: /groups of 4 values, not whole channels of 3 values/,
-    },
-    {
-      name: 'a group of 2 channels',
-      layer: () => new Conv1d(8, 4, 2),
-      file: () => quantCheckpoint(8, 4, { weight: zeros(4, 16, 4) }),
-      error: /groups of 2 channels, which needs a group a multiple of 4/,
-    },
-    {
       name: 'kernel·in that is not a multiple of 8',
       layer: () => new Conv1d(4, 4, 3),
       file: () => quantCheckpoint(8, 12, { weight: zeros(4, 12, 1) }),
-      error: /3·in a multiple of 8, got in 4/,
+      error: /needs in a multiple of 4 and 3·in of 8, got in 4/,
+    },
+    {
+      name: 'in that is not a multiple of 4',
+      layer: () => new Conv1d(2, 4, 4),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(4, 8, 1) }),
+      error: /needs in a multiple of 4 and 4·in of 8, got in 2/,
+    },
+    {
+      name: 'a ConvTranspose1d weight in Conv1d layout',
+      layer: () => new ConvTranspose1d(16, 8, 4, { stride: 2 }),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(8, 64, 8) }),
+      error: /expected \[in, out·kernel\] = \[16, 32\]/,
     },
     {
       name: 'a weight of another shape',
@@ -499,10 +548,10 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       error: /expected \[out, in·kernel\] = \[4, 24\]/,
     },
     {
-      name: 'stride·out that is not a multiple of 4',
-      layer: () => new ConvTranspose1d(8, 3, 2, { stride: 2 }),
-      file: () => quantCheckpoint(8, 8, { weight: zeros(3, 16, 2) }),
-      error: /needs stride·out a multiple of 4, got 6/,
+      name: 'out that is not a multiple of 4',
+      layer: () => new ConvTranspose1d(8, 2, 4, { stride: 2 }),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(8, 8, 1) }),
+      error: /needs out a multiple of 4 and stride·out of 4, got out 2, stride 2/,
     },
   ])('refuses $name with CHECKPOINT_MISMATCH', async ({ layer, file, error }) => {
     const sd = await file();
