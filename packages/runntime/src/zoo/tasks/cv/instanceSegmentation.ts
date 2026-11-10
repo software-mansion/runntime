@@ -1,17 +1,24 @@
 /** Instance segmentation task: an image in, the objects in it out, each
  *  with a box and a pixel mask. Runs YOLO26 segment on the initRunntime() device. */
 
-import { createResourceScope, RunntimeError } from '../../../core/index.ts';
+import {
+  createResourceScope,
+  instanceSegmentation,
+  RunntimeError,
+  type DetectionList,
+} from '../../../core/index.ts';
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
-import { createDetector, SEGMENT_MASKS } from '../../yolo26/detector.ts';
+import { createDetector, SEGMENT_MASKS, type Yolo26Input } from '../../yolo26/detector.ts';
 import { COCO_NAMES, decodeSegmentations } from '../../yolo26/pipeline.ts';
 import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { decodeBox, scaleBox, type BoundingBox } from './ops/box.ts';
 import { resizeTransform } from './ops/point.ts';
+import { createDetectionEncoder } from './utils/encodeDetections.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
+import type { EncodeOptions, GpuImage, GpuTensor } from '../gpu.ts';
 
 /** What to load. Every field is optional; a missing `modelPath` comes from
  *  models.instanceSegmentation.YOLO26_SEG.DEFAULT. */
@@ -51,14 +58,54 @@ export interface InstanceSegmentation {
   readonly mask: ImageBuffer;
 }
 
+/** Mask values per side of each object's box in encodeSegmentInstances. */
+export const GPU_MASK_SIZE = 64;
+
+/** One object as encodeSegmentInstances writes it: `box` in pixels of the
+ *  source image, `confidence` 0 to 1, `classId` into `labels`, and `mask`,
+ *  GPU_MASK_SIZE × GPU_MASK_SIZE coverage values 0 to 1, row by row,
+ *  stretched over `box`. */
+export type InstanceSegmentationData = ReturnType<typeof instanceSegmentation>;
+
+/** What encodeSegmentInstances writes: `count` objects, best first, then
+ *  unused room. */
+export type InstanceSegmentationList = DetectionList<InstanceSegmentationData>;
+
+export interface EncodeSegmentInstancesOptions extends EncodeOptions<
+  GpuImage | GpuTensor<Yolo26Input>,
+  GpuTensor<InstanceSegmentationList>
+> {
+  /** Drops objects scored below this, 0 to 1. Default 0.3. */
+  readonly confidenceThreshold?: number;
+  /** At most this many objects, best first. Default: as many as the target
+   *  holds. */
+  readonly maxDetections?: number;
+}
+
 export interface InstanceSegmenter {
   /** The class names, by class index. */
   readonly labels: readonly string[];
+  /** Width and height of the model input in pixels. */
+  readonly inputSize: number;
+  /** Buffer layouts for encodeSegmentInstances, at this runner's size: the
+   *  model input, and the list with room for `maxDetections` objects. Pass
+   *  one to `root.createBuffer` to make a buffer of the right type and size. */
+  readonly schemas: {
+    readonly input: Yolo26Input;
+    readonly output: (maxDetections: number) => InstanceSegmentationList;
+  };
   /** Image in, the objects in it out, best first. */
   segmentInstances(
     image: ImageBuffer,
     options?: SegmentInstancesOptions,
   ): Promise<InstanceSegmentation[]>;
+  /** Records a detection from GPU memory into GPU memory, with no CPU
+   *  copy. A texture source is fitted like an ImageBuffer; a buffer source
+   *  is the model input as-is. The target gets the list of objects with their masks, decoded on
+   *  the GPU. Work submitted after it sees the result.
+   *  @throws RunntimeError `INVALID_ARGUMENT` for a resource of the wrong
+   *  format, usage or size, or an option out of range. */
+  encodeSegmentInstances(options: EncodeSegmentInstancesOptions): void;
   /** Frees the weights and every GPU buffer the runner holds. */
   dispose(): void;
 }
@@ -106,6 +153,13 @@ export async function createInstanceSegmenter(
     );
     // One scratch array, rewritten each call; the detector copies it to the GPU.
     const pixels = new Float32Array(3 * inputSize * inputSize);
+    const encoder = scope.track(
+      createDetectionEncoder(detector, preprocessor, instanceSegmentation(GPU_MASK_SIZE), {
+        numExtra: SEGMENT_MASKS,
+        maskSize: GPU_MASK_SIZE,
+      }),
+    );
+    const schemas = { input: detector.schemas.input, output: encoder.schema };
 
     let disposed = false;
     // Calls run one after another: the next preprocess overwrites the scratch
@@ -113,6 +167,8 @@ export async function createInstanceSegmenter(
     let queue: Promise<unknown> = Promise.resolve();
     return {
       labels,
+      inputSize,
+      schemas,
       async segmentInstances(image, options = {}) {
         if (disposed)
           throw new RunntimeError('RESOURCE_DISPOSED', 'instance segmenter is disposed');
@@ -163,6 +219,11 @@ export async function createInstanceSegmenter(
           );
           return { label: labels[d.classId]!, classId: d.classId, confidence: d.score, box, mask };
         });
+      },
+      encodeSegmentInstances(options) {
+        if (disposed)
+          throw new RunntimeError('RESOURCE_DISPOSED', 'instance segmenter is disposed');
+        encoder.encode(options);
       },
       dispose() {
         disposed = true;

@@ -83,7 +83,13 @@ function createObjectDetector(
 
 interface ObjectDetector {
   readonly labels: readonly string[];
+  readonly inputSize: number;
+  readonly schemas: {
+    readonly input: Yolo26Input;
+    readonly output: (maxDetections: number) => ObjectDetectionList;
+  };
   detectObjects(image: ImageBuffer, options?: DetectObjectsOptions): Promise<ObjectDetection[]>;
+  encodeDetectObjects(options: EncodeDetectObjectsOptions): void;
   dispose(): void;
 }
 
@@ -100,11 +106,89 @@ interface DetectObjectsOptions {
   `bgra`, `bgr` or `gray` bytes.
   `confidenceThreshold` drops objects scored below it,
   `maxDetections` caps how many come back.
+- `encodeDetectObjects(options)` reads an image already on the GPU and
+  writes the objects to a GPU buffer, see
+  [GPU in, GPU out](#gpu-in-gpu-out).
 - `labels` are the class names, by class index. COCO's 80 for a standard
   checkpoint, `class 0`, `class 1`, ... for a custom one.
+- `inputSize` is the model input width and height, 640 by default.
+- `schemas` are the TypeGPU layouts of the model input and of the list
+  `encodeDetectObjects` writes, for buffers passed to it.
 - `dispose()` frees the GPU memory.
 
 YOLO26 picks one box per object on its own, so there is no IoU threshold.
+
+## GPU in, GPU out
+
+When the image is already on the GPU, a video frame or the output of your
+own shader, `encodeDetectObjects` skips the CPU: no pixels are read back, and the
+objects are picked and decoded on the GPU, straight into a buffer you own,
+for your next pass to draw or read.
+
+```ts twoslash
+declare const video: HTMLVideoElement;
+// ---cut---
+import { createObjectDetector, initRunntime, models } from 'runntime/zoo';
+import tgpu from 'typegpu';
+
+// 1. Set up the engine and load the model once.
+const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
+initRunntime(root);
+const detector = await createObjectDetector(models.objectDetection.YOLO26.DEFAULT);
+
+// 2. A buffer for up to 100 objects, typed by the detector's schema.
+const objects = root.createBuffer(detector.schemas.output(100)).$usage('storage');
+
+// 3. Each frame: video in, the list out, then your own passes in the same encoder.
+const encoder = root['~unstable'].createCommandEncoder();
+detector.encodeDetectObjects({
+  source: root.device.importExternalTexture({ source: video }),
+  target: objects,
+  confidenceThreshold: 0.5,
+  encoder,
+});
+// ...record your own passes that read `objects` here...
+encoder.submit();
+```
+
+**Source** - one of:
+
+- a texture: a `GPUTexture`, a TypeGPU texture with `sampled` usage, or a
+  `GPUExternalTexture` from a video. It is fitted like an `ImageBuffer`,
+  with the detector's `resizeMode`, and each value 0-1 counts as a byte
+  0-255. Formats: `rgba8unorm`, `bgra8unorm`, `rgb10a2unorm`,
+  `rgba16float`, `rgba32float`. sRGB formats are rejected: the GPU would
+  turn their values linear, which the model was not trained on.
+- a buffer holding the model input as is: 3×640×640 f32 at the default `inputSize`, normalized RGB, one
+  plane per channel. A raw `GPUBuffer` needs `COPY_SRC` usage.
+
+**Target** - a buffer with `STORAGE` usage, laid out as
+`schemas.output(maxDetections)`:
+
+```wgsl
+struct Box { xmin: f32, ymin: f32, xmax: f32, ymax: f32 }
+struct ObjectDetection { box: Box, confidence: f32, classId: u32 }
+struct ObjectDetectionList { count: u32, detections: array<ObjectDetection, maxDetections> }
+```
+
+The first `count` entries are the objects `detectObjects` would return, best
+first. `box` is in pixels of the source image, cut at its edge; for a buffer source, of the model input. `confidence` is 0 to 1. `classId` indexes `labels`. Entries past `count` keep old values. Every field is 4 bytes
+with no padding, so in a raw `GPUBuffer` entry `i` starts at byte
+`4 + 24 * i`.
+
+`confidenceThreshold` drops objects scored below it, 0.3 by default.
+`maxDetections` caps how many are written, by default as many as the target
+holds.
+
+**encoder** - optional. Pass a `GPUCommandEncoder` or a TypeGPU command
+encoder to record the detection together with your own passes into one command
+buffer. You then finish and submit it yourself, before `dispose()`. Without
+it, the call submits its own before it returns, and does not wait for the
+GPU. Work you submit after it sees the result.
+
+Every resource must come from the device passed to `initRunntime()`. A
+wrong format, usage or size, or an option out of range, throws
+`INVALID_ARGUMENT`.
 
 ## Options
 
