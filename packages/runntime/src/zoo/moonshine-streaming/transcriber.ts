@@ -30,6 +30,7 @@ import type { TranscribeResult, Transcriber, TranscriberPerf } from '../moonshin
 import { presetFromStateDict, type MoonshineStreamingConfig } from './config.ts';
 import { frontendFrames } from './frontend.ts';
 import { MoonshineStreamingModel, decoderView } from './model.ts';
+import type { LoadOptions } from '../load.ts';
 
 export type { TranscribeResult, Transcriber };
 
@@ -46,7 +47,7 @@ export async function createTranscriber(
   opts: {
     cfg?: MoonshineStreamingConfig;
     weightDtype?: 'f32' | 'f16';
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    onProgress?: LoadOptions['onProgress'];
     chunking?: Partial<Pick<ChunkOpts, 'maxSeconds' | 'searchSeconds'>>;
     perf?: TranscriberPerf;
   } = {},

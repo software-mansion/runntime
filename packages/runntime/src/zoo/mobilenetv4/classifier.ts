@@ -18,6 +18,7 @@ import {
 import { checkpointMismatch } from '../errors.ts';
 import { MOBILENETV4_CONV_S, type Mnv4Config } from './config.ts';
 import { MobileNetV4Model } from './model.ts';
+import type { ModelLoadOptions } from '../load.ts';
 
 export interface Classifier {
   readonly inputSize: number;
@@ -53,11 +54,7 @@ export function assertCheckpoint(sd: LazyStateDict, cfg: Mnv4Config): void {
 
 export async function createClassifier(
   sd: LazyStateDict,
-  opts: {
-    cfg?: Mnv4Config;
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
-    warmUp?: boolean;
-  } = {},
+  opts: ModelLoadOptions & { cfg?: Mnv4Config } = {},
 ): Promise<Classifier> {
   const root = defaultRoot();
   const cfg = opts.cfg ?? MOBILENETV4_CONV_S;

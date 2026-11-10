@@ -121,13 +121,7 @@ export async function createObjectDetector(
 
     throwIfAborted(opts.signal);
     const detector = scope.track(
-      await createDetector(sd, {
-        task: 'detect',
-        variant,
-        inputSize: size,
-        onProgress: opts.onProgress,
-        warmUp: opts.warmUp,
-      }),
+      await createDetector(sd, { ...opts, task: 'detect', variant, inputSize: size }),
     );
     const { inputSize, numClasses } = detector;
     const labels =
