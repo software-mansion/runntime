@@ -30,6 +30,7 @@ import { MIN_SAMPLES, stemFrames } from './convStem.ts';
 import { MoonshineModel } from './model.ts';
 import type { SelfKV } from './decoder.ts';
 import type { MoonshineTokenizer } from './tokenizer.ts';
+import type { LoadOptions } from '../load.ts';
 
 export interface TranscribeResult {
   ids: number[];
@@ -73,7 +74,7 @@ export async function createTranscriber(
   opts: {
     cfg?: MoonshineConfig;
     weightDtype?: 'f32' | 'f16';
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    onProgress?: LoadOptions['onProgress'];
     chunking?: Partial<Pick<ChunkOpts, 'maxSeconds' | 'searchSeconds'>>;
     perf?: TranscriberPerf;
   } = {},

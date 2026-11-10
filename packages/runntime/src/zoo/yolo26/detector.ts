@@ -20,6 +20,7 @@ import { checkpointMismatch } from '../errors.ts';
 import { YOLO26_CONFIG, YOLO26_SCALES, scaleChannels, type Yolo26Variant } from './config.ts';
 import { Yolo26Model, type Yolo26Task } from './model.ts';
 import type { ProtoData, RawLevel } from './pipeline.ts';
+import type { ModelLoadOptions } from '../load.ts';
 
 /** What one forward pass gives back. `proto` comes with the segment head
  *  only: the mask prototypes every detection's coefficients combine. */
@@ -90,13 +91,11 @@ export function variantFromStateDict(sd: LazyStateDict): Yolo26Variant {
 
 export async function createDetector(
   sd: LazyStateDict,
-  opts: {
+  opts: ModelLoadOptions & {
     /** The head to build. Default: read from the weights. */
     task?: Yolo26Task;
     variant?: Yolo26Variant;
     inputSize?: number;
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
-    warmUp?: boolean;
   } = {},
 ): Promise<Detector> {
   const root = defaultRoot();

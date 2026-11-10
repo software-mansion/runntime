@@ -34,6 +34,9 @@ export interface LoadOptions {
   warmUp?: boolean;
 }
 
+/** The LoadOptions a model constructor reads. */
+export type ModelLoadOptions = Pick<LoadOptions, 'onProgress' | 'warmUp'>;
+
 /** Throws LOAD_ABORTED when the signal is already aborted. */
 export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {

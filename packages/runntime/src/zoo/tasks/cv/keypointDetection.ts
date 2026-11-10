@@ -139,13 +139,7 @@ export async function createKeypointDetector(
 
     throwIfAborted(opts.signal);
     const detector = scope.track(
-      await createDetector(sd, {
-        task: 'pose',
-        variant,
-        inputSize: size,
-        onProgress: opts.onProgress,
-        warmUp: opts.warmUp,
-      }),
+      await createDetector(sd, { ...opts, task: 'pose', variant, inputSize: size }),
     );
     const { inputSize, numClasses } = detector;
     const preprocessor = createImagePreprocessor(

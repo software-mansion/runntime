@@ -135,13 +135,7 @@ export async function createInstanceSegmenter(
 
     throwIfAborted(opts.signal);
     const detector = scope.track(
-      await createDetector(sd, {
-        task: 'segment',
-        variant,
-        inputSize: size,
-        onProgress: opts.onProgress,
-        warmUp: opts.warmUp,
-      }),
+      await createDetector(sd, { ...opts, task: 'segment', variant, inputSize: size }),
     );
     const { inputSize, numClasses } = detector;
     const labels =
