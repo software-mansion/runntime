@@ -57,7 +57,9 @@ export async function createPrivacyFilter(
     });
 
     throwIfAborted(opts.signal);
-    const detector = scope.track(await createDetector(sd, { onProgress: opts.onProgress }));
+    const detector = scope.track(
+      await createDetector(sd, { onProgress: opts.onProgress, warmUp: opts.warmUp }),
+    );
 
     let disposed = false;
     // Calls run one after another, one forward pass at a time on the GPU.

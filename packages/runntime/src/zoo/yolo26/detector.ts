@@ -96,6 +96,7 @@ export async function createDetector(
     variant?: Yolo26Variant;
     inputSize?: number;
     onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    warmUp?: boolean;
   } = {},
 ): Promise<Detector> {
   const root = defaultRoot();
@@ -166,10 +167,12 @@ export async function createDetector(
       read(cap.targets.map((t) => t.buffer as F32Buffer));
     };
     const schemas = { input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, size), size), 3) };
-    await warmUp(
-      root.device,
-      async () => (await run(new Float32Array(3 * size * size))).levels[0]!.data,
-    );
+    if (opts.warmUp !== false) {
+      await warmUp(
+        root.device,
+        async () => (await run(new Float32Array(3 * size * size))).levels[0]!.data,
+      );
+    }
     return { task, inputSize: size, numClasses, schemas, run, encode, dispose };
   } catch (err) {
     dispose();

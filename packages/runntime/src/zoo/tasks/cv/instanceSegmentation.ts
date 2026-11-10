@@ -140,6 +140,7 @@ export async function createInstanceSegmenter(
         variant,
         inputSize: size,
         onProgress: opts.onProgress,
+        warmUp: opts.warmUp,
       }),
     );
     const { inputSize, numClasses } = detector;

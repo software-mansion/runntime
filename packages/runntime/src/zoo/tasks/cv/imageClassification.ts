@@ -128,7 +128,9 @@ export async function createImageClassifier(
     });
 
     throwIfAborted(opts.signal);
-    const classifier = scope.track(await createClassifier(sd, { onProgress: opts.onProgress }));
+    const classifier = scope.track(
+      await createClassifier(sd, { onProgress: opts.onProgress, warmUp: opts.warmUp }),
+    );
     const { inputSize, numClasses } = classifier;
     if (labels.length !== numClasses) {
       throw new RunntimeError(

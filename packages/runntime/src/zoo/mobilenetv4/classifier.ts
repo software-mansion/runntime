@@ -56,6 +56,7 @@ export async function createClassifier(
   opts: {
     cfg?: Mnv4Config;
     onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    warmUp?: boolean;
   } = {},
 ): Promise<Classifier> {
   const root = defaultRoot();
@@ -99,7 +100,9 @@ export async function createClassifier(
       // forward() ends in astype(..., 'f32'), so the logits are f32.
       read(cap.targets.buffer as F32Buffer);
     };
-    await warmUp(root.device, () => run(new Float32Array(3 * size * size)));
+    if (opts.warmUp !== false) {
+      await warmUp(root.device, () => run(new Float32Array(3 * size * size)));
+    }
     return { inputSize: size, numClasses: cfg.numClasses, run, encode, dispose };
   } catch (err) {
     dispose();

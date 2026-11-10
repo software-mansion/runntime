@@ -80,7 +80,9 @@ load the models again.
 and `NOT_INITIALIZED` come from the `create` call, the other three from the
 model methods. A `create` call can also throw `INVALID_ARGUMENT` when an
 option is wrong, and `EXECUTION_FAILED` when the GPU fails while the model
-uploads or warms up.
+uploads or warms up. With `warmUp: false` there is no warm-up run, so a GPU
+error is not caught at load. Most models then return zeros from the first
+call instead of throwing.
 
 The full list of codes is exported as `RUNNTIME_ERROR_CODES`, and the
 type of one code as `RunntimeErrorCode`.
