@@ -29,7 +29,7 @@ function randomRgba(w: number, h: number, seed: number): Uint8Array<ArrayBuffer>
  *  input pixel center samples the image with half-pixel bilinear, edges
  *  clamped; outside the image it is `pad`. Output is CHW, value = byte *
  *  alpha + beta. */
-function fitRef(rgba: Uint8Array, w: number, h: number, args: ImageToChwArgs): Float64Array {
+function fitRef(rgba: ArrayLike<number>, w: number, h: number, args: ImageToChwArgs): Float64Array {
   const { mode, cropFraction, outW, outH, alpha, beta, pad } = args;
   let scaleX = outW / w;
   let scaleY = outH / h;
@@ -163,6 +163,61 @@ describe('imageToChw kernel', () => {
       expectClose(got, fitRef(bytes, 7, 5, args), { atol: 1e-5, rtol: 1e-5 });
     },
   );
+
+  // A texel stands for a byte, so a float texture's values outside [0, 1]
+  // read as the bytes 0 and 255, never as values past them.
+  it('clamps rgba32float texels to [0, 1]', async () => {
+    const [w, h] = [9, 7];
+    // Bytes spread over [-0.2, 1.3]: about a third of the texels are out of range.
+    const texels = Float32Array.from(randomRgba(w, h, 13), (b) => (b / 255) * 1.5 - 0.2);
+    const texture = root.device.createTexture({
+      size: [w, h],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    onTestFinished(() => texture.destroy());
+    root.device.queue.writeTexture({ texture }, texels, { bytesPerRow: w * 16 }, [w, h]);
+    const args: ImageToChwArgs = { ...PLAIN, mode: 'stretch', outW: 16, outH: 12 };
+    const got = await run(texture, args);
+    const bytes = texels.map((v) => Math.min(Math.max(v, 0), 1) * 255);
+    expectClose(got, fitRef(bytes, w, h, args), { atol: 1e-5, rtol: 1e-5 });
+  });
+
+  // The browser's YUV->RGB conversion overshoots on a saturated colour: a
+  // limited-range red of Y=82, U=90, V=240 comes back as red > 1 and
+  // green < 0. The CPU path gets clamped bytes from a canvas, so the model
+  // input must stay in byte range too.
+  it('clamps an external texture to byte range', async () => {
+    const [w, h] = [16, 8];
+    const yuv = new Uint8Array(w * h * 1.5);
+    yuv.fill(82, 0, w * h);
+    yuv.fill(90, w * h, w * h * 1.25);
+    yuv.fill(240, w * h * 1.25);
+    const frame = new VideoFrame(yuv, {
+      format: 'I420',
+      codedWidth: w,
+      codedHeight: h,
+      timestamp: 0,
+      colorSpace: {
+        matrix: 'smpte170m',
+        primaries: 'smpte170m',
+        transfer: 'smpte170m',
+        fullRange: false,
+      },
+    });
+    onTestFinished(() => frame.close());
+    const preprocessor = createImagePreprocessor(
+      { resizeMode: 'stretch', normalizeOpts: { alpha: 1, beta: 0 } },
+      { width: 16, height: 12 },
+    );
+    const got = await run(
+      root.device.importExternalTexture({ source: frame }),
+      preprocessor.gpuArgs,
+    );
+    for (const v of got) {
+      if (!(v >= 0 && v <= 255)) expect.fail(`model input ${v} is outside [0, 255]`);
+    }
+  });
 
   it('reads an external texture', async () => {
     const [w, h] = [12, 8];
