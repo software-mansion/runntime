@@ -66,6 +66,35 @@ class Block extends nn.Module {
     this.res_unit2 = new ResidualUnit(out, kernel, 3);
     this.res_unit3 = new ResidualUnit(out, kernel, 9);
   }
+  /** A quantized conv_t1 stored as its equivalent conv, [out, in·kernel]
+   *  with the kernel reversed, loads as its dequantized floats in torch's
+   *  [in, out, kernel]. Every block halves the channels, so the shape tells
+   *  it from torch's [in, out·kernel]. */
+  override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    const name = `${prefix}.conv_t1.weight`;
+    const t = sd.tensors.get(name);
+    const { inChannels: cIn, outChannels: out, kernelSize: k } = this.conv_t1;
+    if (t?.kind !== 'quant' || t.shape.join() !== `${out},${cIn * k}`) return;
+    sd.tensors.set(
+      name,
+      derivedTensor(
+        [cIn, out, k],
+        async () => {
+          const src = await weightValues(t);
+          const dst = new Float32Array(src.length);
+          for (let o = 0; o < out; o++) {
+            for (let c = 0; c < cIn; c++) {
+              for (let kk = 0; kk < k; kk++) {
+                dst[(c * out + o) * k + kk] = src[(o * cIn + c) * k + k - 1 - kk]!;
+              }
+            }
+          }
+          return dst;
+        },
+        t.byteLength,
+      ),
+    );
+  }
   override forward(x: Value): Value {
     const h = this.conv_t1.forward(this.snake1.forward(x));
     return this.res_unit3.forward(this.res_unit2.forward(this.res_unit1.forward(h)));

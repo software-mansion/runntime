@@ -56,6 +56,17 @@ describe('HiggsDecoder', () => {
     },
   );
 
+  it('loads a conv_t1 stored as its equivalent conv as its dequantized floats', async () => {
+    const { file, dequantized } = quantize(checkpoint(QUANT_CFG).sd, 8, { equivalentConvT: true });
+    const quantSd = await fromSafetensors(bufferSource(file), { chunkBytes: 0 });
+    const floatSd = memoryStateDict(dequantized);
+    const dec = await load(quantSd, QUANT_CFG);
+    await load(floatSd, QUANT_CFG);
+    const name = 'acoustic_decoder.block.0.conv_t1.weight';
+    expect(dec.acoustic_decoder.block.items[0]!.conv_t1.weightScale).toBeUndefined();
+    expect(await quantSd.tensors.get(name)!.f32()).toEqual(await floatSd.tensors.get(name)!.f32());
+  });
+
   it('keeps only the decoder of the codec checkpoint', () => {
     const sd = memoryStateDict(checkpoint().sd);
     new HiggsDecoder(CFG).transformStateDict(sd, '');

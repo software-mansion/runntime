@@ -102,39 +102,43 @@ export function checkpoint(cfg: HiggsDecoderConfig = CFG, spread = 1) {
   return { sd, latents };
 }
 
-/** CFG with every conv's input channels a multiple of CONV_GROUP, so each
- *  conv loads quantized. */
+/** CFG with every conv's shape fit for the quantized matmul, so each conv
+ *  loads quantized. */
 export const QUANT_CFG: HiggsDecoderConfig = { ...CFG, channels: 16 };
 
-/** Input channels per scale group of a conv. */
+/** Values per scale group of a conv's torch row. */
 const CONV_GROUP = 8;
 /** Values per scale group of project_out and fc2, which the load folds. */
 const FOLD_GROUP = 2;
 
-/** A conv weight's file rows [cOut, cIn·kernel]: for each value, its index
- *  in torch's layout. A transposed conv is [in, out, kernel] in torch and
- *  its equivalent conv in the file, with the kernel reversed. */
-function convRows(name: string, shape: number[]) {
-  const transposed = /\.conv_t\d+\.weight$/.test(name);
-  const [a, b, kernel] = shape as [number, number, number];
-  const [cOut, cIn] = transposed ? [b, a] : [a, b];
-  const index = new Int32Array(cOut * cIn * kernel);
-  for (let o = 0; o < cOut; o++) {
+/** A transposed conv's weight [in, out, kernel] as its equivalent conv
+ *  [out, in·kernel] with the kernel reversed: for each file value, its index
+ *  in torch's layout. */
+function equivalentConv(shape: number[]): Int32Array {
+  const [cIn, out, kernel] = shape as [number, number, number];
+  const index = new Int32Array(cIn * out * kernel);
+  for (let o = 0; o < out; o++) {
     for (let c = 0; c < cIn; c++) {
       for (let t = 0; t < kernel; t++) {
-        index[(o * cIn + c) * kernel + t] = transposed
-          ? (c * cOut + o) * kernel + kernel - 1 - t
-          : (o * cIn + c) * kernel + t;
+        index[(o * cIn + c) * kernel + t] = (c * out + o) * kernel + kernel - 1 - t;
       }
     }
   }
-  return { index, cOut, kernel };
+  return index;
 }
 
 /** `sd` as a quantized file with every conv weight, project_out and fc2
  *  quantized, and `sd` with each of those replaced by its dequantized values.
- *  Codebook tables, biases and Snake alphas stay float. */
-export function quantize(sd: Sd, bits: 4 | 8): { file: Uint8Array; dequantized: Sd } {
+ *  A conv is quantized as its torch weight with the dims after the first
+ *  flattened. With `equivalentConvT`, a transposed conv is quantized as its
+ *  equivalent conv in groups of CONV_GROUP input channels, as the codec's QAT
+ *  checkpoint stores it. Codebook tables, biases and Snake alphas stay
+ *  float. */
+export function quantize(
+  sd: Sd,
+  bits: 4 | 8,
+  { equivalentConvT = false } = {},
+): { file: Uint8Array; dequantized: Sd } {
   const entries: Record<string, BitsQuantEntry> = {};
   const floats: Sd = {};
   const dequantized: Sd = { ...sd };
@@ -143,15 +147,22 @@ export function quantize(sd: Sd, bits: 4 | 8): { file: Uint8Array; dequantized: 
       const entry = quantizeWeight(data, shape as [number, number], bits, FOLD_GROUP);
       entries[name] = { ...entry, bits };
       dequantized[name] = { data: dequantizeWeight(entry), shape };
-    } else if (name.startsWith('acoustic_decoder.') && name.endsWith('.weight')) {
-      const { index, cOut, kernel } = convRows(name, shape);
+    } else if (equivalentConvT && /\.conv_t\d+\.weight$/.test(name)) {
+      const index = equivalentConv(shape);
       const rows = Float32Array.from(index, (i) => data[i]!);
-      const entry = quantizeWeight(rows, [cOut, rows.length / cOut], bits, CONV_GROUP * kernel);
+      const [, out, kernel] = shape as [number, number, number];
+      const group = CONV_GROUP * kernel;
+      const entry = quantizeWeight(rows, [out, rows.length / out], bits, group);
       entries[name] = { ...entry, bits };
       const values = dequantizeWeight(entry);
       const back = new Float32Array(data.length);
       index.forEach((i, r) => (back[i] = values[r]!));
       dequantized[name] = { data: back, shape };
+    } else if (name.startsWith('acoustic_decoder.') && name.endsWith('.weight')) {
+      const rows = shape[0]!;
+      const entry = quantizeWeight(data, [rows, data.length / rows], bits, CONV_GROUP);
+      entries[name] = { ...entry, bits };
+      dequantized[name] = { data: dequantizeWeight(entry), shape };
     } else {
       floats[name] = { data, shape };
     }
