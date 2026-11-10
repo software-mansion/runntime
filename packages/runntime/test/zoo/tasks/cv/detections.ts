@@ -1,6 +1,40 @@
-/** Comparing a GPU detection list with the CPU method's: pairing entries the
- *  two may rank differently, and how far a video frame's may differ. */
+/** Shared pieces of the YOLO26 encode<Verb> tests: the random checkpoint, the
+ *  letterbox model input, and comparing a GPU detection list with the CPU
+ *  method's: pairing entries the two may rank differently, and how far a
+ *  video frame's may differ. */
+import type { TgpuRoot } from 'typegpu';
+import { expect, onTestFinished } from 'vitest';
+import type { ImageBuffer } from '../../../../src/zoo/tasks/cv/image.ts';
 import type { BoundingBox } from '../../../../src/zoo/tasks/cv/ops/box.ts';
+import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imagePreprocessor.ts';
+import type { ImageInput } from '../../../../src/zoo/tasks/gpu.ts';
+import { Yolo26Model, type Yolo26Task } from '../../../../src/zoo/yolo26/model.ts';
+import { randomSafetensors } from '../../randomWeights.ts';
+
+/** Small enough to run fast, a multiple of 32: 84 cells. */
+export const YOLO_INPUT_SIZE = 64;
+
+/** A YOLO26-n `task` checkpoint with random weights, in memory. */
+export function yoloWeights(task: Yolo26Task) {
+  const template = new Yolo26Model('n', { task });
+  // Scaled down so f16 activations stay finite through the random layers.
+  const weights = randomSafetensors(template, { scale: 0.1 });
+  template.dispose();
+  return weights;
+}
+
+/** A source buffer holding `image` as a YOLO_INPUT_SIZE runner's letterbox
+ *  makes it, destroyed when the test ends. */
+export function modelInput(root: TgpuRoot, schema: ImageInput, image: ImageBuffer) {
+  const pixels = createImagePreprocessor(
+    { resizeMode: 'letterbox' },
+    { width: YOLO_INPUT_SIZE, height: YOLO_INPUT_SIZE },
+  ).process(image);
+  const source = root.createBuffer(schema).$usage('storage');
+  source.write(new Float32Array(pixels).buffer);
+  onTestFinished(() => source.destroy());
+  return source;
+}
 
 /** How far a video frame's GPU detections may sit from the CPU method's on
  *  the same frame. Chrome hands the import the same bytes a canvas reads
@@ -23,6 +57,7 @@ export function byNearestBox<G extends Boxed>(
   detections: readonly G[],
   want: readonly Boxed[],
 ): G[] {
+  expect(detections.length).toBeGreaterThanOrEqual(want.length);
   const left = new Set(detections);
   return want.map((w) => {
     let best: G | undefined;

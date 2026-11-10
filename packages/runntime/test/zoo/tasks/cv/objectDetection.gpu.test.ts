@@ -8,46 +8,27 @@ import {
   type ObjectDetection,
   type ObjectDetectionList,
 } from '../../../../src/zoo/tasks/cv/objectDetection.ts';
-import { imageBuffer, type ImageBuffer } from '../../../../src/zoo/tasks/cv/image.ts';
-import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imagePreprocessor.ts';
-import { Yolo26Model } from '../../../../src/zoo/yolo26/model.ts';
-import type { ImageInput } from '../../../../src/zoo/tasks/gpu.ts';
+import { imageBuffer } from '../../../../src/zoo/tasks/cv/image.ts';
 import { expectClose, gpu, requireFeature } from '../../../gpu.ts';
-import { randomSafetensors } from '../../randomWeights.ts';
-import { ENCODERS } from '../gpu.ts';
-import { byNearestBox, FRAME_TOLERANCE } from './detections.ts';
+import { ENCODERS, freed } from '../gpu.ts';
+import {
+  byNearestBox,
+  FRAME_TOLERANCE,
+  modelInput,
+  YOLO_INPUT_SIZE as INPUT_SIZE,
+  yoloWeights,
+} from './detections.ts';
 import { frameImage, randomRgba, rgbaTexture, videoFrame } from './images.ts';
 
 const { root } = await gpu();
-/** Small enough to run fast, a multiple of 32: 84 cells. */
-const INPUT_SIZE = 64;
 
 async function detector() {
-  const template = new Yolo26Model('n', { task: 'detect' });
-  // Scaled down so f16 activations stay finite through the random layers.
-  const weights = randomSafetensors(template, { scale: 0.1 });
-  template.dispose();
-  const runner = await createObjectDetector({ modelPath: weights, inputSize: INPUT_SIZE });
+  const runner = await createObjectDetector({
+    modelPath: yoloWeights('detect'),
+    inputSize: INPUT_SIZE,
+  });
   onTestFinished(() => runner.dispose());
   return runner;
-}
-
-/** A source buffer holding `image` as the runner's letterbox makes it. */
-function modelInput(schema: ImageInput, image: ImageBuffer) {
-  const pixels = createImagePreprocessor(
-    { resizeMode: 'letterbox' },
-    { width: INPUT_SIZE, height: INPUT_SIZE },
-  ).process(image);
-  const source = root.createBuffer(schema).$usage('storage');
-  source.write(new Float32Array(pixels).buffer);
-  onTestFinished(() => source.destroy());
-  return source;
-}
-
-function outputBuffer(schema: ObjectDetectionList) {
-  const target = root.createBuffer(schema).$usage('storage');
-  onTestFinished(() => target.destroy());
-  return target;
 }
 
 /** The GPU list holds the CPU detections, in order, within `pixels` on the
@@ -82,8 +63,8 @@ describe('encodeDetectObjects', () => {
       const runner = await detector();
       // The input size, so the letterbox is the identity on both paths.
       const image = imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, 3), INPUT_SIZE, INPUT_SIZE);
-      const source = modelInput(runner.schemas.input, image);
-      const target = outputBuffer(runner.schemas.output(84));
+      const source = modelInput(root, runner.schemas.input, image);
+      const target = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
 
       const want = await runner.detectObjects(image, opts);
       runner.encodeDetectObjects({ source, target, ...opts });
@@ -99,7 +80,7 @@ describe('encodeDetectObjects', () => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await detector();
     const frame = videoFrame(w, h, 11);
-    const target = outputBuffer(runner.schemas.output(84));
+    const target = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
 
     const want = await runner.detectObjects(frameImage(frame), { confidenceThreshold: 0.3 });
     runner.encodeDetectObjects({
@@ -119,9 +100,9 @@ describe('encodeDetectObjects', () => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await detector();
     const image = imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, 3), INPUT_SIZE, INPUT_SIZE);
-    const source = modelInput(runner.schemas.input, image);
-    const own = outputBuffer(runner.schemas.output(84));
-    const target = outputBuffer(runner.schemas.output(84));
+    const source = modelInput(root, runner.schemas.input, image);
+    const own = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
+    const target = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
 
     runner.encodeDetectObjects({ source, target: own });
     record(root, (encoder) => runner.encodeDetectObjects({ source, target, encoder }));
@@ -136,8 +117,10 @@ describe('encodeDetectObjects', () => {
     const images = [3, 4].map((seed) =>
       imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, seed), INPUT_SIZE, INPUT_SIZE),
     );
-    const sources = images.map((image) => modelInput(runner.schemas.input, image));
-    const targets = images.map(() => outputBuffer(runner.schemas.output(84)));
+    const sources = images.map((image) => modelInput(root, runner.schemas.input, image));
+    const targets = images.map(() =>
+      freed(root.createBuffer(runner.schemas.output(84)).$usage('storage')),
+    );
 
     const encoder = root.device.createCommandEncoder();
     sources.forEach((source, i) =>
@@ -154,7 +137,7 @@ describe('encodeDetectObjects', () => {
     const runner = await detector();
     const [w, h] = [96, 48];
     const texture = rgbaTexture(root, randomRgba(w, h, 5), w, h);
-    const target = outputBuffer(runner.schemas.output(84));
+    const target = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
 
     runner.encodeDetectObjects({ source: texture, target, confidenceThreshold: 0 });
     const got = await target.read();
@@ -178,9 +161,8 @@ describe('encodeDetectObjects', () => {
   ])('rejects $name', async ({ opts }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await detector();
-    const source = root.createBuffer(runner.schemas.input).$usage('storage');
-    onTestFinished(() => source.destroy());
-    const target = outputBuffer(runner.schemas.output(84));
+    const source = freed(root.createBuffer(runner.schemas.input).$usage('storage'));
+    const target = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
     expect(() => runner.encodeDetectObjects({ source, target, ...opts })).toThrow(
       expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
     );

@@ -11,49 +11,30 @@ import {
   type InstanceSegmentation,
   type InstanceSegmentationList,
 } from '../../../../src/zoo/tasks/cv/instanceSegmentation.ts';
-import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imagePreprocessor.ts';
-import type { ImageInput } from '../../../../src/zoo/tasks/gpu.ts';
-import { Yolo26Model } from '../../../../src/zoo/yolo26/model.ts';
 import { expectClose, gpu, requireFeature } from '../../../gpu.ts';
-import { randomSafetensors } from '../../randomWeights.ts';
-import { ENCODERS } from '../gpu.ts';
-import { byNearestBox, FRAME_TOLERANCE } from './detections.ts';
+import { ENCODERS, freed } from '../gpu.ts';
+import {
+  byNearestBox,
+  FRAME_TOLERANCE,
+  modelInput,
+  YOLO_INPUT_SIZE as INPUT_SIZE,
+  yoloWeights,
+} from './detections.ts';
 import { frameImage, randomRgba, videoFrame } from './images.ts';
 
 const { root } = await gpu();
-/** Small enough to run fast, a multiple of 32: 84 cells. */
-const INPUT_SIZE = 64;
 /** Mean difference allowed between the two masks, 0 to 1. The CPU mask is
  *  bytes at prototype resolution, resampled once more here, so it differs
  *  by rounding and along the box edge. */
 const MASK_TOLERANCE = 0.02;
 
 async function segmenter() {
-  const template = new Yolo26Model('n', { task: 'segment' });
-  // Scaled down so f16 activations stay finite through the random layers.
-  const weights = randomSafetensors(template, { scale: 0.1 });
-  template.dispose();
-  const runner = await createInstanceSegmenter({ modelPath: weights, inputSize: INPUT_SIZE });
+  const runner = await createInstanceSegmenter({
+    modelPath: yoloWeights('segment'),
+    inputSize: INPUT_SIZE,
+  });
   onTestFinished(() => runner.dispose());
   return runner;
-}
-
-/** A source buffer holding `image` as the runner's letterbox makes it. */
-function modelInput(schema: ImageInput, image: ImageBuffer) {
-  const pixels = createImagePreprocessor(
-    { resizeMode: 'letterbox' },
-    { width: INPUT_SIZE, height: INPUT_SIZE },
-  ).process(image);
-  const source = root.createBuffer(schema).$usage('storage');
-  source.write(new Float32Array(pixels).buffer);
-  onTestFinished(() => source.destroy());
-  return source;
-}
-
-function outputBuffer(schema: InstanceSegmentationList) {
-  const target = root.createBuffer(schema).$usage('storage');
-  onTestFinished(() => target.destroy());
-  return target;
 }
 
 /** `mask` read bilinearly at the GPU mask's value centers, 0 to 1. */
@@ -112,8 +93,8 @@ describe('encodeSegmentInstances', () => {
       const runner = await segmenter();
       // The input size, so the letterbox is the identity on both paths.
       const image = imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, 3), INPUT_SIZE, INPUT_SIZE);
-      const source = modelInput(runner.schemas.input, image);
-      const target = outputBuffer(runner.schemas.output(20));
+      const source = modelInput(root, runner.schemas.input, image);
+      const target = freed(root.createBuffer(runner.schemas.output(20)).$usage('storage'));
 
       const want = await runner.segmentInstances(image, opts);
       runner.encodeSegmentInstances({ source, target, ...opts });
@@ -129,7 +110,7 @@ describe('encodeSegmentInstances', () => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await segmenter();
     const frame = videoFrame(w, h, 11);
-    const target = outputBuffer(runner.schemas.output(20));
+    const target = freed(root.createBuffer(runner.schemas.output(20)).$usage('storage'));
     const opts = { confidenceThreshold: 0.3, maxDetections: 20 };
 
     const want = await runner.segmentInstances(frameImage(frame), opts);
@@ -150,9 +131,9 @@ describe('encodeSegmentInstances', () => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await segmenter();
     const image = imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, 3), INPUT_SIZE, INPUT_SIZE);
-    const source = modelInput(runner.schemas.input, image);
-    const own = outputBuffer(runner.schemas.output(20));
-    const target = outputBuffer(runner.schemas.output(20));
+    const source = modelInput(root, runner.schemas.input, image);
+    const own = freed(root.createBuffer(runner.schemas.output(20)).$usage('storage'));
+    const target = freed(root.createBuffer(runner.schemas.output(20)).$usage('storage'));
 
     runner.encodeSegmentInstances({ source, target: own });
     record(root, (encoder) => runner.encodeSegmentInstances({ source, target, encoder }));
@@ -167,8 +148,10 @@ describe('encodeSegmentInstances', () => {
     const images = [3, 4].map((seed) =>
       imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, seed), INPUT_SIZE, INPUT_SIZE),
     );
-    const sources = images.map((image) => modelInput(runner.schemas.input, image));
-    const targets = images.map(() => outputBuffer(runner.schemas.output(20)));
+    const sources = images.map((image) => modelInput(root, runner.schemas.input, image));
+    const targets = images.map(() =>
+      freed(root.createBuffer(runner.schemas.output(20)).$usage('storage')),
+    );
     const opts = { confidenceThreshold: 0.3, maxDetections: 20 };
 
     const encoder = root.device.createCommandEncoder();

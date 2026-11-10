@@ -20,9 +20,9 @@ import { createImageClassifier } from '../../src/zoo/tasks/cv/imageClassificatio
 import { createInstanceSegmenter } from '../../src/zoo/tasks/cv/instanceSegmentation.ts';
 import { createKeypointDetector } from '../../src/zoo/tasks/cv/keypointDetection.ts';
 import { createObjectDetector } from '../../src/zoo/tasks/cv/objectDetection.ts';
-import { Yolo26Model, type Yolo26Task } from '../../src/zoo/yolo26/model.ts';
 import { buffersSince, gpu, liveBuffers, randomF32, repeated, requireFeature } from '../gpu.ts';
 import { randomSafetensors } from './randomWeights.ts';
+import { YOLO_INPUT_SIZE, yoloWeights } from './tasks/cv/detections.ts';
 import { randomRgba, rgbaTexture } from './tasks/cv/images.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
@@ -92,18 +92,6 @@ const TINY_HIGGS = {
   strides: [2],
   kernel: 3,
 };
-
-/** YOLO26-n at the smallest input, for the encode* methods: 84 cells. */
-const YOLO_INPUT_SIZE = 64;
-
-/** A YOLO26-n `task` checkpoint with random weights, in memory. */
-function yoloWeights(task: Yolo26Task) {
-  const template = new Yolo26Model('n', { task });
-  // Scaled down so f16 activations stay finite through the random layers.
-  const weights = randomSafetensors(template, { scale: 0.1 });
-  template.dispose();
-  return weights;
-}
 
 /** A runner's encode<Verb> method on a texture source, the route a video
  *  frame takes, waited for on the queue: the method itself does not wait. */
