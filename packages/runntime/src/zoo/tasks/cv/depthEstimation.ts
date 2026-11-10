@@ -53,9 +53,6 @@ export interface DepthMap {
   readonly data: Float32Array;
 }
 
-/** @deprecated Use ImageInput, the same type. */
-export type DepthInput = ImageInput;
-
 /** A depth map as a GPU buffer: `[row][column]` f32, `inputSize` wide and
  *  high, the same values as DepthMap.data. */
 export type DepthMapData = d.WgslArray<d.WgslArray<d.F32>>;

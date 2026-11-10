@@ -95,7 +95,6 @@ export {
   createDepthEstimator,
   type DepthEstimator,
   type DepthEstimatorModel,
-  type DepthInput,
   type DepthMap,
   type DepthMapData,
   type EncodeEstimateDepthOptions,
