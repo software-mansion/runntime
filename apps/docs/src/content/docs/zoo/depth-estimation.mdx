@@ -88,7 +88,7 @@ function createDepthEstimator(
 
 interface DepthEstimator {
   readonly inputSize: number;
-  readonly schemas: { readonly input: DepthInput; readonly output: DepthMapData };
+  readonly schemas: { readonly input: ImageInput; readonly output: DepthMapData };
   estimateDepth(image: ImageBuffer): Promise<DepthMap>;
   encodeEstimateDepth(options: EncodeEstimateDepthOptions): void;
   dispose(): void;

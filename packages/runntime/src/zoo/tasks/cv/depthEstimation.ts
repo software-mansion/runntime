@@ -23,12 +23,14 @@ import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
 import {
   encodeInput,
   encodeWith,
+  imageInput,
   unwrapSource,
   unwrapTarget,
   type EncodeOptions,
   type GpuImage,
   type GpuImageTarget,
   type GpuTensor,
+  type ImageInput,
 } from '../gpu.ts';
 
 /** What to load. Every field is optional; a missing `modelPath` comes from
@@ -51,16 +53,15 @@ export interface DepthMap {
   readonly data: Float32Array;
 }
 
-/** The model input as a GPU buffer: normalized RGB, `[channel][row][column]`
- *  f32, `inputSize` wide and high. */
-export type DepthInput = d.WgslArray<d.WgslArray<d.WgslArray<d.F32>>>;
+/** @deprecated Use ImageInput, the same type. */
+export type DepthInput = ImageInput;
 
 /** A depth map as a GPU buffer: `[row][column]` f32, `inputSize` wide and
  *  high, the same values as DepthMap.data. */
 export type DepthMapData = d.WgslArray<d.WgslArray<d.F32>>;
 
 export interface EncodeEstimateDepthOptions extends EncodeOptions<
-  GpuImage | GpuTensor<DepthInput>,
+  GpuImage | GpuTensor<ImageInput>,
   GpuImageTarget | GpuTensor<DepthMapData>
 > {
   /** Texture targets only. `minmax` maps each map to [0, 1], nearest = 0.
@@ -73,7 +74,7 @@ export interface DepthEstimator {
   readonly inputSize: number;
   /** Buffer layouts for encodeEstimateDepth, at this runner's size. Pass one
    *  to `root.createBuffer` to make a buffer of the right type and size. */
-  readonly schemas: { readonly input: DepthInput; readonly output: DepthMapData };
+  readonly schemas: { readonly input: ImageInput; readonly output: DepthMapData };
   /** Image in, its depth map out. */
   estimateDepth(image: ImageBuffer): Promise<DepthMap>;
   /** Records a depth estimate from GPU memory into GPU memory, with no CPU
@@ -138,7 +139,7 @@ export async function createDepthEstimator(
     const imageToChw = scope.track(createImageToChw(root));
     const mapToTexture = scope.track(createMapToTexture(root));
     const schemas = {
-      input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),
+      input: imageInput(inputSize),
       output: d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize),
     };
     const inputBytes = d.sizeOf(schemas.input);

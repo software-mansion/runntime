@@ -1,7 +1,6 @@
 /** The GPU side of yolo26: weights in, one preprocessed image to raw head levels
  *  out. Shared by the detect/pose/segment runners and the plugin. */
 
-import { d } from 'typegpu';
 import {
   defaultRoot,
   evalValues,
@@ -28,16 +27,10 @@ export interface DetectorOutput {
   proto?: ProtoData;
 }
 
-/** The model input as a GPU buffer: normalized RGB, `[channel][row][column]`
- *  f32, `inputSize` wide and high. */
-export type Yolo26Input = d.WgslArray<d.WgslArray<d.WgslArray<d.F32>>>;
-
 export interface Detector {
   readonly task: Yolo26Task;
   readonly inputSize: number;
   readonly numClasses: number;
-  /** Layout of the input. */
-  readonly schemas: { readonly input: Yolo26Input };
   run(pixels: Float32Array): Promise<DetectorOutput>;
   /** Records one forward into `encoder`. `fill` records what writes the
    *  `[3, size, size]` input, `read` what reads the outputs: the three
@@ -165,12 +158,11 @@ export async function createDetector(
       // forward() ends every output in toChw or astype to f32.
       read(cap.targets.map((t) => t.buffer as F32Buffer));
     };
-    const schemas = { input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, size), size), 3) };
     await warmUp(
       root.device,
       async () => (await run(new Float32Array(3 * size * size))).levels[0]!.data,
     );
-    return { task, inputSize: size, numClasses, schemas, run, encode, dispose };
+    return { task, inputSize: size, numClasses, run, encode, dispose };
   } catch (err) {
     dispose();
     throw err;

@@ -10,14 +10,20 @@ import {
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
-import { createDetector, type Yolo26Input } from '../../yolo26/detector.ts';
+import { createDetector } from '../../yolo26/detector.ts';
 import { COCO_NAMES, decodeDetections } from '../../yolo26/pipeline.ts';
 import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
 import { decodeBox, scaleBox, type BoundingBox } from './ops/box.ts';
 import { createDetectionEncoder } from './utils/encodeDetections.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
-import type { EncodeOptions, GpuImage, GpuTensor } from '../gpu.ts';
+import {
+  imageInput,
+  type EncodeOptions,
+  type GpuImage,
+  type GpuTensor,
+  type ImageInput,
+} from '../gpu.ts';
 
 /** What to load. Every field is optional; a missing `modelPath` comes from
  *  models.objectDetection.YOLO26.DEFAULT. */
@@ -61,7 +67,7 @@ export type ObjectDetectionData = typeof objectDetection;
 export type ObjectDetectionList = DetectionList<ObjectDetectionData>;
 
 export interface EncodeDetectObjectsOptions extends EncodeOptions<
-  GpuImage | GpuTensor<Yolo26Input>,
+  GpuImage | GpuTensor<ImageInput>,
   GpuTensor<ObjectDetectionList>
 > {
   /** Drops objects scored below this, 0 to 1. Default 0.3. */
@@ -80,7 +86,7 @@ export interface ObjectDetector {
    *  model input, and the list with room for `maxDetections` objects. Pass
    *  one to `root.createBuffer` to make a buffer of the right type and size. */
   readonly schemas: {
-    readonly input: Yolo26Input;
+    readonly input: ImageInput;
     readonly output: (maxDetections: number) => ObjectDetectionList;
   };
   /** Image in, the objects in it out, best first. */
@@ -145,7 +151,7 @@ export async function createObjectDetector(
         maskSize: 0,
       }),
     );
-    const schemas = { input: detector.schemas.input, output: encoder.schema };
+    const schemas = { input: imageInput(inputSize), output: encoder.schema };
 
     let disposed = false;
     // Calls run one after another: the next preprocess overwrites the scratch

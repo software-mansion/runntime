@@ -3,9 +3,9 @@
  *  methods share. */
 
 import {
+  d,
   isBuffer,
   isTexture,
-  type d,
   type RenderFlag,
   type SampledFlag,
   type TgpuBuffer,
@@ -30,6 +30,14 @@ export type GpuImageTarget = GPUTexture | (TgpuTexture & RenderFlag);
 
 /** A buffer laid out as `Schema`. A raw GPUBuffer must hold the same bytes. */
 export type GpuTensor<Schema extends d.BaseData> = GPUBuffer | TgpuBuffer<Schema>;
+
+/** A model input as a GPU buffer: normalized RGB, `[channel][row][column]`
+ *  f32, the runner's `inputSize` wide and high. */
+export type ImageInput = d.WgslArray<d.WgslArray<d.WgslArray<d.F32>>>;
+
+/** The ImageInput layout of a `size` × `size` input. */
+export const imageInput = (size: number): ImageInput =>
+  d.arrayOf(d.arrayOf(d.arrayOf(d.f32, size), size), 3);
 
 /** A command encoder to record into. A TgpuCommandEncoder comes from
  *  `root['~unstable'].createCommandEncoder()`. */

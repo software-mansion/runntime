@@ -92,7 +92,7 @@ interface ImageClassifier {
   readonly labels: readonly string[];
   readonly inputSize: number;
   readonly schemas: {
-    readonly input: ClassifyInput;
+    readonly input: ImageInput;
     readonly output: (topk: number) => ClassificationList;
   };
   classify(

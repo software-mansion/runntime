@@ -10,7 +10,7 @@ import {
 import { openWeights, throwIfAborted, type LoadOptions, type ModelPath } from '../../load.ts';
 import { asLoadError, rethrowRunError } from '../../errors.ts';
 import type { Yolo26Variant } from '../../yolo26/config.ts';
-import { createDetector, SEGMENT_MASKS, type Yolo26Input } from '../../yolo26/detector.ts';
+import { createDetector, SEGMENT_MASKS } from '../../yolo26/detector.ts';
 import { COCO_NAMES, decodeSegmentations } from '../../yolo26/pipeline.ts';
 import { models } from '../../models.ts';
 import type { ImageBuffer, ResizeMode } from './image.ts';
@@ -18,7 +18,13 @@ import { decodeBox, scaleBox, type BoundingBox } from './ops/box.ts';
 import { resizeTransform } from './ops/point.ts';
 import { createDetectionEncoder } from './utils/encodeDetections.ts';
 import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
-import type { EncodeOptions, GpuImage, GpuTensor } from '../gpu.ts';
+import {
+  imageInput,
+  type EncodeOptions,
+  type GpuImage,
+  type GpuTensor,
+  type ImageInput,
+} from '../gpu.ts';
 
 /** What to load. Every field is optional; a missing `modelPath` comes from
  *  models.instanceSegmentation.YOLO26_SEG.DEFAULT. */
@@ -72,7 +78,7 @@ export type InstanceSegmentationData = ReturnType<typeof instanceSegmentation>;
 export type InstanceSegmentationList = DetectionList<InstanceSegmentationData>;
 
 export interface EncodeSegmentInstancesOptions extends EncodeOptions<
-  GpuImage | GpuTensor<Yolo26Input>,
+  GpuImage | GpuTensor<ImageInput>,
   GpuTensor<InstanceSegmentationList>
 > {
   /** Drops objects scored below this, 0 to 1. Default 0.3. */
@@ -91,7 +97,7 @@ export interface InstanceSegmenter {
    *  model input, and the list with room for `maxDetections` objects. Pass
    *  one to `root.createBuffer` to make a buffer of the right type and size. */
   readonly schemas: {
-    readonly input: Yolo26Input;
+    readonly input: ImageInput;
     readonly output: (maxDetections: number) => InstanceSegmentationList;
   };
   /** Image in, the objects in it out, best first. */
@@ -159,7 +165,7 @@ export async function createInstanceSegmenter(
         maskSize: GPU_MASK_SIZE,
       }),
     );
-    const schemas = { input: detector.schemas.input, output: encoder.schema };
+    const schemas = { input: imageInput(inputSize), output: encoder.schema };
 
     let disposed = false;
     // Calls run one after another: the next preprocess overwrites the scratch

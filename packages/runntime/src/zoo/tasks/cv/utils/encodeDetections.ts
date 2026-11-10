@@ -12,21 +12,23 @@ import {
   type DetectionList,
   type U32Buffer,
 } from '../../../../core/index.ts';
-import type { Detector, Yolo26Input } from '../../../yolo26/detector.ts';
+import type { Detector } from '../../../yolo26/detector.ts';
 import {
   encodeInput,
   encodeWith,
+  imageInput,
   unwrapSource,
   unwrapStorageTarget,
   type EncodeOptions,
   type GpuImage,
   type GpuTensor,
+  type ImageInput,
 } from '../../gpu.ts';
 import type { ImagePreprocessor } from './imagePreprocessor.ts';
 
 /** What every YOLO26 encode<Verb> method takes. */
 export interface EncodeDetectionsOptions<Target extends d.BaseData> extends EncodeOptions<
-  GpuImage | GpuTensor<Yolo26Input>,
+  GpuImage | GpuTensor<ImageInput>,
   GpuTensor<Target>
 > {
   readonly confidenceThreshold?: number;
@@ -50,7 +52,7 @@ export function createDetectionEncoder<T extends d.AnyWgslData>(
   const inputImage: U32Buffer = root
     .createBuffer(d.arrayOf(d.u32, 2), [inputSize, inputSize])
     .$usage('storage');
-  const inputBytes = d.sizeOf(detector.schemas.input);
+  const inputBytes = d.sizeOf(imageInput(inputSize));
   const detectionBytes = d.sizeOf(detection);
   // `count`, then the 4-byte-aligned entries.
   const headerBytes = d.sizeOf(d.u32);

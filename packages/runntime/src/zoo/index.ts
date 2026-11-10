@@ -22,6 +22,7 @@ export type {
   GpuImage,
   GpuImageTarget,
   GpuTensor,
+  ImageInput,
 } from './tasks/gpu.ts';
 export { models } from './models.ts';
 
@@ -64,7 +65,6 @@ export {
   type ObjectDetectorModel,
 } from './tasks/cv/objectDetection.ts';
 export type { Yolo26Variant } from './yolo26/config.ts';
-export type { Yolo26Input } from './yolo26/detector.ts';
 
 export {
   createInstanceSegmenter,
@@ -105,7 +105,6 @@ export type { DepthartVariant } from './depthart/estimator.ts';
 export {
   createImageClassifier,
   type ClassificationList,
-  type ClassifyInput,
   type ClassifyOptions,
   type EncodeClassifyOptions,
   type ImageClassifier,

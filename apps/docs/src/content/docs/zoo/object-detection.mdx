@@ -85,7 +85,7 @@ interface ObjectDetector {
   readonly labels: readonly string[];
   readonly inputSize: number;
   readonly schemas: {
-    readonly input: Yolo26Input;
+    readonly input: ImageInput;
     readonly output: (maxDetections: number) => ObjectDetectionList;
   };
   detectObjects(image: ImageBuffer, options?: DetectObjectsOptions): Promise<ObjectDetection[]>;

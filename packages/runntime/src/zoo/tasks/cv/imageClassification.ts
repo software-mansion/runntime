@@ -28,11 +28,13 @@ import { createImagePreprocessor } from './utils/imagePreprocessor.ts';
 import {
   encodeInput,
   encodeWith,
+  imageInput,
   unwrapSource,
   unwrapStorageTarget,
   type EncodeOptions,
   type GpuImage,
   type GpuTensor,
+  type ImageInput,
 } from '../gpu.ts';
 
 /** What to load. With no config, MobileNetV4-Conv-S from the Hugging Face
@@ -54,17 +56,13 @@ export interface ClassifyOptions {
   readonly topk?: number;
 }
 
-/** The model input as a GPU buffer: normalized RGB, `[channel][row][column]`
- *  f32, `inputSize` wide and high. */
-export type ClassifyInput = d.WgslArray<d.WgslArray<d.WgslArray<d.F32>>>;
-
 /** What encodeClassify writes: the best classes, best first, each a
  *  `classId` into `labels` and its `confidence`, 0 to 1, as classify()
  *  returns them. */
 export type ClassificationList = d.WgslArray<typeof classScore>;
 
 export interface EncodeClassifyOptions extends EncodeOptions<
-  GpuImage | GpuTensor<ClassifyInput>,
+  GpuImage | GpuTensor<ImageInput>,
   GpuTensor<ClassificationList>
 > {
   /** How many classes to write, best first. Default: as many as the target
@@ -81,7 +79,7 @@ export interface ImageClassifier {
    *  input, and the list with room for `topk` classes. Pass one to
    *  `root.createBuffer` to make a buffer of the right type and size. */
   readonly schemas: {
-    readonly input: ClassifyInput;
+    readonly input: ImageInput;
     readonly output: (topk: number) => ClassificationList;
   };
   /** Image in, its most likely classes out, best first. */
@@ -156,7 +154,7 @@ export async function createImageClassifier(
     const imageToChw = scope.track(createImageToChw(root));
     const softmaxTopK = createSoftmaxTopK(root);
     const schemas = {
-      input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),
+      input: imageInput(inputSize),
       output: classScoreList,
     };
     const inputBytes = d.sizeOf(schemas.input);

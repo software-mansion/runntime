@@ -123,7 +123,7 @@ interface InstanceSegmenter {
   readonly labels: readonly string[];
   readonly inputSize: number;
   readonly schemas: {
-    readonly input: Yolo26Input;
+    readonly input: ImageInput;
     readonly output: (maxDetections: number) => InstanceSegmentationList;
   };
   segmentInstances(
