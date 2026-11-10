@@ -19,6 +19,7 @@ import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imag
 import type { ImageInput } from '../../../../src/zoo/tasks/gpu.ts';
 import { expectClose, gpu, requireFeature } from '../../../gpu.ts';
 import { randomSafetensors } from '../../randomWeights.ts';
+import { ENCODERS } from '../gpu.ts';
 import { frameImage, randomRgba, videoFrame } from './images.ts';
 
 const { root } = await gpu();
@@ -116,6 +117,36 @@ describe('encodeClassify', () => {
     const want = await runner.classify(frameImage(frame), { topk: 5 });
     runner.encodeClassify({ source: root.device.importExternalTexture({ source: frame }), target });
     expectSameClasses(await target.read(), want, FRAME_RTOL);
+  });
+
+  it.for(ENCODERS)('gives the same list recorded into $name', async ({ record }, ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    const runner = await classifier();
+    const image = imageBuffer(randomRgba(SIZE, SIZE, 3), SIZE, SIZE);
+    const source = modelInput(runner.schemas.input, image);
+    const own = outputBuffer(runner.schemas.output(5));
+    const target = outputBuffer(runner.schemas.output(5));
+
+    runner.encodeClassify({ source, target: own });
+    record(root, (encoder) => runner.encodeClassify({ source, target, encoder }));
+    expect(await target.read()).toEqual(await own.read());
+  });
+
+  // Two calls in one command buffer share the runner's input and logits, so
+  // the first must be done with them before the second starts.
+  it('runs two calls recorded into one encoder', async (ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    const runner = await classifier();
+    const images = [3, 4].map((seed) => imageBuffer(randomRgba(SIZE, SIZE, seed), SIZE, SIZE));
+    const sources = images.map((image) => modelInput(runner.schemas.input, image));
+    const targets = images.map(() => outputBuffer(runner.schemas.output(5)));
+
+    const encoder = root.device.createCommandEncoder();
+    sources.forEach((source, i) => runner.encodeClassify({ source, target: targets[i]!, encoder }));
+    root.device.queue.submit([encoder.finish()]);
+    for (const [i, image] of images.entries()) {
+      expectSameClasses(await targets[i]!.read(), await runner.classify(image, { topk: 5 }));
+    }
   });
 
   it('rejects a topk past what the target holds', async (ctx) => {
