@@ -7,6 +7,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
+  F32_MAX,
   flatIndex,
   GRID_Y_STRIDE,
   MAX_WORKGROUPS_PER_DIM,
@@ -23,8 +24,6 @@ export type DecodeTask = 'detect' | 'pose' | 'segment';
 const STRIDES = [8, 16, 32] as const;
 /** Input pixels per mask prototype pixel. */
 const PROTO_STRIDE = 4;
-/** Largest finite f32: the threshold that keeps every cell, or none. */
-const F32_MAX = 3.4028234663852886e38;
 
 const FIT_MODES: Record<FitMode, number> = { stretch: 0, letterbox: 1, crop: 2 };
 

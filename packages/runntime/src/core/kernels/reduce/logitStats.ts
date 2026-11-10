@@ -12,6 +12,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
+  F32_MAX,
   type F32Buffer,
   type FloatBuffer,
   flatWorkgroupId,
@@ -21,7 +22,7 @@ import {
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
-import { NEG_FLT_MAX, TREE_STRIDES, treeMaxSum } from './softmax.ts';
+import { TREE_STRIDES, treeMaxSum } from './softmax.ts';
 
 const Dims = d.struct({ rows: d.u32, rowStride: d.u32, weight: d.f32 });
 
@@ -68,9 +69,9 @@ function makeLogitStatsKernel(cfg: LogitStatsCfg, elem: Elem) {
     const b = std.intdiv(slot, D.rows);
     const base = (slot % D.rows) * D.rowStride + b * block;
 
-    let m = d.f32(NEG_FLT_MAX);
+    let m = d.f32(-F32_MAX);
     let s = d.f32(0);
-    let best = d.f32(NEG_FLT_MAX);
+    let best = d.f32(-F32_MAX);
     let arg = d.u32(0);
     for (let c = lid; c < block; c += WORKGROUP_SIZE) {
       const x = d.f32(L.$.x[base + c]!);

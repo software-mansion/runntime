@@ -3,7 +3,7 @@
 
 import tgpu, { common, d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
-import { WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
+import { F32_MAX, WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** `minmax` 1 maps the map's own [min, max] to [0, 1]. */
@@ -28,9 +28,6 @@ const TREE_STRIDES = Array.from(
 
 const partialLo = tgpu.workgroupVar(d.arrayOf(d.f32, WORKGROUP_SIZE));
 const partialHi = tgpu.workgroupVar(d.arrayOf(d.f32, WORKGROUP_SIZE));
-
-/** Largest finite f32, the seed of the min/max fold. */
-const F32_MAX = 3.4028234663852886e38;
 
 /** One workgroup: threads stride the map, then a pairwise tree. */
 const rangeKernel = tgpu.computeFn({

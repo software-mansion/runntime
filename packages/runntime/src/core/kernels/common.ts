@@ -6,6 +6,10 @@ export const WORKGROUP_SIZE = 64;
 
 export const MAX_WORKGROUPS_PER_DIM = 65535;
 
+/** Largest finite f32: the seed of a max or min fold, and what stands in
+ *  for an infinity, which WGSL has no literal for. */
+export const F32_MAX = 3.4028234663852886e38;
+
 /** Lanes the subgroup kernels assume. gpuExecutor turns them on only when the
  *  device's smallest subgroup is at least this wide. */
 export const SUBGROUP_WIDTH = 32;

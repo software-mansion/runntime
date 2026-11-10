@@ -14,6 +14,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
+  F32_MAX,
   type F32Buffer,
   type FloatBuffer,
   flatWorkgroupId,
@@ -32,10 +33,6 @@ const Dims = d.struct({
   windowLeft: d.u32,
   windowRight: d.u32,
 });
-
-/** Start of the running max. A thread with no columns adds (NEG_FLT_MAX, 0),
- *  which changes nothing. */
-export const NEG_FLT_MAX = -3.4028234663852886e38;
 
 export const TREE_STRIDES = Array.from(
   { length: Math.log2(WORKGROUP_SIZE) },
@@ -73,12 +70,12 @@ export const treeMaxSum = (m: number, s: number, tid: number): d.v2f => {
   return d.vec2f(partialMax.$[0]!, partialSum.$[0]!);
 };
 
-/** vec4 i, NEG_FLT_MAX outside [lo, hi) so those lanes come out 0. */
+/** vec4 i, -F32_MAX outside [lo, hi) so those lanes come out 0. */
 const keep4 = (v: d.v4f, i: number, lo: number, hi: number): d.v4f => {
   'use gpu';
   const col = d.vec4u(i * 4) + d.vec4u(0, 1, 2, 3);
   const inside = std.and(std.ge(col, d.vec4u(lo)), std.lt(col, d.vec4u(hi)));
-  return std.select(d.vec4f(NEG_FLT_MAX), v, inside);
+  return std.select(d.vec4f(-F32_MAX), v, inside);
 };
 
 // Built once with scalars and once with vec4s over the same buffers. Rows
@@ -133,7 +130,8 @@ function makeSoftmaxVariant(elem: Elem, vec4: boolean, subgroups: boolean) {
     }
 
     // This thread's running (max, sum). A new max rescales the sum so far.
-    let m = d.f32(NEG_FLT_MAX);
+    // A thread with no columns adds (-F32_MAX, 0), which changes nothing.
+    let m = d.f32(-F32_MAX);
     let s = d.f32(0);
     if (vec4) {
       const base = row * words;

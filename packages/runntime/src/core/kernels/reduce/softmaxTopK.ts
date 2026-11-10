@@ -3,7 +3,7 @@
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
-import { WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
+import { F32_MAX, WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** One entry of the list: the index and its softmax probability. */
@@ -27,9 +27,6 @@ const TREE_STRIDES = Array.from(
 );
 
 const partial = tgpu.workgroupVar(d.arrayOf(d.f32, WORKGROUP_SIZE));
-
-/** Largest finite f32, the seed of the max fold. */
-const F32_MAX = 3.4028234663852886e38;
 
 /** One thread per entry. Every workgroup folds the max and the sum of
  *  exponents itself, so no second dispatch waits on a shared one. An
