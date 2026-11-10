@@ -14,18 +14,16 @@ export function freed<Resource extends { destroy(): void }>(resource: Resource):
 export const ENCODERS = [
   {
     name: 'a TypeGPU encoder',
-    record(root: TgpuRoot, encode: (encoder: GpuEncoder) => void): void {
+    open(root: TgpuRoot): { encoder: GpuEncoder; submit(): void } {
       const encoder = root['~unstable'].createCommandEncoder();
-      encode(encoder);
-      encoder.submit();
+      return { encoder, submit: () => encoder.submit() };
     },
   },
   {
     name: 'a GPUCommandEncoder',
-    record(root: TgpuRoot, encode: (encoder: GpuEncoder) => void): void {
+    open(root: TgpuRoot): { encoder: GpuEncoder; submit(): void } {
       const encoder = root.device.createCommandEncoder();
-      encode(encoder);
-      root.device.queue.submit([encoder.finish()]);
+      return { encoder, submit: () => root.device.queue.submit([encoder.finish()]) };
     },
   },
 ];

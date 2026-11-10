@@ -96,7 +96,7 @@ describe('encodeDetectObjects', () => {
     );
   });
 
-  it.for(ENCODERS)('gives the same list recorded into $name', async ({ record }, ctx) => {
+  it.for(ENCODERS)('gives the same list recorded into $name', async ({ open }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await detector();
     const image = imageBuffer(randomRgba(INPUT_SIZE, INPUT_SIZE, 3), INPUT_SIZE, INPUT_SIZE);
@@ -105,7 +105,11 @@ describe('encodeDetectObjects', () => {
     const target = freed(root.createBuffer(runner.schemas.output(84)).$usage('storage'));
 
     runner.encodeDetectObjects({ source, target: own });
-    record(root, (encoder) => runner.encodeDetectObjects({ source, target, encoder }));
+    const { encoder, submit } = open(root);
+    runner.encodeDetectObjects({ source, target, encoder });
+    // Recorded, not run: nothing reaches the target until the caller submits.
+    expect((await target.read()).count).toBe(0);
+    submit();
     expect(await target.read()).toEqual(await own.read());
   });
 

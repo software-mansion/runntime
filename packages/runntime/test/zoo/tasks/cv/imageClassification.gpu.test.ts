@@ -113,7 +113,7 @@ describe('encodeClassify', () => {
     expectSameClasses(await target.read(), want, FRAME_RTOL);
   });
 
-  it.for(ENCODERS)('gives the same list recorded into $name', async ({ record }, ctx) => {
+  it.for(ENCODERS)('gives the same list recorded into $name', async ({ open }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const runner = await classifier();
     const image = imageBuffer(randomRgba(SIZE, SIZE, 3), SIZE, SIZE);
@@ -122,7 +122,11 @@ describe('encodeClassify', () => {
     const target = freed(root.createBuffer(runner.schemas.output(5)).$usage('storage'));
 
     runner.encodeClassify({ source, target: own });
-    record(root, (encoder) => runner.encodeClassify({ source, target, encoder }));
+    const { encoder, submit } = open(root);
+    runner.encodeClassify({ source, target, encoder });
+    // Recorded, not run: nothing reaches the target until the caller submits.
+    expect((await target.read()).every((c) => c.confidence === 0)).toBe(true);
+    submit();
     expect(await target.read()).toEqual(await own.read());
   });
 
