@@ -27,7 +27,8 @@ export interface ScalePointOptions {
 }
 
 /** The resize as numbers: how many input pixels one image pixel takes, and
- *  where the image's top-left corner lands inside the input. */
+ *  where the image's top-left corner lands inside the input. fitImage in
+ *  core/kernels/image/imageToChw.ts is the GPU copy. */
 export function resizeTransform(options: ScalePointOptions): {
   scaleX: number;
   scaleY: number;

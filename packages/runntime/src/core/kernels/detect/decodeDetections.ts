@@ -16,7 +16,7 @@ import {
   type U32Buffer,
 } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
-import type { FitMode } from '../image/imageToChw.ts';
+import { FIT_MODES, fitImage, type FitMode } from '../image/imageToChw.ts';
 
 export type DecodeTask = 'detect' | 'pose' | 'segment';
 
@@ -24,8 +24,6 @@ export type DecodeTask = 'detect' | 'pose' | 'segment';
 const STRIDES = [8, 16, 32] as const;
 /** Input pixels per mask prototype pixel. */
 const PROTO_STRIDE = 4;
-
-const FIT_MODES: Record<FitMode, number> = { stretch: 0, letterbox: 1, crop: 2 };
 
 const Box = d.struct({ xmin: d.f32, ymin: d.f32, xmax: d.f32, ymax: d.f32 });
 const Landmark = d.struct({ x: d.f32, y: d.f32, confidence: d.f32 });
@@ -143,25 +141,11 @@ const sigmoid = (x: number): number => {
   return 1 / (1 + std.exp(-x));
 };
 
-/** Input pixel = image pixel * scale + offset, as imageToChw fits the
- *  image. `.xy` is the scale, `.zw` the offset. Keep it in step with
- *  resizeTransform in zoo/tasks/cv/ops/point.ts. */
+/** The fit imageToChw used to write the input from the image. */
 const fitOf = (img: d.v2f): d.v4f => {
   'use gpu';
   const P = headLayout.$.params;
-  const out = d.vec2f(d.f32(P.inputSize));
-  let scale = out / img;
-  let offset = d.vec2f();
-  if (P.mode === 1) {
-    scale = d.vec2f(std.min(scale.x, scale.y));
-    offset = (out - img * scale) / 2;
-  }
-  if (P.mode === 2) {
-    const side = std.min(img.x, img.y) * P.cropFraction;
-    scale = out / side;
-    offset = ((side - img) / 2) * scale;
-  }
-  return d.vec4f(scale, offset);
+  return fitImage(img, d.vec2f(d.f32(P.inputSize)), P.mode, P.cropFraction);
 };
 
 /** One thread per cell: the best class, and the cell into the candidate

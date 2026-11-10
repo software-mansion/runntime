@@ -10,7 +10,30 @@ import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
  *  ResizeMode. */
 export type FitMode = 'stretch' | 'letterbox' | 'crop';
 
-const FIT_MODES: Record<FitMode, number> = { stretch: 0, letterbox: 1, crop: 2 };
+/** A FitMode as the shaders take it. */
+export const FIT_MODES: Record<FitMode, number> = { stretch: 0, letterbox: 1, crop: 2 };
+
+/** How an `img`-sized image is fitted into an `out`-sized input with
+ *  FIT_MODES `mode`: input pixel = image pixel * scale + offset. `.xy` is
+ *  the scale, `.zw` the offset. The image size is only known on the GPU (an
+ *  external texture has none on the CPU), so the fit is computed in the
+ *  shader. resizeTransform in zoo/tasks/cv/ops/point.ts is the CPU copy; the
+ *  imageToChw test that matches the CPU preprocessor checks they agree. */
+export const fitImage = (img: d.v2f, out: d.v2f, mode: number, cropFraction: number): d.v4f => {
+  'use gpu';
+  let scale = out / img;
+  let offset = d.vec2f();
+  if (mode === 1) {
+    scale = d.vec2f(std.min(scale.x, scale.y));
+    offset = (out - img * scale) / 2;
+  }
+  if (mode === 2) {
+    const side = std.min(img.x, img.y) * cropFraction;
+    scale = out / side;
+    offset = ((side - img) / 2) * scale;
+  }
+  return d.vec4f(scale, offset);
+};
 
 /** A texel's [0, 1] value stands for a byte 0–255, and value = byte * alpha
  *  + beta per channel. `pad` is the normalized color outside the image. */
@@ -66,9 +89,6 @@ const externalSource = {
   },
 };
 
-// The image size is only known on the GPU (an external texture has none on
-// the CPU), so the fit is computed here. Keep it in step with
-// resizeTransform in zoo/tasks/cv/ops/point.ts.
 const makeImageToChwKernel = (source: typeof textureSource) =>
   tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
@@ -87,23 +107,11 @@ const makeImageToChwKernel = (source: typeof textureSource) =>
       ioLayout.$.size[1] = srcSize.y;
     }
     const img = d.vec2f(srcSize);
-    const out = d.vec2f(d.f32(P.outW), d.f32(P.outH));
-    // Input pixel = image pixel * scale + offset.
-    let scale = out / img;
-    let offset = d.vec2f();
-    if (P.mode === 1) {
-      scale = d.vec2f(std.min(scale.x, scale.y));
-      offset = (out - img * scale) / 2;
-    }
-    if (P.mode === 2) {
-      const side = std.min(img.x, img.y) * P.cropFraction;
-      scale = out / side;
-      offset = ((side - img) / 2) * scale;
-    }
+    const fit = fitImage(img, d.vec2f(d.f32(P.outW), d.f32(P.outH)), P.mode, P.cropFraction);
 
     const o = d.vec2f(d.f32(idx % P.outW), d.f32(d.u32(idx / P.outW)));
     // Image coordinate of this input pixel's center, in image pixels.
-    const s = (o + 0.5 - offset) / scale;
+    const s = (o + 0.5 - fit.zw) / fit.xy;
     let v = d.vec3f(P.padR, P.padG, P.padB);
     if (s.x >= 0 && s.y >= 0 && s.x < img.x && s.y < img.y) {
       // Half-pixel bilinear with clamped edges, as buildAxis does on the CPU.
