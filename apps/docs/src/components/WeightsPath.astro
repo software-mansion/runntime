@@ -1,105 +1,160 @@
 ---
-/** The path of a weights file, from a checkpoint to the GPU: six numbered
- *  steps in two rows, one column at phone width. */
-const steps = [
-  { title: 'Checkpoint', detail: 'PyTorch or Hugging Face' },
-  { title: 'Export', detail: 'model.safetensors, F32 / F16 / BF16' },
-  { title: 'Quantize', detail: 'runntime quantize, int8 or int4. Optional.' },
-  { title: 'Host', detail: 'any static file server' },
-  { title: 'modelPath', detail: 'create<Task>({ modelPath })' },
-  { title: 'Load', detail: 'header, 8 MB chunks, cache, GPU upload' },
+/** The path of a weights file, from a checkpoint to the GPU, with quantizing
+ *  as an optional branch. Laid out in a row, and in a column at phone width. */
+const BOX_HEIGHT = 56;
+
+const checkpoint = { title: 'Checkpoint', detail: 'PyTorch / HF' };
+const exported = { title: 'Export', detail: '.safetensors' };
+const quantize = { title: 'Quantize', detail: 'int8 / int4', optional: true };
+const modelPath = { title: 'modelPath', detail: 'create<Task>()' };
+const load = { title: 'Load', detail: 'GPU upload' };
+
+/** The quantize branch leaves Export from the top and joins modelPath from
+ *  the top; the float path runs straight between them. The column puts the
+ *  float path on the left and the branch on the right. */
+const layouts = [
+  {
+    name: 'row',
+    width: 770,
+    height: 120,
+    boxes: [
+      { ...checkpoint, x: 0, y: 64, width: 130 },
+      { ...exported, x: 160, y: 64, width: 130 },
+      { ...quantize, x: 320, y: 0, width: 130 },
+      { ...modelPath, x: 480, y: 64, width: 130 },
+      { ...load, x: 640, y: 64, width: 130 },
+    ],
+    arrows: ['M130 92 H160', 'M225 64 V28 H320', 'M450 28 H545 V64', 'M290 92 H480', 'M610 92 H640'],
+    skipLabel: { x: 385, y: 84, anchor: 'middle', lines: ['float file as is'] },
+  },
+  {
+    name: 'column',
+    width: 340,
+    height: 440,
+    boxes: [
+      { ...checkpoint, x: 100, y: 0, width: 240 },
+      { ...exported, x: 100, y: 96, width: 240 },
+      { ...quantize, x: 190, y: 192, width: 150 },
+      { ...modelPath, x: 100, y: 288, width: 240 },
+      { ...load, x: 100, y: 384, width: 240 },
+    ],
+    arrows: ['M220 56 V96', 'M265 152 V192', 'M265 248 V288', 'M130 152 V288', 'M220 344 V384'],
+    skipLabel: { x: 122, y: 216, anchor: 'end', lines: ['float file', 'as is'] },
+  },
 ];
 ---
 
-<ol class="weights-path" aria-label="From a checkpoint to the GPU">
-  {
-    steps.map((step) => (
-      <li>
-        <span class="weights-path-title">{step.title}</span>
-        <span class="weights-path-detail">{step.detail}</span>
-      </li>
-    ))
-  }
-</ol>
+{
+  layouts.map((layout) => (
+    <svg
+      class={`weights-path ${layout.name}`}
+      viewBox={`-2 -2 ${layout.width + 4} ${layout.height + 4}`}
+      role="img"
+      aria-label="A checkpoint is exported to a safetensors file. The file is either quantized to int8 or int4 first, or used as it is, and then passed as modelPath and loaded to the GPU."
+    >
+      <defs>
+        <marker
+          id={`weights-path-arrow-${layout.name}`}
+          viewBox="0 0 10 10"
+          refX="10"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto"
+        >
+          <path class="arrow-head" d="M0 0 L10 5 L0 10 z" />
+        </marker>
+      </defs>
+      {layout.arrows.map((d) => (
+        <path class="arrow" d={d} marker-end={`url(#weights-path-arrow-${layout.name})`} />
+      ))}
+      <text
+        class="skip"
+        x={layout.skipLabel.x}
+        y={layout.skipLabel.y}
+        text-anchor={layout.skipLabel.anchor}
+      >
+        {layout.skipLabel.lines.map((line, i) => (
+          <tspan x={layout.skipLabel.x} dy={i === 0 ? 0 : 16}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+      {layout.boxes.map((box) => (
+        <g class={box.optional ? 'box optional' : 'box'}>
+          <rect x={box.x} y={box.y} width={box.width} height={BOX_HEIGHT} rx="6" />
+          <text class="title" x={box.x + 12} y={box.y + 23}>
+            {box.title}
+            {box.optional && <tspan class="optional-label"> optional</tspan>}
+          </text>
+          <text class="detail" x={box.x + 12} y={box.y + 42}>
+            {box.detail}
+          </text>
+        </g>
+      ))}
+    </svg>
+  ))
+}
 
 <style>
   .weights-path {
-    counter-reset: step;
-    display: grid;
-    gap: 1.75rem 2rem;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    list-style: none;
-    margin: 1.5rem 0;
-    padding: 0;
+    display: block;
+    height: auto;
+    margin: 1.5rem auto;
+    width: 100%;
   }
 
-  .weights-path li {
-    background: var(--surface-raised);
-    border: 1px solid var(--border-strong);
-    border-radius: 0.5rem;
-    counter-increment: step;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin: 0;
-    min-height: 5rem;
-    padding: 0.75rem 0.875rem;
-    position: relative;
-  }
-
-  /* The step number, in the top right corner. */
-  .weights-path li::before {
-    color: var(--text-faint);
-    content: counter(step);
-    font-family: var(--__sl-font-mono, monospace);
-    font-size: 0.75rem;
-    position: absolute;
-    right: 0.75rem;
-    top: 0.625rem;
-  }
-
-  /* The arrow to the next step, between the boxes. The third box ends a
-   * row, so it gets none: the numbers carry the order to the next row. */
-  .weights-path li:not(:last-child):not(:nth-child(3))::after {
-    color: var(--text-faint);
-    content: '→';
-    font-size: 1.125rem;
-    line-height: 1;
-    position: absolute;
-    right: -1.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-
-  .weights-path-title {
-    color: var(--text-primary);
-    font-weight: 600;
-  }
-
-  .weights-path-detail {
-    color: var(--text-muted);
-    font-family: var(--__sl-font-mono, monospace);
-    font-size: 0.75rem;
-    line-height: 1.4;
+  .column {
+    display: none;
+    max-width: 21.25rem;
   }
 
   @media (max-width: 40rem) {
-    .weights-path {
-      gap: 1.75rem;
-      grid-template-columns: minmax(0, 1fr);
+    .row {
+      display: none;
     }
 
-    .weights-path li:not(:last-child)::after {
-      bottom: -1.5rem;
-      color: var(--text-faint);
-      content: '↓';
-      font-size: 1.125rem;
-      left: 50%;
-      line-height: 1;
-      position: absolute;
-      right: auto;
-      top: auto;
-      transform: translateX(-50%);
+    .column {
+      display: block;
     }
+  }
+
+  rect {
+    fill: var(--surface-raised);
+    stroke: var(--border-strong);
+  }
+
+  .optional rect {
+    stroke-dasharray: 4 3;
+  }
+
+  .arrow {
+    fill: none;
+    stroke: var(--text-faint);
+    stroke-width: 1.5;
+  }
+
+  .arrow-head {
+    fill: var(--text-faint);
+  }
+
+  .title {
+    fill: var(--text-primary);
+    font-family: var(--__sl-font, sans-serif);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .optional-label {
+    fill: var(--text-faint);
+    font-size: 11px;
+    font-weight: 400;
+  }
+
+  .detail,
+  .skip {
+    fill: var(--text-muted);
+    font-family: var(--__sl-font-mono, monospace);
+    font-size: 11px;
   }
 </style>
