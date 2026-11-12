@@ -158,7 +158,6 @@ export default defineConfig({
                   label: 'Guides',
                   items: [
                     { label: 'Error handling', slug: 'zoo/error-handling' },
-                    { label: 'Exporting weights', slug: 'zoo/exporting-weights' },
                     {
                       label: 'Migrating from transformers.js',
                       slug: 'zoo/migrating-from-transformers-js',
@@ -175,8 +174,9 @@ export default defineConfig({
             },
           ],
           {
-            // The splash landing page belongs to no topic.
-            exclude: ['/'],
+            // The splash landing page belongs to no topic, and the core pages stay
+            // unlisted until runntime core is published.
+            exclude: ['/', '/core/**'],
             // The generated index pages sit outside the sidebar groups.
             topics: { zoo: ['/api/**'] },
           },
