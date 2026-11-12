@@ -69,6 +69,30 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
   corner cases included. Where our output differs on purpose, the test says
   why.
 
+## Parity
+
+- A parity test compares a zoo model with saved outputs of its PyTorch
+  reference, variant by variant: `test/zoo/<model>/model.parity.ts`, with
+  the variants, inputs and thresholds in `parity.manifest.ts` next to it.
+  `test/parity` holds what they share: the metrics, the manifest types and
+  the reference reader.
+- `pnpm test:parity` runs them in headless Chromium on the real GPU, from
+  their own config, `vitest.parity.config.ts`. `pnpm test` and CI never
+  run them. Run it before merging a change to kernels, routing or the zoo,
+  and paste the tables from `packages/runntime/.parity/results` into the
+  pull request.
+- References come from `tools/parity`, one script per model:
+  `uv run python -m runntime_parity.minilm`. It runs the released model on
+  the fixed inputs and saves the inputs, the outputs, the reference noise
+  (the same run on a second device) and the library versions. Tests read
+  them from `RUNNTIME_PARITY_DIR`, `~/.cache/runntime-parity` by default.
+  A missing reference fails the test.
+- Every entry in `models.ts` needs a variant in a manifest:
+  `test/parity/coverage.test.ts` fails in CI without one. A new model lands
+  with its manifest, never on the pending list.
+- Every threshold names its source, and each model's test also runs a
+  model broken on purpose that has to fail all of them.
+
 ## Performance
 
 - A change to kernels, `core` or the zoo is benchmarked on the models it
