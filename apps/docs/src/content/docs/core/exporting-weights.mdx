@@ -119,14 +119,18 @@ Full / half-precision files work as is. Optionally, you can quantize your model 
 <QuantFile />
 
 **How the runtime recognizes it.** A quantized file has a `runntime.quant`
-entry in its header metadata with the bits and group size. Each quantized
-weight is stored as `I8` (int8) or `U8` (two int4 values per byte), with
-its scales next to it under the same name plus `_scale`. Every other tensor
+entry in its header metadata. Each quantized weight is stored as `I8`
+(int8) or `U8` (two int4 values per byte), with its scales next to it under
+the same name plus `_scale`. The entry can set the bits and group size for
+the whole file; without them, each weight takes its bits from its dtype and
+its group size from the shape of its scales. Every other tensor
 is a normal float tensor. An int tensor in a file without `runntime.quant`
 fails to load.
 
-**Which layers are quantized.** Only Linear weights. Embedding tables,
-biases and norms stay float, because the model reads them as float.
+**Which layers are quantized.** `Linear`, `Conv1d` and `ConvTranspose1d`
+weights. Embedding tables, biases and norms stay float, because the model
+reads them as float. `runntime quantize` only quantizes 2D tensors, so
+today it covers Linear weights and leaves conv weights float.
 
 **Making a file.** `runntime quantize` lives in the repository under
 `tools/python` and runs with [uv](https://docs.astral.sh/uv/):
