@@ -104,6 +104,57 @@ export class Embedding extends Module<[readonly number[] | Value], Value> {
   }
 }
 
+/** Turns `weight` into quantW words [k, n], packed from `ints` with one row
+ *  of k per output, and puts its f32 scales right after it as
+ *  `<prefix>.weightScale`, so both bind in file order. The words carry t's
+ *  whole download size. Returns the scale parameter. */
+function loadQuantWeight(
+  sd: LazyStateDict,
+  prefix: string,
+  weight: Parameter,
+  t: QuantTensor,
+  shape: { k: number; n: number },
+  ints: () => Promise<Int8Array>,
+  scales: { dims: number[]; data: () => Promise<Float32Array> },
+): Parameter {
+  const { k, n } = shape;
+  const at = (name: string) => (prefix ? `${prefix}.${name}` : name);
+  weight.retype('quantW', (k * n * t.bits) / 32, [k, n]);
+  const elems = scales.dims.reduce((a, b) => a * b, 1);
+  const scale = new Parameter({ elems, dtype: 'f32', dims: scales.dims }, undefined, true);
+  const words = derivedTensor(
+    [k, n],
+    async () => packQuantW(await ints(), k, n, t.bits),
+    t.byteLength,
+  );
+  const entries = [...sd.tensors];
+  sd.tensors.clear();
+  for (const [key, tensor] of entries) {
+    sd.tensors.set(key, key === at('weight') ? words : tensor);
+    if (key === at('weight')) {
+      sd.tensors.set(at('weightScale'), derivedTensor(scales.dims, scales.data));
+    }
+  }
+  return scale;
+}
+
+/** `t`'s scales in f32, as stored. */
+async function scalesF32(t: QuantTensor): Promise<Float32Array> {
+  const data = await t.scales();
+  return data instanceof Float32Array ? data : f16ToF32(data);
+}
+
+/** `t`'s scales, torch's [out, groups], as the kernels' [groups, n] in f32.
+ *  Columns past out stay 0. */
+async function scaleColumns(t: QuantTensor, groups: number, n: number): Promise<Float32Array> {
+  const f32 = await scalesF32(t);
+  const out = new Float32Array(groups * n);
+  for (let o = 0; o < t.shape[0]!; o++) {
+    for (let g = 0; g < groups; g++) out[g * n + o] = f32[o * groups + g]!;
+  }
+  return out;
+}
+
 /** y = x @ weight + bias. weight is stored [in, out]; torch checkpoints
  *  transpose once at load.
  *
@@ -157,9 +208,8 @@ export class Linear extends Module {
     }
     sd.tensors.set(name, transposeWeight(tensor));
   }
-  /** Replaces `name` with quantW words [in, out] and adds its scales
-   *  [in / groupSize, out] right after it, so they bind in file order. The
-   *  words carry the whole byteLength of the ints and scales. */
+  /** Loads `name` as quantW words [in, out] with its scales
+   *  [in / groupSize, out]. */
   private loadQuantized(
     sd: LazyStateDict,
     prefix: string,
@@ -180,35 +230,16 @@ export class Linear extends Module {
       );
     }
     this.quantization = { bits, groupSize };
-    this.weight.retype('quantW', (k * n * bits) / 32);
-    this.weightScale = new Parameter(
-      { elems: (k / groupSize) * n, dtype: 'f32', dims: [k / groupSize, n] },
-      undefined,
-      true,
-    );
-    const words = derivedTensor(
-      [k, n],
-      async () => packQuantW(await tensor.ints(), k, n, bits),
-      tensor.byteLength,
-    );
     const groups = k / groupSize;
-    const scales = derivedTensor([groups, n], async () => {
-      const data = await tensor.scales();
-      const f32 = data instanceof Float32Array ? data : f16ToF32(data);
-      // torch's [out, in / groupSize] to the kernels' [in / groupSize, out]
-      const out = new Float32Array(f32.length);
-      for (let o = 0; o < n; o++) {
-        for (let g = 0; g < groups; g++) out[g * n + o] = f32[o * groups + g]!;
-      }
-      return out;
-    });
-    const scaleName = prefix ? `${prefix}.weightScale` : 'weightScale';
-    const entries = [...sd.tensors];
-    sd.tensors.clear();
-    for (const [key, t] of entries) {
-      sd.tensors.set(key, key === name ? words : t);
-      if (key === name) sd.tensors.set(scaleName, scales);
-    }
+    this.weightScale = loadQuantWeight(
+      sd,
+      prefix,
+      this.weight,
+      tensor,
+      { k, n },
+      () => tensor.ints(),
+      { dims: [groups, n], data: () => scaleColumns(tensor, groups, n) },
+    );
   }
   forward(x: Value, call: { addend?: Value } = {}): Value {
     if (!this.weightScale || !this.quantization) {
@@ -224,6 +255,27 @@ export class Linear extends Module {
   }
 }
 
+/** Throws CHECKPOINT_MISMATCH unless the quantized conv weight `t` is its
+ *  torch weight with the dims after the first flattened, [rows, cols], and
+ *  the conv runs on the quantized matmul over `taps` taps to n columns. */
+function checkQuantConv(
+  layer: string,
+  name: string,
+  t: QuantTensor,
+  shape: { rows: number; cols: number; layout: string; cIn: number; taps: number; n: number },
+): void {
+  const { rows, cols, layout, cIn, taps, n } = shape;
+  const bad = (why: string): never => {
+    throw new RunntimeError('CHECKPOINT_MISMATCH', `${layer}: ${name} ${why}`);
+  };
+  if (t.shape[0] !== rows || t.shape[1] !== cols) {
+    bad(`is quantized as [${t.shape.join(', ')}], expected ${layout} = [${rows}, ${cols}]`);
+  }
+  if (cIn % 4 !== 0 || !matmulQuantTiledEligible(taps * cIn, n)) {
+    bad(`needs in a multiple of 4 and ${taps}·in of ${MATMUL_QUANT_TILED_BK}, got in ${cIn}`);
+  }
+}
+
 /** Strided, dilated 1D convolution over time-major [T, inChannels]. No batch
  *  dim, no groups.
  *
@@ -231,10 +283,20 @@ export class Linear extends Module {
  *  each side independently instead. span − 1 on the left is causal, with
  *  span = dilation·(kernelSize − 1) + 1.
  *  weight is stored tap-major and permutes from torch layout at load. bias and
- *  `activation` fold into the conv epilogue. */
+ *  `activation` fold into the conv epilogue.
+ *
+ *  A quantized checkpoint weight is torch's [out, in·kernel], one scale per
+ *  group of values along each row. It loads as quantW words with its f32
+ *  scales in `weightScale` [in·kernel / groupSize, out]. Output channels pad
+ *  up to the packing width, scales and bias with them, and are cut after the
+ *  conv. */
 export class Conv1d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
+  /** Set when a quantized weight loads. */
+  weightScale?: Parameter;
+  /** How the loaded weight is quantized, or undefined for a float weight. */
+  private quantization?: { bits: 4 | 8; groupSize: number };
   readonly stride: number;
   readonly dilation: number;
   readonly padding?: number | 'valid' | 'same';
@@ -273,6 +335,10 @@ export class Conv1d extends Module {
     const name = prefix ? `${prefix}.weight` : 'weight';
     const tensor = sd.tensors.get(name);
     if (!tensor) return; // a missing key is reported by the strict key check
+    if (tensor.kind === 'quant') {
+      this.loadQuantized(sd, prefix, name, tensor);
+      return;
+    }
     // Without this a weight with equal in/out channels loads scrambled.
     if (
       tensor.shape.length !== 3 ||
@@ -301,8 +367,72 @@ export class Conv1d extends Module {
       ),
     );
   }
+  /** Loads `name` as quantW words [kernel·in, n] with its scales
+   *  [in·kernel / groupSize, n], where n is outChannels padded to the packing
+   *  width. The bias pads to n too. */
+  private loadQuantized(sd: LazyStateDict, prefix: string, name: string, t: QuantTensor): void {
+    const { inChannels: cIn, outChannels: cOut, kernelSize: kernel } = this;
+    const width = 32 / t.bits;
+    const n = Math.ceil(cOut / width) * width;
+    const k = kernel * cIn;
+    checkQuantConv('Conv1d', name, t, {
+      rows: cOut,
+      cols: k,
+      layout: '[out, in·kernel]',
+      cIn,
+      taps: kernel,
+      n,
+    });
+    const groups = k / t.groupSize;
+    this.quantization = { bits: t.bits, groupSize: t.groupSize };
+    this.weightScale = loadQuantWeight(
+      sd,
+      prefix,
+      this.weight,
+      t,
+      { k, n },
+      async () => {
+        // torch's [out, in, kernel] to one tap-major row per output
+        const src = await t.ints();
+        const out = new Int8Array(n * k);
+        for (let o = 0; o < cOut; o++) {
+          for (let c = 0; c < cIn; c++) {
+            for (let tap = 0; tap < kernel; tap++) {
+              out[o * k + tap * cIn + c] = src[(o * cIn + c) * kernel + tap]!;
+            }
+          }
+        }
+        return out;
+      },
+      { dims: [groups, n], data: () => scaleColumns(t, groups, n) },
+    );
+    const biasName = prefix ? `${prefix}.bias` : 'bias';
+    const b = sd.tensors.get(biasName);
+    if (n > cOut && b && this.bias) {
+      if (b.shape.join() !== `${cOut}`) {
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `Conv1d: ${biasName} has shape ${JSON.stringify(b.shape)}, expected [${cOut}]`,
+        );
+      }
+      this.bias.retype(this.bias.shape.dtype, n, [n]);
+      sd.tensors.set(
+        biasName,
+        derivedTensor(
+          [n],
+          async () => {
+            const src = await readFloats('Conv1d', b);
+            const out = src instanceof Uint16Array ? new Uint16Array(n) : new Float32Array(n);
+            out.set(src);
+            return out;
+          },
+          b.byteLength,
+        ),
+      );
+    }
+  }
   forward(x: Value): Value {
-    return conv1d(x, this.weight.value, {
+    const y = conv1d(x, this.weight.value, {
       kernelSize: this.kernelSize,
       stride: this.stride,
       dilation: this.dilation,
@@ -311,7 +441,12 @@ export class Conv1d extends Module {
       padRight: this.padRight,
       bias: this.bias?.value,
       activation: this.activation,
+      ...(this.weightScale && this.quantization
+        ? { scales: this.weightScale.value, ...this.quantization }
+        : {}),
     });
+    const cols = this.weight.shape.dims![1]!;
+    return cols > this.outChannels ? slice(y, 1, 0, this.outChannels) : y;
   }
 }
 
@@ -321,10 +456,19 @@ export class Conv1d extends Module {
  *  Runs as a plain conv: kernelSize / stride taps to stride·outChannels
  *  channels. Each output row holds `stride` frames side by side, so a reshape
  *  unfolds them and a slice cuts the padding. The weight permutes from torch
- *  layout [in, out, kernel] at load, and the bias repeats per frame. */
+ *  layout [in, out, kernel] at load, and the bias repeats per frame.
+ *
+ *  A quantized checkpoint weight is torch's [in, out·kernel], one scale per
+ *  group of values along each row. It loads as quantW words with its f32
+ *  scales as stored in `weightScale`. outChannels must be a multiple of 4
+ *  and stride·outChannels of the packing width. */
 export class ConvTranspose1d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
+  /** Set when a quantized weight loads. */
+  weightScale?: Parameter;
+  /** How the loaded weight is quantized, or undefined for a float weight. */
+  private quantization?: { bits: 4 | 8; groupSize: number };
   readonly taps: number;
   readonly stride: number;
   readonly padding: number;
@@ -365,7 +509,9 @@ export class ConvTranspose1d extends Module {
     const at = (n: string) => (prefix ? `${prefix}.${n}` : n);
     const { inChannels: cIn, outChannels: cOut, kernelSize: k, taps, stride: s } = this;
     const w = sd.tensors.get(at('weight'));
-    if (w) {
+    if (w?.kind === 'quant') {
+      this.loadQuantized(sd, prefix, at('weight'), w);
+    } else if (w) {
       if (w.shape.length !== 3 || w.shape[0] !== cIn || w.shape[1] !== cOut || w.shape[2] !== k) {
         throw new RunntimeError(
           'CHECKPOINT_MISMATCH',
@@ -416,6 +562,56 @@ export class ConvTranspose1d extends Module {
       );
     }
   }
+  /** Loads `name` as quantW words [taps·in, stride·out] with its scales
+   *  [in, out·kernel / groupSize] as stored. */
+  private loadQuantized(sd: LazyStateDict, prefix: string, name: string, t: QuantTensor): void {
+    const { inChannels: cIn, outChannels: cOut, kernelSize: kernel, taps, stride: s } = this;
+    const n = s * cOut;
+    if (cOut % 4 !== 0 || n % (32 / t.bits) !== 0) {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `ConvTranspose1d: ${name} is int${t.bits}, which needs out a multiple of 4 and ` +
+          `stride·out of ${32 / t.bits}, got out ${cOut}, stride ${s}`,
+      );
+    }
+    const k = taps * cIn;
+    const cols = cOut * kernel;
+    checkQuantConv('ConvTranspose1d', name, t, {
+      rows: cIn,
+      cols,
+      layout: '[in, out·kernel]',
+      cIn,
+      taps,
+      n,
+    });
+    this.quantization = { bits: t.bits, groupSize: t.groupSize };
+    const groups = cols / t.groupSize;
+    this.weightScale = loadQuantWeight(
+      sd,
+      prefix,
+      this.weight,
+      t,
+      { k, n },
+      async () => {
+        // Row i·in + c, column r·out + o takes kernel position
+        // (taps − 1 − i)·s + r.
+        const src = await t.ints();
+        const out = new Int8Array(n * k);
+        for (let r = 0; r < s; r++) {
+          for (let o = 0; o < cOut; o++) {
+            for (let i = 0; i < taps; i++) {
+              const kk = (taps - 1 - i) * s + r;
+              for (let c = 0; c < cIn; c++) {
+                out[(r * cOut + o) * k + i * cIn + c] = src[c * cols + o * kernel + kk]!;
+              }
+            }
+          }
+        }
+        return out;
+      },
+      { dims: [cIn, groups], data: () => scalesF32(t) },
+    );
+  }
   forward(x: Value): Value {
     const { taps, stride: s, padding: p, outChannels } = this;
     const t = x.shape.dims![0]!;
@@ -425,6 +621,13 @@ export class ConvTranspose1d extends Module {
       padLeft: taps - 1,
       padRight: taps - 1,
       bias: this.bias?.value,
+      ...(this.weightScale && this.quantization
+        ? {
+            scales: this.weightScale.value,
+            ...this.quantization,
+            transposedKernel: this.kernelSize,
+          }
+        : {}),
     });
     const rows = (t + taps - 1) * s;
     const frames = (t - 1) * s - 2 * p + this.kernelSize + this.outputPadding;

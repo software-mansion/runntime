@@ -44,10 +44,11 @@ export class Parameter {
     if (!this._value) throw new Error(`Parameter ${this.qualifiedName || '(unnamed)'} not loaded`);
     return this._value;
   }
-  /** @internal Swaps the storage dtype, keeping dims. quantW counts u32
-   *  words, so a float slot turned quantW passes its word count as `elems`. */
-  retype(dtype: EagerDtype, elems = this._shape.elems): void {
-    this._shape = { ...this._shape, dtype, elems };
+  /** @internal Sets the storage dtype, and the dims when given. quantW
+   *  counts u32 words, so a slot set to quantW passes its word count as
+   *  `elems`. */
+  retype(dtype: EagerDtype, elems = this._shape.elems, dims = this._shape.dims): void {
+    this._shape = { ...this._shape, dtype, elems, dims };
   }
   /** @internal */
   bind(v: Value): void {

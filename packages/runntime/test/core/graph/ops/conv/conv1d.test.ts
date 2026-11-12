@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACT_CODE, conv1d, gluConv1d } from '../../../../../src/core/graph/ops.ts';
-import { input, meta } from '../../values.ts';
+import { input, meta, quantWeight } from '../../values.ts';
 
 // x is time-major [T, C_in]; w is tap-major [kernelSize·C_in, C_out]
 const T = 10;
@@ -34,8 +34,81 @@ describe('conv1d', () => {
     const bias = input([COUT]);
     const c = conv1d(x, w, { kernelSize: 3, stride: 1, bias, activation: 'gelu' });
     expect(c.pending?.inputs).toEqual([x, w, bias]);
-    // attrs: kernel, stride, padLeft, padRight, hasBias, act, dilation
-    expect(c.pending?.attrs?.slice(4)).toEqual([1, ACT_CODE.gelu, 1]);
+    // attrs: kernel, stride, padLeft, padRight, hasBias, act, dilation, bits,
+    // groupSize, transposedKernel
+    expect(c.pending?.attrs?.slice(4)).toEqual([1, ACT_CODE.gelu, 1, 0, 0, 0]);
+  });
+
+  it('takes a quantW weight with its scales before the bias', () => {
+    const w = quantWeight(3 * 8, 4, 8);
+    // groups of 4 values of each torch row [4, 8·3]
+    const scales = input([6, 4]);
+    const bias = input([4]);
+    const c = conv1d(input([T, 8]), w, {
+      kernelSize: 3,
+      stride: 1,
+      bias,
+      scales,
+      bits: 8,
+      groupSize: 4,
+    });
+    expect(c.shape).toEqual(meta([8, 4]));
+    expect(c.pending?.inputs).toEqual([expect.anything(), w, scales, bias]);
+    expect(c.pending?.attrs?.slice(7)).toEqual([8, 4, 0]);
+  });
+
+  it('takes the scales of a transposed conv weight in its torch layout', () => {
+    // A ConvTranspose1d 8→4 with kernel 4 and stride 2 runs over 2 taps to
+    // 8 channels. Its torch rows are [8, 4·4]; groups of 4 give 4 per row.
+    const w = quantWeight(2 * 8, 8, 8);
+    const c = conv1d(input([T, 8]), w, {
+      kernelSize: 2,
+      stride: 1,
+      scales: input([8, 4]),
+      bits: 8,
+      groupSize: 4,
+      transposedKernel: 4,
+    });
+    expect(c.pending?.attrs?.slice(7)).toEqual([8, 4, 4]);
+  });
+
+  it.each([
+    {
+      name: 'a quantW weight without scales',
+      opts: { bits: 8 as const, groupSize: 4 },
+      err: /quantW weights need scales, bits and groupSize/,
+    },
+    {
+      name: 'a groupSize that does not divide the torch row',
+      opts: { scales: input([2, 4]), bits: 8 as const, groupSize: 10 },
+      err: /groupSize 10 must divide the torch row of 24 values/,
+    },
+    {
+      name: 'kernelSize·C_in not a multiple of 8',
+      x: input([T, 4]),
+      w: quantWeight(3 * 4, 4, 8),
+      opts: { scales: input([3, 4]), bits: 8 as const, groupSize: 4 },
+      err: /kernelSize·C_in of 8/,
+    },
+    {
+      name: 'scales of the wrong size',
+      opts: { scales: input([2, 4]), bits: 8 as const, groupSize: 4 },
+      err: /scales must be f32 with 24 elems, one per 4 values of 4 torch rows, got 8/,
+    },
+    {
+      name: 'a transposedKernel that is not a multiple of kernelSize',
+      opts: { scales: input([8, 2]), bits: 8 as const, groupSize: 4, transposedKernel: 4 },
+      err: /transposedKernel 4 must be kernelSize 3 times a stride s with C_out 4 a multiple of 4·s/,
+    },
+  ])('refuses $name', ({ x = input([T, 8]), w = quantWeight(3 * 8, 4, 8), opts, err }) => {
+    expect(() => conv1d(x, w, { kernelSize: 3, stride: 1, ...opts })).toThrow(err);
+  });
+
+  it('refuses scales on a float weight', () => {
+    const w = weight(3);
+    expect(() =>
+      conv1d(x, w, { kernelSize: 3, stride: 1, scales: input([1, COUT]), bits: 8, groupSize: 4 }),
+    ).toThrow(/scales\/bits\/groupSize\/transposedKernel apply to quantW weights only/);
   });
 
   it('widens the window by the dilation', () => {

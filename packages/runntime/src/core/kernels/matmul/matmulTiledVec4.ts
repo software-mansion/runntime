@@ -71,6 +71,12 @@ export interface MatmulTiledVec4Cfg {
   aStride?: number;
 }
 
+/** What a loader reads: a, and how many rows a's buffer holds. Every kernel
+ *  that takes a loader binds both. */
+export interface ASource {
+  readonly $: { readonly a: d.v4f[]; readonly dims: { readonly aRows: number } };
+}
+
 /** The layout every pipeline of this kernel binds, so a loader can read a and
  *  aRows. */
 export function matmulTiledVec4Layout(elem: Elem): ReturnType<typeof makeLayout> {
@@ -78,13 +84,16 @@ export function matmulTiledVec4Layout(elem: Elem): ReturnType<typeof makeLayout>
 }
 
 /** Reads row `row` of a at aStride. */
-function stridedLoadA(elem: Elem, aStride: number): LoadA {
-  const layout = layoutFor(elem);
+export function stridedLoadA(
+  elem: Elem,
+  aStride: number,
+  source: ASource = layoutFor(elem),
+): LoadA {
   const storeVec4 = elem.vec4;
   const aStride4 = aStride / 4;
   return (row: number, k4: number) => {
     'use gpu';
-    return storeVec4(layout.$.a[row * aStride4 + k4]!);
+    return storeVec4(source.$.a[row * aStride4 + k4]!);
   };
 }
 

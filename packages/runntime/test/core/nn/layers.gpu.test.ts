@@ -2,11 +2,12 @@ import { describe, it, onTestFinished } from 'vitest';
 import { toArray } from '../../../src/core/gpu/eval.ts';
 import type { SlotAct } from '../../../src/core/graph/ops.ts';
 import { matrix } from '../../../src/core/graph/value.ts';
-import { Linear } from '../../../src/core/nn/layers.ts';
+import { Conv1d, ConvTranspose1d, Linear } from '../../../src/core/nn/layers.ts';
 import {
   bufferSource,
   fromSafetensors,
   memoryStateDict,
+  type LazyStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../gpu.ts';
 import { ACTIVATION_REF } from '../kernels/matmul/checkMatmul.ts';
@@ -166,5 +167,152 @@ describe('Linear with a quantized weight', () => {
   )('$dtype int$bits $name: [$m, $inF] → $outF, groupSize $groupSize', async (c, ctx) => {
     if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
     await checkQuantizedLinear(c, c.bits, c.dtype);
+  });
+});
+
+interface ConvCase {
+  name: string;
+  kind: 'conv' | 'transpose';
+  tIn: number;
+  cIn: number;
+  cOut: number;
+  kernel: number;
+  stride: number;
+  padding: number;
+  /** Values of a torch row per scale. */
+  groupSize: number;
+  bias: boolean;
+  activation?: 'gelu';
+}
+
+/** A conv loaded from a quantized file of its torch weight, [out, in·kernel]
+ *  or a transposed conv's [in, out·kernel], matches the same conv loaded
+ *  with the dequantized floats, int · f16 scale. */
+async function checkQuantizedConv(c: ConvCase, bits: 4 | 8, dtype: 'f32' | 'f16') {
+  const { tIn, cIn, cOut, kernel, stride, padding, groupSize } = c;
+  const half = 2 ** (bits - 1);
+  const [rows, cols] = c.kind === 'conv' ? [cOut, cIn * kernel] : [cIn, cOut * kernel];
+  const ints = Array.from(randomF32(rows * cols, 1), (v) =>
+    Math.min(half - 1, Math.floor(v * half)),
+  );
+  const scales = roundF16(
+    randomF32((rows * cols) / groupSize, 2).map((v) => (Math.abs(v) + 0.1) / half),
+  );
+  const bias = roundF16(randomF32(cOut, 3));
+  const xs = roundF16(randomF32(tIn * cIn, 4));
+  const dequant = Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);
+  const torchWeight = {
+    data: dequant,
+    shape: c.kind === 'conv' ? [cOut, cIn, kernel] : [cIn, cOut, kernel],
+  };
+  const make = () =>
+    c.kind === 'conv'
+      ? new Conv1d(cIn, cOut, kernel, { stride, padding, bias: c.bias, activation: c.activation })
+      : new ConvTranspose1d(cIn, cOut, kernel, { stride, padding, bias: c.bias });
+  const run = async (layer: Conv1d | ConvTranspose1d, sd: LazyStateDict) => {
+    if (dtype === 'f16') layer.half(root);
+    onTestFinished(() => layer.dispose());
+    await layer.loadStateDict(sd, { root });
+    return toArray(layer.forward(upload(root, xs, { ...matrix(tIn, cIn), dtype })), ex);
+  };
+  const file = quantFile(bits, groupSize, {
+    weight: { ints, scales: [...scales], shape: [rows, cols] },
+  });
+  const quantSd = await fromSafetensors(bufferSource(file), { chunkBytes: 0 });
+  if (c.bias) quantSd.tensors.set('bias', memoryStateDict({ bias }).tensors.get('bias')!);
+  const got = await run(make(), quantSd);
+  const want = await run(
+    make(),
+    memoryStateDict({ weight: torchWeight, ...(c.bias ? { bias } : {}) }),
+  );
+  // Both sum in f32 in another order; f16 rounds the output to half precision.
+  const tol = dtype === 'f16' ? { atol: 2e-3, rtol: 2e-3 } : { atol: 1e-5, rtol: 1e-5 };
+  expectClose(got, want, tol);
+}
+
+describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
+  const CASES: ConvCase[] = [
+    {
+      name: 'conv, padded, groups that end inside a channel, bias and gelu',
+      kind: 'conv',
+      tIn: 40,
+      cIn: 16,
+      cOut: 24,
+      kernel: 7,
+      stride: 1,
+      padding: 3,
+      groupSize: 16,
+      bias: true,
+      activation: 'gelu',
+    },
+    {
+      name: 'conv 1×1, stride 2',
+      kind: 'conv',
+      tIn: 33,
+      cIn: 32,
+      cOut: 16,
+      kernel: 1,
+      stride: 2,
+      padding: 0,
+      groupSize: 32,
+      bias: false,
+    },
+    // 1 and 3 output channels pad up to the packing width and are cut after.
+    {
+      name: 'conv to 1 channel, bias',
+      kind: 'conv',
+      tIn: 30,
+      cIn: 32,
+      cOut: 1,
+      kernel: 7,
+      stride: 1,
+      padding: 3,
+      groupSize: 56,
+      bias: true,
+    },
+    {
+      name: 'conv to 3 channels',
+      kind: 'conv',
+      tIn: 20,
+      cIn: 8,
+      cOut: 3,
+      kernel: 3,
+      stride: 1,
+      padding: 1,
+      groupSize: 6,
+      bias: true,
+    },
+    {
+      name: 'transposed, stride 4, bias',
+      kind: 'transpose',
+      tIn: 12,
+      cIn: 16,
+      cOut: 8,
+      kernel: 8,
+      stride: 4,
+      padding: 2,
+      groupSize: 16,
+      bias: true,
+    },
+    {
+      name: 'transposed, stride 2',
+      kind: 'transpose',
+      tIn: 9,
+      cIn: 32,
+      cOut: 8,
+      kernel: 4,
+      stride: 2,
+      padding: 1,
+      groupSize: 32,
+      bias: false,
+    },
+  ];
+  it.for(
+    (['f32', 'f16'] as const).flatMap((dtype) =>
+      CASES.flatMap((c) => ([8, 4] as const).map((bits) => ({ ...c, dtype, bits }))),
+    ),
+  )('$dtype int$bits $name', async (c, ctx) => {
+    if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkQuantizedConv(c, c.bits, c.dtype);
   });
 });

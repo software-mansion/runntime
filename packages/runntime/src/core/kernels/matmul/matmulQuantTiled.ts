@@ -3,7 +3,10 @@
  *  f32 group scales. a, bias, addend and out are f16 or f32; sums are f32.
  *
  *  Each step unpacks a slice of W into workgroup memory as floats, so the
- *  inner loop is a plain float matmul with matmulTiledVec4's tiling. */
+ *  inner loop is a plain float matmul with matmulTiledVec4's tiling. A
+ *  loader reads a and another reads the scales, so conv1d runs on this kernel
+ *  too, its scales where its torch weight has them. By default row k of W
+ *  uses scale row k / groupSize. */
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
@@ -11,6 +14,7 @@ import { type KernelHandle, makeHandle } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
+import { type LoadA, stridedLoadA } from './matmulTiledVec4.ts';
 import {
   columnWord,
   deqRow,
@@ -18,13 +22,13 @@ import {
   type MatmulQuantCfg,
 } from '../quantCommon.ts';
 
-const Dims = d.struct({ m: d.u32 });
+const Dims = d.struct({ m: d.u32, aRows: d.u32 });
 
 function makeLayout(elem: Elem) {
   return tgpu.bindGroupLayout({
     a: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
     w: { storage: d.arrayOf(d.u32), access: 'readonly' },
-    scales: { storage: d.arrayOf(d.vec4f), access: 'readonly' }, // [K/group, N/4]
+    scales: { storage: d.arrayOf(d.vec4f), access: 'readonly' }, // read through scaleAt
     bias: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [N/4]; dead when hasBias=0
     addend: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // [M,N/4]; dead when hasAdd=0
     out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
@@ -42,6 +46,38 @@ function layoutFor(elem: Elem): ReturnType<typeof makeLayout> {
   return l;
 }
 
+const loadASlot = tgpu.slot<LoadA>();
+
+/** The scales of row `row` of W in columns 4·col4 to 4·col4 + 3. */
+export type ScaleAt = (row: number, col4: number) => d.v4f;
+const scaleAtSlot = tgpu.slot<ScaleAt>();
+
+/** What a scale loader reads: the scales, bound as vec4s. */
+export interface ScaleSource {
+  readonly $: { readonly scales: d.v4f[] };
+}
+
+/** The layout every pipeline of this kernel binds, so a loader can read a,
+ *  aRows and the scales. */
+export function matmulQuantTiledLayout(elem: Elem): ReturnType<typeof makeLayout> {
+  return layoutFor(elem);
+}
+
+export interface MatmulQuantTiledCfg extends MatmulQuantCfg {
+  /** Distance between rows of a, in values. K when omitted. */
+  aStride?: number;
+}
+
+/** Scales [K / groupSize, N]: one per group of groupSize rows in each column. */
+function groupedScales(elem: Elem, n: number, groupSize: number): ScaleAt {
+  const layout = layoutFor(elem);
+  const n4 = n / 4;
+  return (row: number, col4: number) => {
+    'use gpu';
+    return d.vec4f(layout.$.scales[std.intdiv(row, groupSize) * n4 + col4]!);
+  };
+}
+
 // Each workgroup computes a BM×BN tile of out, each thread TM rows × TN
 // groups of 4 columns.
 const BM = 32;
@@ -53,13 +89,15 @@ const TN = 1;
 export const MATMUL_QUANT_TILED_BK = 8;
 const BK = MATMUL_QUANT_TILED_BK;
 
-/** Whether a [M,K]·[K,N] quantW matmul can use this kernel. */
-export function matmulQuantTiledEligible(k: number, n: number, groupSize: number): boolean {
-  return k % BK === 0 && n % 4 === 0 && groupSize % 4 === 0 && k % groupSize === 0;
+/** Whether a [M,K]·[K,N] quantW matmul can use this kernel. groupSize also
+ *  checks the default scale groups. */
+export function matmulQuantTiledEligible(k: number, n: number, groupSize?: number): boolean {
+  const grouped = groupSize === undefined || (groupSize % 4 === 0 && k % groupSize === 0);
+  return k % BK === 0 && n % 4 === 0 && grouped;
 }
 
-function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
-  const { k, n, bits, groupSize, hasBias, hasAdd } = cfg;
+function makeMatmulQuantTiledKernel(cfg: MatmulQuantTiledCfg, elem: Elem) {
+  const { k, n, bits, hasBias, hasAdd } = cfg;
   const layout = layoutFor(elem);
   const storeVec4 = elem.vec4;
   const bk4 = BK / 4;
@@ -99,7 +137,7 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
           const am = mBase + std.intdiv(e, bk4);
           let v = storeVec4();
           if (am < m) {
-            v = storeVec4(layout.$.a[am * k4 + t * bk4 + (e % bk4)]!);
+            v = storeVec4(loadASlot.$(am, t * bk4 + (e % bk4)));
           }
           tileA.$[e] = storeVec4(v);
         }
@@ -120,7 +158,7 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
               bk % 4,
               bits,
             );
-            wv = storeVec4(q * layout.$.scales[std.intdiv(bk, groupSize) * n4 + bc4]!);
+            wv = storeVec4(q * scaleAtSlot.$(bk, bc4));
           }
           tileB.$[e] = storeVec4(wv);
         }
@@ -170,18 +208,25 @@ function makeMatmulQuantTiledKernel(cfg: MatmulQuantCfg, elem: Elem) {
   });
 }
 
-/** One pipeline per dtype, K, N, bits, group size, epilogue and activation. */
+/** One pipeline per dtype, K, N, bits, group size, loaders, epilogue and
+ *  activation. `loadA` reads a; by default it reads rows aStride apart.
+ *  `scaleAt` reads the scales; by default [K / groupSize, N]. */
 export function createMatmulQuantTiledPipeline(
   root: TgpuRoot,
-  cfg: MatmulQuantCfg,
+  cfg: MatmulQuantTiledCfg,
   elem: Elem = F32_ELEM,
+  loadA: LoadA = stridedLoadA(elem, cfg.aStride ?? cfg.k, layoutFor(elem)),
+  scaleAt: ScaleAt = groupedScales(elem, cfg.n, cfg.groupSize),
 ) {
   return root
     .with(actSlot, activationFor(cfg.act))
+    .with(loadASlot, loadA)
+    .with(scaleAtSlot, scaleAt)
     .createComputePipeline({ compute: makeMatmulQuantTiledKernel(cfg, elem) });
 }
 
-/** One workgroup per 32×32 output tile. */
+/** One workgroup per 32×32 output tile. aRows is how many rows a's buffer
+ *  holds, for loaders that bound-check it. */
 export function matmulQuantTiledHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createMatmulQuantTiledPipeline>,
@@ -189,8 +234,9 @@ export function matmulQuantTiledHandle(
   n: number,
   buffers: MatmulQuantBuffers,
   elem: Elem = F32_ELEM,
+  aRows = m,
 ): KernelHandle {
-  const dims = cachedUniform(root, Dims, { m });
+  const dims = cachedUniform(root, Dims, { m, aRows });
   // Absent epilogue operands alias `a`; those pipelines never read them.
   const bindGroup = cachedBindGroup(root, layoutFor(elem), {
     ...buffers,
