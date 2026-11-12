@@ -1,12 +1,15 @@
 /** What every `*.parity.ts` shares in the page: reading the saved
- *  references, breaking a weights file on purpose, and writing the report. */
-import { inject } from 'vitest';
+ *  references, breaking a weights file on purpose, and the run of every
+ *  variant against its thresholds, with the report. */
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { commands } from 'vitest/browser';
 import {
   bufferSource,
   parseSafetensorsHeader,
   type RangeSource,
 } from '../../src/core/weights/safetensors.ts';
+import type { ModelPath } from '../../src/zoo/load.ts';
+import { exceeded, type ParityManifest } from './manifest.ts';
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
   const res = await fetch(url);
@@ -66,7 +69,7 @@ export async function transposedWeights(url: string, name: string): Promise<Rang
 
 /** Writes `rows` as a markdown table to `.parity/results/<family>.md`, the
  *  table a pull request carries. Columns follow the first row's keys. */
-export async function writeReport(
+async function writeReport(
   family: string,
   rows: readonly Readonly<Record<string, string>>[],
 ): Promise<void> {
@@ -78,6 +81,93 @@ export async function writeReport(
     ...rows.map((row) => line(columns.map((column) => row[column]!))),
   ];
   await commands.writeFile(`${inject('parityResultsDir')}/${family}.md`, `${table.join('\n')}\n`);
+}
+
+/** The `models` entries a manifest's variants run. */
+type ConfigOf<P extends ParityManifest> = P['variants'][number]['config'];
+
+/** What one model gives on the family's inputs. */
+export interface Measured {
+  /** The report cells of the run, by column. */
+  readonly cells: Readonly<Record<string, string>>;
+  /** What the thresholds gate, by metric name. */
+  readonly metrics: Readonly<Record<string, number>>;
+}
+
+export interface ParityRun<P extends ParityManifest, Model extends { dispose(): void }> {
+  readonly manifest: P;
+  /** Loads the model of `config` from `modelPath`: the variant's own
+   *  weights, or the broken ones. */
+  load(config: ConfigOf<P>, modelPath: ModelPath): Promise<Model>;
+  /** Runs the model on the family's inputs and compares with the reference. */
+  measure(model: Model): Promise<Measured>;
+  /** How the first variant's weights are broken: a model that loads and
+   *  runs, and has to fail every threshold of every variant. */
+  readonly broken: {
+    /** What is wrong with it, for the report row. */
+    readonly label: string;
+    weights(modelPath: string): Promise<RangeSource>;
+  };
+}
+
+/** The tests of one family: every variant stays within its thresholds, the
+ *  broken model fails all of them, and each run is a row of the report. */
+export async function runParity<P extends ParityManifest, Model extends { dispose(): void }>({
+  manifest: { family, variants },
+  load,
+  measure,
+  broken,
+}: ParityRun<P, Model>): Promise<void> {
+  const { noise } = await readJson<{ noise: Record<string, number> }>(`${family}/meta.json`);
+  const report: Record<string, string>[] = [];
+  afterAll(() => writeReport(family, report));
+
+  /** Loads and measures one model before the tests around it, and disposes
+   *  it after them. Returns its metrics, for the tests to read. */
+  const measured = (
+    variant: string,
+    config: ConfigOf<P>,
+    weights: () => Promise<ModelPath>,
+    result: (metrics: Measured['metrics']) => string,
+  ) => {
+    let model: Model | undefined;
+    let metrics: Measured['metrics'];
+    beforeAll(async () => {
+      model = await load(config, await weights());
+      const { cells, metrics: got } = await measure(model);
+      metrics = got;
+      report.push({ variant, ...cells, result: result(got) });
+    });
+    afterAll(() => model?.dispose());
+    return () => metrics;
+  };
+
+  describe.each(variants)(`${family} $name`, ({ name, config, thresholds }) => {
+    const metrics = measured(
+      name,
+      config,
+      async () => config.modelPath,
+      (got) => (exceeded(got, thresholds, noise).length === 0 ? 'pass' : 'fail'),
+    );
+
+    it('stays within its thresholds', () => {
+      expect(exceeded(metrics(), thresholds, noise)).toEqual([]);
+    });
+  });
+
+  describe(`${family} with ${broken.label}`, () => {
+    const { name, config } = variants[0]!;
+    const metrics = measured(
+      `${name}, ${broken.label}`,
+      config,
+      () => broken.weights(config.modelPath),
+      () => 'fails, as it has to',
+    );
+
+    it.each(variants)('fails every $name threshold', ({ thresholds }) => {
+      expect(exceeded(metrics(), thresholds, noise)).toEqual(Object.keys(thresholds));
+    });
+  });
 }
 
 declare module 'vitest' {

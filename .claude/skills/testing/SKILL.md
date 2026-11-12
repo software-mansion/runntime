@@ -74,8 +74,11 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
 - A parity test compares a zoo model with saved outputs of its PyTorch
   reference, variant by variant: `test/zoo/<model>/model.parity.ts`, with
   the variants, inputs and thresholds in `parity.manifest.ts` next to it.
-  `test/parity` holds what they share: the metrics, the manifest types and
-  the reference reader.
+  `test/parity` holds what they share: the metrics, the manifest types, the
+  reference reader and `runParity`, which runs every variant and a model
+  broken on purpose against the thresholds and writes the report. A model's
+  test file holds only how to load the model, what to measure and how to
+  break its weights.
 - `pnpm test:parity` runs them in headless Chromium on the real GPU, from
   their own config, `vitest.parity.config.ts`. `pnpm test` and CI never
   run them. Run it before merging a change to kernels, routing or the zoo,
