@@ -88,7 +88,7 @@ export function createEmbeddingGemma2EmbedCore(
   const { hidden, embeddingDim, attention } = model.cfg;
   // x0 and the pool weights meet the hidden states, so they follow the
   // model's dtype; the index planes stay f32.
-  const act = model.norm.scale.shape.dtype === 'f16' ? 'f16' : 'f32';
+  const act = model.language_model.norm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
   const maxT = EMBEDDINGGEMMA2_MAX_TOKENS;
   // Rope rows for every position, gathered per forward by the positions plane.
   const table = (type: LayerType) => {
