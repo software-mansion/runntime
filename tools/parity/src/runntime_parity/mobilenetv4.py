@@ -10,13 +10,13 @@ import torch
 from numpy.typing import NDArray
 
 from .coco import ATTRIBUTION, coco_images
-from .common import cosine_noise, devices, noise, save
+from .common import cosine_noise, noise, save
 
 REPO = "timm/mobilenetv4_conv_small.e2400_r224_in1k"
 REVISION = "331fb803779522b685cf942e15f914fb6741c1eb"
 
 
-def centered(logits: NDArray[np.float32]) -> NDArray[np.float32]:
+def centered(logits: NDArray[np.float64]) -> NDArray[np.float64]:
     """Logits with each row's mean subtracted, as the parity test compares them."""
     return logits - logits.mean(axis=1, keepdims=True)
 
@@ -27,12 +27,10 @@ def main() -> None:
     transform = timm.data.create_transform(**timm.data.resolve_model_data_config(model), is_training=False)
     pixels = torch.stack([transform(image) for image in images])
 
-    def logits(device: str) -> NDArray[np.float32]:
-        with torch.inference_mode():
-            return model.to(device)(pixels.to(device)).cpu().numpy()
-
-    device, noise_device = devices()
-    reference, second = logits(device), logits(noise_device)
+    with torch.inference_mode():
+        reference = model(pixels).numpy()
+        # The same model and pixels in f64 give the reference noise.
+        double = model.double()(pixels.double()).numpy()
     save(
         "mobilenetv4",
         {"images": paths},
@@ -45,11 +43,10 @@ def main() -> None:
             "repo": REPO,
             "revision": REVISION,
             "dtype": "f32",
-            "inputs": ATTRIBUTION | {"images": sources},
-            "devices": [device, noise_device],
+            "inputs": ATTRIBUTION | {"count": len(images), "images": sources},
             "noise": {
-                "error": noise(reference, second),
-                "cosineDistance": cosine_noise(centered(reference), centered(second)),
+                "error": noise(reference, double),
+                "cosineDistance": cosine_noise(centered(reference.astype(np.float64)), centered(double)),
             },
         },
         ["torch", "timm", "torchvision", "pillow"],
