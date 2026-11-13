@@ -8,17 +8,26 @@ import {
   parseSafetensorsHeader,
   type RangeSource,
 } from '../../src/core/weights/safetensors.ts';
+import { imageBufferFromImageData, type ImageBuffer } from '../../src/zoo/index.ts';
 import type { ModelPath } from '../../src/zoo/load.ts';
-import { checkMeta, exceeded, limits, type ParityManifest, type ParityMeta } from './manifest.ts';
+import {
+  checkMeta,
+  exceeded,
+  limits,
+  type ParityManifest,
+  type ParityMeta,
+  type Threshold,
+} from './manifest.ts';
+import type { Summary } from './metrics.ts';
 
-async function fetchBytes(url: string): Promise<Uint8Array> {
+async function fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
 }
 
 /** A file in the references directory, by its path under it. */
-async function referenceBytes(path: string): Promise<Uint8Array> {
+async function referenceBytes(path: string): Promise<Uint8Array<ArrayBuffer>> {
   try {
     return await fetchBytes(`/@fs${inject('parityDir')}/${path}`);
   } catch (err) {
@@ -49,23 +58,60 @@ export async function readTensors(path: string): Promise<Map<string, Float32Arra
   return out;
 }
 
-/** The safetensors file at `url` with the square F32 weight `name`
- *  transposed: a model that loads and runs, and computes the wrong thing. */
-export async function transposedWeights(url: string, name: string): Promise<RangeSource> {
+/** The `count` rows of a `[count, ...]` reference tensor. */
+export function rows(tensor: Float32Array | Int32Array, count: number): Float32Array[] {
+  const size = tensor.length / count;
+  return Array.from({ length: count }, (_, i) =>
+    Float32Array.from(tensor.subarray(i * size, (i + 1) * size)),
+  );
+}
+
+/** A PNG in the references directory as RGBA bytes. */
+export async function readImage(path: string): Promise<ImageBuffer> {
+  const bitmap = await createImageBitmap(new Blob([await referenceBytes(path)]), {
+    colorSpaceConversion: 'none',
+  });
+  const { width, height } = bitmap;
+  const context = new OffscreenCanvas(width, height).getContext('2d')!;
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return imageBufferFromImageData(context.getImageData(0, 0, width, height));
+}
+
+/** The safetensors file at `url` with the F32 tensor `name` replaced by
+ *  `change` of it: a model that loads and runs, and computes the wrong thing. */
+async function brokenWeights(
+  url: string,
+  name: string,
+  change: (weight: Float32Array, shape: readonly number[]) => Float32Array,
+): Promise<RangeSource> {
   const bytes = await fetchBytes(url);
   const info = (await parseSafetensorsHeader(bufferSource(bytes))).tensors.get(name);
-  const [rows, cols] = info?.shape ?? [];
-  if (!info || info.dtype !== 'F32' || info.shape.length !== 2 || rows !== cols) {
-    throw new Error(`${url}: ${name} is not a square F32 weight`);
-  }
+  if (info?.dtype !== 'F32') throw new Error(`${url}: ${name} is not an F32 tensor`);
   const weight = new Float32Array(bytes.slice(info.begin, info.end).buffer);
-  const transposed = Float32Array.from(
-    weight,
-    (_, i) => weight[(i % rows!) * rows! + Math.floor(i / rows!)]!,
-  );
-  bytes.set(new Uint8Array(transposed.buffer), info.begin);
+  bytes.set(new Uint8Array(change(weight, info.shape).buffer), info.begin);
   return bufferSource(bytes);
 }
+
+/** The file at `url` with the square weight `name` transposed. */
+export function transposedWeights(url: string, name: string): Promise<RangeSource> {
+  return brokenWeights(url, name, (weight, [rows, cols]) => {
+    if (rows === undefined || rows !== cols || weight.length !== rows * cols) {
+      throw new Error(`${url}: ${name} is not a square weight`);
+    }
+    return Float32Array.from(weight, (_, i) => weight[(i % rows) * rows + Math.floor(i / rows)]!);
+  });
+}
+
+/** The file at `url` with the vector `name` back to front: a norm that
+ *  gives every channel another channel's value. */
+export function reversedWeights(url: string, name: string): Promise<RangeSource> {
+  return brokenWeights(url, name, (weight) => weight.slice().reverse());
+}
+
+/** A report cell of a summary: mean / p99 / max. */
+export const summaryCell = ({ mean, p99, max }: Summary) =>
+  [mean, p99, max].map((v) => v.toExponential(1)).join(' / ');
 
 /** Writes `rows` as a markdown table to `.parity/results/<family>.md`, the
  *  table a pull request carries. Columns follow the first row's keys. */
@@ -154,12 +200,21 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
       config,
       margins,
       async () => config.modelPath,
-      (got) => (exceeded(got, thresholds, noise).length === 0 ? 'pass' : 'fail'),
+      (got) => {
+        const over = exceeded(got, thresholds, noise);
+        if (over.length === 0) return 'pass';
+        const known = over.every((metric) => thresholds[metric]!.knownIssue !== undefined);
+        return known ? `known issue: ${over.join(', ')}` : 'fail';
+      },
     );
 
-    it('stays within its thresholds', () => {
-      expect(exceeded(metrics(), thresholds, noise)).toEqual([]);
-    });
+    for (const [metric, threshold] of Object.entries<Threshold>(thresholds)) {
+      const { knownIssue } = threshold;
+      const title = `stays within its ${metric} threshold`;
+      const test = () => expect(exceeded(metrics(), { [metric]: threshold }, noise)).toEqual([]);
+      if (knownIssue === undefined) it(title, test);
+      else it.fails(`${title} (known issue: ${knownIssue})`, test);
+    }
   });
 
   describe(`${family} with ${broken.label}`, () => {
