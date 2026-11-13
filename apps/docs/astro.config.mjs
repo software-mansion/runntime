@@ -174,8 +174,9 @@ export default defineConfig({
             },
           ],
           {
-            // The splash landing page belongs to no topic.
-            exclude: ['/'],
+            // The splash landing page belongs to no topic, and the core pages stay
+            // unlisted until runntime core is published.
+            exclude: ['/', '/core/**'],
             // The generated index pages sit outside the sidebar groups.
             topics: { zoo: ['/api/**'] },
           },
