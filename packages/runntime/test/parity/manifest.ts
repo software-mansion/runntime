@@ -17,6 +17,9 @@ export interface Threshold {
   readonly timesNoise?: true;
   /** Where the value comes from. */
   readonly source: string;
+  /** Set while the variant is known to exceed this threshold, with the
+   *  reason. Its test then passes only as long as it does. */
+  readonly knownIssue?: string;
 }
 
 export interface ParityVariant<M extends ModelConfig> {

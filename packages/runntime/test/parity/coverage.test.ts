@@ -2,9 +2,10 @@
  *  thresholds. Runs without a GPU, so CI holds a new model to it. */
 import { describe, expect, it } from 'vitest';
 import { MINILM_PARITY } from '../zoo/minilm/parity.manifest.ts';
+import { MOBILENETV4_PARITY } from '../zoo/mobilenetv4/parity.manifest.ts';
 import { covers, modelEntries, type ParityManifest } from './manifest.ts';
 
-const MANIFESTS: readonly ParityManifest[] = [MINILM_PARITY];
+const MANIFESTS: readonly ParityManifest[] = [MINILM_PARITY, MOBILENETV4_PARITY];
 
 /** Families in `models` without a manifest, by the start of their entries'
  *  paths. A family leaves the list with its manifest. A new model is never
@@ -18,7 +19,6 @@ const PENDING = [
   'instanceSegmentation.YOLO26_SEG',
   'keypointDetection.YOLO26_POSE',
   'depthEstimation.DEPTHART',
-  'imageClassification.MOBILENETV4',
 ];
 
 const variants = MANIFESTS.flatMap((manifest) => manifest.variants);

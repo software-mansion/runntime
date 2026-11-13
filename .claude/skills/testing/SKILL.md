@@ -96,7 +96,10 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
   `test/parity/coverage.test.ts` fails in CI without one. A new model lands
   with its manifest, never on the pending list.
 - Every threshold names its source, and each model's test also runs a
-  model broken on purpose that has to fail all of them.
+  model broken on purpose that has to fail all of them. A threshold with a
+  known, unfixed difference runs as `it.fails`, with the reason in
+  `knownIssue` in the manifest; removing the field turns it back into a
+  plain test.
 - A ranking or top-1 difference counts as a miss only where the reference
   scores the items further apart than the variant's margin. Inside the
   margin it is a near-tie: the report counts it, no threshold gates it.
