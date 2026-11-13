@@ -172,6 +172,13 @@ export default defineConfig({
                 },
               ],
             },
+            {
+              id: 'core',
+              label: 'Core (experimental)',
+              link: '/core/getting-started/',
+              icon: 'setting',
+              items: [{ label: 'Getting started', slug: 'core/getting-started' }],
+            },
           ],
           {
             // The splash landing page belongs to no topic.

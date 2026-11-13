@@ -4,6 +4,7 @@ import typegpu from 'unplugin-typegpu/rollup';
 export default defineConfig({
   // Keyed so the output layout matches the published subpaths.
   entry: {
+    'core/index': 'src/core/index.ts',
     'zoo/index': 'src/zoo/index.ts',
     'zoo/transformers/index': 'src/zoo/transformers/index.ts',
   },
