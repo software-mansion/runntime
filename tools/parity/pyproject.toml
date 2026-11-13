@@ -1,0 +1,28 @@
+[project]
+name = "runntime-parity"
+version = "0.1.0"
+description = "Runs the PyTorch reference of each runntime model and saves its outputs for the parity tests."
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "huggingface-hub>=2.4.0",
+    "numpy>=2.0",
+    "pyarrow>=26.0.1",
+    "safetensors>=0.8.0",
+    "sentence-transformers>=5.0",
+    "torch>=2.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.24,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["ruff>=0.17.3"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RET", "PL", "PERF", "RUF"]
+ignore = ["PLR2004", "PLR0911"]

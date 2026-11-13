@@ -11,6 +11,7 @@
     "sync:readme": "node scripts/sync-readme.mjs",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm --filter runntime test",
+    "test:parity": "pnpm --filter runntime test:parity",
     "build:docs": "pnpm --filter docs run build",
     "dev:docs": "pnpm --filter docs run dev",
     "lint": "eslint . --max-warnings=0",
