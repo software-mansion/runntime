@@ -32,6 +32,14 @@ export const MOBILENETV4_PARITY = {
           knownIssue: 'runntime resizes linearly, the reference bicubic with antialias',
         },
       },
+      // Two classes the reference scores closer than f16 resolves are a
+      // near-tie.
+      margins: {
+        score: {
+          value: 2 ** -11,
+          source: 'f16 unit roundoff: the weights are f16, scores are probabilities',
+        },
+      },
     },
   ],
 } as const satisfies ParityManifest;

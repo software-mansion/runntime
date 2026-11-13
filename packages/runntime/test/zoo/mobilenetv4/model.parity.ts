@@ -15,7 +15,7 @@ import {
   summaryCell,
   type Measured,
 } from '../../parity/harness.ts';
-import { cosine, maxAbsError, summarize } from '../../parity/metrics.ts';
+import { cosine, maxAbsError, rankMismatches, summarize } from '../../parity/metrics.ts';
 import { MOBILENETV4_PARITY } from './parity.manifest.ts';
 
 await gpu();
@@ -27,6 +27,16 @@ const images = await Promise.all(inputs.images.map(readImage));
 const pixels = rows(reference.get('pixels')!, images.length);
 const wantLogits = rows(reference.get('logits')!, images.length);
 const wantTop1 = reference.get('top1')!;
+
+/** The probability of each class. */
+function softmax(logits: Float32Array): Float32Array {
+  const max = logits.reduce((a, b) => Math.max(a, b));
+  const exps = logits.map((v) => Math.exp(v - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map((v) => v / sum);
+}
+/** The reference score of every class, for each photo. */
+const wantScores = wantLogits.map(softmax);
 
 /** One set of weights loaded twice: the bare model for level A, the public
  *  runner for level B. */
@@ -59,7 +69,10 @@ function centered(logits: Float32Array): Float32Array {
   return logits.map((v) => v - mean);
 }
 
-async function measure({ model, runner }: Loaded): Promise<Measured> {
+async function measure(
+  { model, runner }: Loaded,
+  margins: Readonly<Record<string, number>>,
+): Promise<Measured> {
   const logits: Float32Array[] = [];
   for (const input of pixels) logits.push(await model.run(input));
   const cosineDistance = summarize(
@@ -68,9 +81,12 @@ async function measure({ model, runner }: Loaded): Promise<Measured> {
   const error = summarize(logits.map((v, i) => maxAbsError(v, wantLogits[i]!)));
 
   let missed = 0;
+  let nearTies = 0;
   for (const [i, image] of images.entries()) {
     const [top] = await runner.classify(image, { topk: 1 });
-    if (top!.classId !== wantTop1[i]) missed++;
+    const top1 = rankMismatches([top!.classId], [wantTop1[i]!], wantScores[i]!, margins.score!);
+    missed += top1.count;
+    nearTies += top1.nearTies;
   }
   const top1Missed = missed / images.length;
   return {
@@ -78,6 +94,7 @@ async function measure({ model, runner }: Loaded): Promise<Measured> {
       '1 − cos of centered logits (mean / p99 / max)': summaryCell(cosineDistance),
       'max error (mean / p99 / max)': summaryCell(error),
       'top-1 missed': `${(100 * top1Missed).toFixed(1)}%`,
+      'near-ties, not gated': `${nearTies}`,
     },
     metrics: { cosineDistance: cosineDistance.max, top1Missed },
   };
