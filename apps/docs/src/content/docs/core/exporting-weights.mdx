@@ -72,6 +72,10 @@ If a weight is missing or has the wrong shape, loading stops with a
 `CHECKPOINT_MISMATCH` error that names it (see
 [Error handling](/zoo/error-handling/)).
 
+A tensor in the file that the model doesn't read, like the pooler in a plain
+Hugging Face checkpoint, is skipped with a console warning. Pass
+`{ strict: true }` to `loadStateDict` to make it the same error.
+
 ## Getting a weights file
 
 Pick the case that fits:
@@ -145,6 +149,8 @@ uv run --no-dev runntime quantize model.safetensors model.int8.safetensors --bit
 - `--group-size N`: how many inputs share one scale. Default 32.
 - `--include` / `--exclude GLOB`: which tensors to quantize. The defaults
   quantize `*.weight` and skip embeddings and `lm_head`.
+- `--drop GLOB`: tensors to leave out of the file, like a pooler the model
+  never reads.
 
 The tool prints one line per tensor with its error against the float
 weights, or why it was skipped.
