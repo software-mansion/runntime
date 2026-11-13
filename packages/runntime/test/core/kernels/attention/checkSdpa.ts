@@ -44,6 +44,10 @@ export const SDPA_OPTIONS: readonly { name: string; opts: Partial<SdpaCase> }[] 
   { name: 'a key bias', opts: { keyBias: true, windowRight: 0 } },
   { name: 'a key bias, sinks and segments', opts: { keyBias: true, sinks: true, segments: true } },
   { name: 'every query head on one kv head', opts: { kvHeads: 1, windowRight: 0 } },
+  {
+    name: 'three query heads per kv head',
+    opts: { qHeads: 6, kvHeads: 2, sinks: true, windowRight: 0 },
+  },
   { name: 'as many kv heads as query heads', opts: { kvHeads: 4 } },
 ];
 
