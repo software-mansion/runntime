@@ -33,6 +33,12 @@ const wantVectors = [
 ];
 const wantRanking = reference.get('ranking')!;
 
+const dot = (a: Float32Array, b: Float32Array) => a.reduce((sum, v, i) => sum + v * b[i]!, 0);
+/** The reference score of every passage, for each question. */
+const wantScores = wantVectors
+  .slice(0, inputs.queries.length)
+  .map((query) => wantVectors.slice(inputs.queries.length).map((passage) => dot(query, passage)));
+
 /** The `count` rows of a `[count, dim]` reference tensor. */
 function rows(tensor: Float32Array | Int32Array, count: number): Float32Array[] {
   const dim = tensor.length / count;
@@ -45,7 +51,10 @@ const cell = ({ mean, p99, max }: Summary) =>
   [mean, p99, max].map((v) => v.toExponential(1)).join(' / ');
 
 /** Embeds every text one at a time and compares with the reference. */
-async function measure(embedder: Embedder): Promise<Measured> {
+async function measure(
+  embedder: Embedder,
+  margins: Readonly<Record<string, number>>,
+): Promise<Measured> {
   const got: Float32Array[] = [];
   for (const text of texts) got.push(await embedder.embed(text));
   const cosineDistance = summarize(got.map((v, i) => 1 - cosine(v, wantVectors[i]!)));
@@ -55,11 +64,20 @@ async function measure(embedder: Embedder): Promise<Measured> {
   const passages = got.slice(inputs.queries.length);
   let mismatches = 0;
   let missed = 0;
+  let nearPositions = 0;
+  let nearItems = 0;
   queries.forEach((query, q) => {
-    const scores = passages.map((passage) => query.reduce((dot, v, i) => dot + v * passage[i]!, 0));
+    const ranking = topK(
+      passages.map((passage) => dot(query, passage)),
+      TOP_K,
+    );
     const want = wantRanking.subarray(q * TOP_K, (q + 1) * TOP_K);
-    mismatches += rankMismatches(topK(scores, TOP_K), want);
-    missed += missing(topK(scores, TOP_K), want);
+    const positions = rankMismatches(ranking, want, wantScores[q]!, margins.score!);
+    const items = missing(ranking, want, wantScores[q]!, margins.score!);
+    mismatches += positions.count;
+    missed += items.count;
+    nearPositions += positions.nearTies;
+    nearItems += items.nearTies;
   });
   const ranked = queries.length * TOP_K;
   const metrics = {
@@ -74,6 +92,7 @@ async function measure(embedder: Embedder): Promise<Measured> {
       'max error (mean / p99 / max)': cell(error),
       'ranking positions differing': `${(100 * metrics.rankMismatches).toFixed(1)}%`,
       'top-k missed': `${(100 * metrics.topKMissed).toFixed(1)}%`,
+      'near-ties, not gated (ranking / top-k)': `${nearPositions} / ${nearItems}`,
     },
     metrics,
   };

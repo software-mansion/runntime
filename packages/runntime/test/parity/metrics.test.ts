@@ -47,13 +47,56 @@ describe('topK', () => {
 });
 
 describe('ranking differences', () => {
+  // Reference scores by item: 0 and 1 are 0.25 apart, 2 and 3 are 0.125 apart.
+  const scores = [1, 0.75, 0.5, 0.375];
+  const want = [0, 1, 2];
+  const none = { count: 0, nearTies: 0 };
+
   it.each([
-    { name: 'the same ranking', got: [4, 2, 7], mismatches: 0, missed: 0 },
-    { name: 'two items swapped', got: [2, 4, 7], mismatches: 2, missed: 0 },
-    { name: 'one item replaced', got: [4, 2, 9], mismatches: 1, missed: 1 },
-  ])('$name: $mismatches positions differ, $missed missing', ({ got, mismatches, missed }) => {
-    const want = [4, 2, 7];
-    expect(rankMismatches(got, want)).toBe(mismatches);
-    expect(missing(got, want)).toBe(missed);
+    { name: 'the same ranking', got: [0, 1, 2], margin: 0, mismatches: none, missed: none },
+    {
+      name: 'two items swapped, further apart than the margin',
+      got: [1, 0, 2],
+      margin: 0.125,
+      mismatches: { count: 2, nearTies: 0 },
+      missed: none,
+    },
+    {
+      name: 'two items swapped, as far apart as the margin',
+      got: [1, 0, 2],
+      margin: 0.25,
+      mismatches: { count: 0, nearTies: 2 },
+      missed: none,
+    },
+    {
+      name: 'one item replaced, further apart than the margin',
+      got: [0, 1, 3],
+      margin: 0.0625,
+      mismatches: { count: 1, nearTies: 0 },
+      missed: { count: 1, nearTies: 0 },
+    },
+    {
+      name: 'one item replaced, as far apart as the margin',
+      got: [0, 1, 3],
+      margin: 0.125,
+      mismatches: { count: 0, nearTies: 1 },
+      missed: { count: 0, nearTies: 1 },
+    },
+    {
+      name: 'a NaN margin',
+      got: [0, 1, 3],
+      margin: NaN,
+      mismatches: { count: 1, nearTies: 0 },
+      missed: { count: 1, nearTies: 0 },
+    },
+  ])('$name', ({ got, margin, mismatches, missed }) => {
+    expect(rankMismatches(got, want, scores, margin)).toEqual(mismatches);
+    expect(missing(got, want, scores, margin)).toEqual(missed);
+  });
+
+  it('counts a NaN reference score as a difference', () => {
+    const broken = [1, 0.75, 0.5, NaN];
+    expect(rankMismatches([0, 1, 3], want, broken, 1)).toEqual({ count: 1, nearTies: 0 });
+    expect(missing([0, 1, 3], want, broken, 1)).toEqual({ count: 1, nearTies: 0 });
   });
 });

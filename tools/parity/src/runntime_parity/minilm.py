@@ -10,7 +10,7 @@ from huggingface_hub import hf_hub_download
 from numpy.typing import NDArray
 from sentence_transformers import SentenceTransformer
 
-from .common import cosine_noise, devices, noise, save
+from .common import cosine_noise, noise, save
 
 REPO = "sentence-transformers/all-MiniLM-L6-v2"
 REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
@@ -55,20 +55,23 @@ def truncated(texts: list[str]) -> int:
     return sum(length > model.max_seq_length for length in lengths)
 
 
-def embed(texts: list[str], device: str) -> NDArray[np.float32]:
-    model = SentenceTransformer(REPO, revision=REVISION, device=device)
-    return model.encode(texts, batch_size=1, normalize_embeddings=True, convert_to_numpy=True)
+def embed(texts: list[str], double: bool = False) -> NDArray[np.floating]:
+    """The embeddings of `texts` on the CPU: in f32, or in f64 with `double`."""
+    model = SentenceTransformer(REPO, revision=REVISION, device="cpu")
+    if double:
+        model = model.double()
+    return model.encode(texts, batch_size=1, normalize_embeddings=True, convert_to_tensor=True).numpy()
 
 
 def main() -> None:
     queries, passages = squad_pairs()
     if truncated(passages[:LONG]) != LONG:
         raise RuntimeError(f"the first {LONG} passages have to be longer than the model reads")
-    device, noise_device = devices()
-    reference = {"queries": embed(queries, device), "passages": embed(passages, device)}
+    reference = {"queries": embed(queries), "passages": embed(passages)}
     scores = reference["queries"] @ reference["passages"].T
     ranking = np.argsort(-scores, axis=1, kind="stable")[:, :TOP_K].astype(np.int32)
-    second = {"queries": embed(queries, noise_device), "passages": embed(passages, noise_device)}
+    # The same model in f64 gives the reference noise.
+    double = {"queries": embed(queries, double=True), "passages": embed(passages, double=True)}
     save(
         "minilm",
         {"queries": queries, "passages": passages},
@@ -83,11 +86,13 @@ def main() -> None:
                 "repo": SQUAD_REPO,
                 "revision": SQUAD_REVISION,
                 "license": "CC BY-SA 4.0",
+                "count": len(queries) + len(passages),
             },
-            "devices": [device, noise_device],
+            "settings": {"topK": TOP_K},
             "noise": {
-                "error": max(noise(reference[name], second[name]) for name in reference),
-                "cosineDistance": max(cosine_noise(reference[name], second[name]) for name in reference),
+                "error": max(noise(reference[name], double[name]) for name in reference),
+                "cosineDistance": max(cosine_noise(reference[name], double[name]) for name in reference),
+                "score": noise(scores, double["queries"] @ double["passages"].T),
             },
         },
         ["torch", "sentence-transformers", "transformers"],

@@ -24,6 +24,7 @@ export const MINILM_PARITY = {
     license: 'CC BY-SA 4.0',
     count: 50,
   },
+  settings: { topK: TOP_K },
   variants: [
     {
       name: 'F32',
@@ -35,6 +36,10 @@ export const MINILM_PARITY = {
         // Level B: the same top-k ranking.
         rankMismatches: { value: 0, source: DEFAULTS },
       },
+      // Two passages the reference scores closer than this are a near-tie.
+      margins: {
+        score: { value: 3, timesNoise: true, source: 'three times the score noise in meta.json' },
+      },
     },
     {
       name: 'F16',
@@ -44,6 +49,14 @@ export const MINILM_PARITY = {
         cosineDistance: { value: 1e-3, source: DEFAULTS },
         // Level B: top-k agrees on >= 99%.
         topKMissed: { value: 0.01, source: DEFAULTS },
+      },
+      // Two passages the reference scores closer than f16 resolves are a
+      // near-tie.
+      margins: {
+        score: {
+          value: 2 ** -11,
+          source: 'f16 unit roundoff: scores are dot products of unit vectors',
+        },
       },
     },
   ],

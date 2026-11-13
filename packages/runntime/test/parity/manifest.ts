@@ -25,6 +25,9 @@ export interface ParityVariant<M extends ModelConfig> {
   readonly config: M;
   /** The gates, by metric name. */
   readonly thresholds: Readonly<Record<string, Threshold>>;
+  /** The reference score gaps up to which a ranking difference is a
+   *  near-tie and not a miss, by the name of their noise in `meta.json`. */
+  readonly margins?: Readonly<Record<string, Threshold>>;
 }
 
 export interface ParityManifest<M extends ModelConfig = ModelConfig> {
@@ -37,6 +40,9 @@ export interface ParityManifest<M extends ModelConfig = ModelConfig> {
     readonly dtype: 'f32' | 'f16' | 'bf16';
   };
   readonly inputs: { readonly source: string; readonly license: string; readonly count: number };
+  /** Values the family's tools/parity script sets too, by their name in
+   *  `meta.json`. */
+  readonly settings?: Readonly<Record<string, string | number>>;
   readonly variants: readonly ParityVariant<M>[];
 }
 
@@ -71,6 +77,56 @@ export function covers(variant: ModelConfig, entry: ModelConfig): boolean {
   );
 }
 
+/** What a family's `meta.json` holds that its manifest states too, and the
+ *  reference noise. */
+export interface ParityMeta {
+  readonly repo: string;
+  readonly revision: string;
+  readonly dtype: string;
+  readonly inputs?: { readonly license?: string; readonly count?: number };
+  readonly settings?: Readonly<Record<string, string | number>>;
+  readonly noise: Readonly<Record<string, number>>;
+}
+
+/** Throws when `meta` and `manifest` disagree on a value both hold: the
+ *  references come from other settings than the test expects. */
+export function checkMeta(manifest: ParityManifest, meta: ParityMeta): void {
+  const { family, reference, inputs, settings = {} } = manifest;
+  const fields: [field: string, want: unknown, got: unknown][] = [
+    ['repo', reference.repo, meta.repo],
+    ['revision', reference.revision, meta.revision],
+    ['dtype', reference.dtype, meta.dtype],
+    ['inputs.license', inputs.license, meta.inputs?.license],
+    ['inputs.count', inputs.count, meta.inputs?.count],
+    ...Object.entries(settings).map(
+      ([name, want]) =>
+        [`settings.${name}`, want, meta.settings?.[name]] as [string, unknown, unknown],
+    ),
+  ];
+  for (const [field, want, got] of fields) {
+    if (got !== want) {
+      throw new Error(
+        `stale ${family} reference: ${field} is ${JSON.stringify(got)} in meta.json, ${JSON.stringify(want)} in the manifest. Run its tools/parity script again.`,
+      );
+    }
+  }
+}
+
+/** The limit of each threshold in `thresholds`, by name. `noise` is the
+ *  reference noise in the family's `meta.json`, by the same names. A missing
+ *  noise gives NaN. */
+export function limits(
+  thresholds: Readonly<Record<string, Threshold>>,
+  noise: Readonly<Record<string, number>>,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(thresholds).map(([name, { value, timesNoise }]) => [
+      name,
+      value * (timesNoise ? noise[name]! : 1),
+    ]),
+  );
+}
+
 /** The names of the thresholds in `thresholds` that `metrics` exceed.
  *  `noise` is the reference noise in the family's `meta.json`, by metric. */
 export function exceeded(
@@ -79,10 +135,7 @@ export function exceeded(
   noise: Readonly<Record<string, number>>,
 ): string[] {
   // Written so a NaN or missing metric or noise counts as exceeded.
-  return Object.entries(thresholds)
-    .filter(
-      ([name, { value, timesNoise }]) =>
-        !(metrics[name]! <= value * (timesNoise ? noise[name]! : 1)),
-    )
+  return Object.entries(limits(thresholds, noise))
+    .filter(([name, limit]) => !(metrics[name]! <= limit))
     .map(([name]) => name);
 }

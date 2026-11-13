@@ -1,14 +1,14 @@
-"""What every reference script shares: where references go, which devices
-the reference runs on, and the files a run saves."""
+"""What every reference script shares: where references go, the reference
+noise, and the files a run saves."""
 
 import json
 import os
 import platform
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-import torch
 from numpy.typing import NDArray
 from safetensors.numpy import save_file
 
@@ -22,25 +22,16 @@ def references_dir(family: str) -> Path:
     return path
 
 
-def devices() -> tuple[str, str]:
-    """The device the reference outputs come from, and a second one whose
-    outputs give the reference noise."""
-    if torch.cuda.is_available():
-        return "cpu", "cuda"
-    if torch.backends.mps.is_available():
-        return "cpu", "mps"
-    raise RuntimeError("the reference noise needs a second device, CUDA or MPS")
+def noise(reference: NDArray[np.float32], double: NDArray[np.float64]) -> float:
+    """The largest difference between the reference and the same model run
+    in f64."""
+    return float(np.abs(reference.astype(np.float64) - double).max())
 
 
-def noise(first: NDArray[np.float32], second: NDArray[np.float32]) -> float:
-    """The largest difference between two runs of the reference."""
-    return float(np.abs(first - second).max())
-
-
-def cosine_noise(first: NDArray[np.float32], second: NDArray[np.float32]) -> float:
-    """The largest cosine distance between the rows of two runs of the
-    reference."""
-    a, b = first.astype(np.float64), second.astype(np.float64)
+def cosine_noise(reference: NDArray[np.float32], double: NDArray[np.float64]) -> float:
+    """The largest cosine distance between the rows of the reference and of
+    the same model run in f64."""
+    a, b = reference.astype(np.float64), double
     cosine = (a * b).sum(axis=1) / (np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1))
     return float((1 - cosine).max())
 
@@ -49,11 +40,15 @@ def save(
     family: str,
     inputs: object,
     tensors: dict[str, NDArray[np.float32] | NDArray[np.int32]],
-    meta: dict[str, object],
+    meta: dict[str, Any],
     libraries: list[str],
 ) -> None:
     """Writes `inputs.json`, `reference.safetensors` and `meta.json`, with the
-    version of Python and of each library in `libraries`."""
+    version of Python and of each library in `libraries`. Refuses a noise of
+    0 in `meta`: a threshold in multiples of it is 0."""
+    for name, value in meta["noise"].items():
+        if value == 0:
+            raise RuntimeError(f"the reference noise of {name} is 0")
     out = references_dir(family)
     (out / "inputs.json").write_text(json.dumps(inputs, ensure_ascii=False, indent=2))
     save_file(tensors, out / "reference.safetensors")

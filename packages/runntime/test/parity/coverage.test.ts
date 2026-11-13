@@ -45,9 +45,10 @@ describe('parity coverage', () => {
       expect(manifest.inputs.count).toBeGreaterThanOrEqual(10);
       expect(manifest.inputs.count).toBeLessThanOrEqual(50);
       expect(manifest.inputs.license).not.toBe('');
-      for (const { thresholds } of manifest.variants) {
+      for (const { thresholds, margins = {} } of manifest.variants) {
         expect(Object.keys(thresholds)).not.toHaveLength(0);
         for (const { source } of Object.values(thresholds)) expect(source).not.toBe('');
+        for (const { source } of Object.values(margins)) expect(source).not.toBe('');
       }
     },
   );

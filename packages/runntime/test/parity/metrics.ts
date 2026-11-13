@@ -46,18 +46,53 @@ export function topK(scores: ArrayLike<number>, k: number): number[] {
     .slice(0, k);
 }
 
-/** How many positions of two rankings of the same length hold different
- *  items. */
-export function rankMismatches(got: ArrayLike<number>, want: ArrayLike<number>): number {
-  let count = 0;
-  for (let i = 0; i < want.length; i++) if (got[i] !== want[i]) count++;
-  return count;
+/** Differences from a reference ranking, split by how far apart the
+ *  reference itself scores the items involved. */
+export interface Differences {
+  /** Differences where the reference scores are more than the margin apart. */
+  readonly count: number;
+  /** Differences inside the margin: the reference barely tells the items
+   *  apart. */
+  readonly nearTies: number;
 }
 
-/** How many items of `want` are missing from `got`, in any order. */
-export function missing(got: ArrayLike<number>, want: ArrayLike<number>): number {
+/** Splits differences by their reference score gap. A NaN gap or margin
+ *  counts as a difference. */
+function split(gaps: readonly number[], margin: number): Differences {
+  const nearTies = gaps.filter((gap) => gap <= margin).length;
+  return { count: gaps.length - nearTies, nearTies };
+}
+
+/** The positions of two rankings of the same length that hold different
+ *  items. `scores` are the reference scores by item: the gap of a position
+ *  is between its two items. */
+export function rankMismatches(
+  got: ArrayLike<number>,
+  want: ArrayLike<number>,
+  scores: ArrayLike<number>,
+  margin: number,
+): Differences {
+  const gaps: number[] = [];
+  for (let i = 0; i < want.length; i++) {
+    if (got[i] !== want[i]) gaps.push(Math.abs(scores[want[i]!]! - scores[got[i]!]!));
+  }
+  return split(gaps, margin);
+}
+
+/** The items of `want` missing from `got`, in any order. `scores` are the
+ *  reference scores by item: the gap of a missing item is to the best item
+ *  `got` holds in its place. */
+export function missing(
+  got: ArrayLike<number>,
+  want: ArrayLike<number>,
+  scores: ArrayLike<number>,
+  margin: number,
+): Differences {
   const have = new Set(Array.from(got));
-  let count = 0;
-  for (let i = 0; i < want.length; i++) if (!have.has(want[i]!)) count++;
-  return count;
+  const wanted = new Set(Array.from(want));
+  let best = -Infinity;
+  for (const item of have) if (!wanted.has(item)) best = Math.max(best, scores[item]!);
+  const gaps: number[] = [];
+  for (const item of wanted) if (!have.has(item)) gaps.push(scores[item]! - best);
+  return split(gaps, margin);
 }

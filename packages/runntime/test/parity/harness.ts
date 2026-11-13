@@ -9,7 +9,7 @@ import {
   type RangeSource,
 } from '../../src/core/weights/safetensors.ts';
 import type { ModelPath } from '../../src/zoo/load.ts';
-import { exceeded, type ParityManifest } from './manifest.ts';
+import { checkMeta, exceeded, limits, type ParityManifest, type ParityMeta } from './manifest.ts';
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
   const res = await fetch(url);
@@ -99,8 +99,9 @@ export interface ParityRun<P extends ParityManifest, Model extends { dispose(): 
   /** Loads the model of `config` from `modelPath`: the variant's own
    *  weights, or the broken ones. */
   load(config: ConfigOf<P>, modelPath: ModelPath): Promise<Model>;
-  /** Runs the model on the family's inputs and compares with the reference. */
-  measure(model: Model): Promise<Measured>;
+  /** Runs the model on the family's inputs and compares with the reference.
+   *  `margins` are the variant's, as numbers. */
+  measure(model: Model, margins: Readonly<Record<string, number>>): Promise<Measured>;
   /** How the first variant's weights are broken: a model that loads and
    *  runs, and has to fail every threshold of every variant. */
   readonly broken: {
@@ -111,14 +112,18 @@ export interface ParityRun<P extends ParityManifest, Model extends { dispose(): 
 }
 
 /** The tests of one family: every variant stays within its thresholds, the
- *  broken model fails all of them, and each run is a row of the report. */
+ *  broken model fails all of them, and each run is a row of the report.
+ *  Throws before any test when the references are stale. */
 export async function runParity<P extends ParityManifest, Model extends { dispose(): void }>({
-  manifest: { family, variants },
+  manifest,
   load,
   measure,
   broken,
 }: ParityRun<P, Model>): Promise<void> {
-  const { noise } = await readJson<{ noise: Record<string, number> }>(`${family}/meta.json`);
+  const { family, variants } = manifest;
+  const meta = await readJson<ParityMeta>(`${family}/meta.json`);
+  checkMeta(manifest, meta);
+  const { noise } = meta;
   const report: Record<string, string>[] = [];
   afterAll(() => writeReport(family, report));
 
@@ -127,6 +132,7 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
   const measured = (
     variant: string,
     config: ConfigOf<P>,
+    margins: ParityManifest['variants'][number]['margins'],
     weights: () => Promise<ModelPath>,
     result: (metrics: Measured['metrics']) => string,
   ) => {
@@ -134,7 +140,7 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
     let metrics: Measured['metrics'];
     beforeAll(async () => {
       model = await load(config, await weights());
-      const { cells, metrics: got } = await measure(model);
+      const { cells, metrics: got } = await measure(model, limits(margins ?? {}, noise));
       metrics = got;
       report.push({ variant, ...cells, result: result(got) });
     });
@@ -142,10 +148,11 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
     return () => metrics;
   };
 
-  describe.each(variants)(`${family} $name`, ({ name, config, thresholds }) => {
+  describe.each(variants)(`${family} $name`, ({ name, config, thresholds, margins }) => {
     const metrics = measured(
       name,
       config,
+      margins,
       async () => config.modelPath,
       (got) => (exceeded(got, thresholds, noise).length === 0 ? 'pass' : 'fail'),
     );
@@ -156,10 +163,11 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
   });
 
   describe(`${family} with ${broken.label}`, () => {
-    const { name, config } = variants[0]!;
+    const { name, config, margins } = variants[0]!;
     const metrics = measured(
       `${name}, ${broken.label}`,
       config,
+      margins,
       () => broken.weights(config.modelPath),
       () => 'fails, as it has to',
     );
