@@ -9,6 +9,7 @@ import {
 } from '../../../src/core/weights/safetensors.ts';
 import {
   concatRows,
+  dequantize,
   permuteRows,
   readFloats,
   reshapeWeight,
@@ -502,6 +503,29 @@ describe('quantized helpers', () => {
     });
     expect(ints).toHaveBeenCalledOnce();
     expect(scales).toHaveBeenCalledOnce();
+  });
+
+  it('dequantize gives each int times the f16 scale of its group, in the shape asked', async () => {
+    // int4, groups of 2: scales 0.5 and 0.25
+    const t = await quantSource(4, 2, 'w', {
+      ints: [1, -2, 7, -8],
+      scales: [0.5, 0.25],
+      shape: [1, 4],
+    });
+    const d = dequantize(t, [2, 2]);
+    expect(d.shape).toEqual([2, 2]);
+    expect([...(await d.f32())]).toEqual([0.5, -1, 1.75, -2]);
+    expect(d.byteLength).toBe(t.byteLength);
+  });
+
+  it('dequantize refuses a shape of another size', () => {
+    const { t } = counted();
+    expect(() => dequantize(t, [3])).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(/cannot give \[2, 2\]/),
+      }),
+    );
   });
 
   it('splits read the source once for all their outputs', async () => {

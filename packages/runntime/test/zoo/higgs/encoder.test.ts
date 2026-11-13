@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { matrix, pending, type ValueMeta } from '../../../src/core/graph/value.ts';
-import { memoryStateDict } from '../../../src/core/weights/safetensors.ts';
+import { Conv1d, Linear } from '../../../src/core/nn/layers.ts';
+import {
+  bufferSource,
+  fromSafetensors,
+  memoryStateDict,
+} from '../../../src/core/weights/safetensors.ts';
 import { HIGGS_ENCODER } from '../../../src/zoo/higgs/config.ts';
 import { HiggsEncoder } from '../../../src/zoo/higgs/encoder.ts';
 import { resample } from '../../../src/zoo/higgs/resample.ts';
 import { expectClose } from '../../gpu.ts';
-import { CFG, checkpoint, type Sd } from './encoderCheckpoint.ts';
+import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
 
 const POS = 'semantic_model.encoder.pos_conv_embed';
 const ATTN = 'semantic_model.encoder.layers.0.attention';
@@ -58,6 +63,51 @@ describe('HiggsEncoder', () => {
     );
     expect([...sd.tensors.keys()].filter((n) => n.startsWith(`${POS}.conv.`))).toEqual([]);
   });
+
+  it("takes the checkpoint's folded position conv weight and splits it into groups", async () => {
+    const raw = checkpoint();
+    const { hidden, posGroups, posKernel: k } = CFG.hubert;
+    const width = hidden / posGroups;
+    const weight = {
+      data: Float32Array.from({ length: hidden * width * k }, (_, i) => i),
+      shape: [hidden, width, k],
+    };
+    delete raw[`${POS}.conv.parametrizations.weight.original0`];
+    delete raw[`${POS}.conv.parametrizations.weight.original1`];
+    const sd = memoryStateDict({ ...raw, [`${POS}.conv.weight`]: weight });
+    new HiggsEncoder(CFG).semantic_model.encoder.pos_conv_embed.transformStateDict(sd, POS);
+    expect(await read(sd, `${POS}.convs.1.weight`)).toEqual(
+      weight.data.subarray(width * width * k, 2 * width * width * k),
+    );
+    expect([...sd.tensors.keys()].filter((n) => n.startsWith(`${POS}.conv.`))).toEqual([]);
+  });
+
+  it.for([8, 4] as const)(
+    'loads int%i Linears and int8 convs quantized, the one-input-channel convs as floats',
+    async (bits) => {
+      const { file } = quantize(checkpoint(QUANT_CFG), bits);
+      const enc = new HiggsEncoder(QUANT_CFG);
+      await enc.loadStateDict(await fromSafetensors(bufferSource(file), { chunkBytes: 0 }), {
+        upload: (_data, shape: ValueMeta) => pending(shape, 'reshape', []),
+      });
+      const floats = [
+        'acoustic_encoder.conv1',
+        'semantic_model.feature_extractor.conv_layers.0.conv',
+      ];
+      const layers = [...enc.namedModules()]
+        .filter(
+          ([name, m]) =>
+            (m instanceof Conv1d || m instanceof Linear) && !name.startsWith('quantizer.'),
+        )
+        .map(([name]) => name);
+      const quantized = [...enc.namedParameters()]
+        .map(([name]) => name)
+        .filter((name) => name.endsWith('.weightScale'))
+        .map((name) => name.slice(0, -'.weightScale'.length));
+      expect(layers).toEqual(expect.arrayContaining(floats));
+      expect(quantized).toEqual(layers.filter((name) => !floats.includes(name)));
+    },
+  );
 
   it('stacks q, k and v into one projection, q scaled by 1/√headDim', async () => {
     const raw = checkpoint();

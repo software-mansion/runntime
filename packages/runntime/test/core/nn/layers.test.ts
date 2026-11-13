@@ -523,18 +523,55 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
   });
 
   it.each([
-    {
-      name: 'kernel·in that is not a multiple of 8',
-      layer: () => new Conv1d(4, 4, 3),
-      file: () => quantCheckpoint(8, 12, { weight: zeros(4, 12, 1) }),
-      error: /needs in a multiple of 4 and 3·in of 8, got in 4/,
+    { name: 'one input channel', cIn: 1, kernel: 3 },
+    { name: 'kernel·in that is not a multiple of 8', cIn: 4, kernel: 3 },
+    { name: 'in that is not a multiple of 4', cIn: 2, kernel: 4 },
+  ])('loads a Conv1d weight on $name as its dequantized floats', async ({ cIn, kernel }) => {
+    // One scale per output row, 0.5 and 0.25; ints 1, 2, … and −1, −2, …
+    const cols = cIn * kernel;
+    const ints = Array.from({ length: 2 * cols }, (_, i) => (i < cols ? i + 1 : cols - i - 1));
+    const layer = new Conv1d(cIn, 2, kernel, { bias: false });
+    const sd = await quantCheckpoint(8, cols, {
+      weight: { ints, scales: [0.5, 0.25], shape: [2, cols] },
+    });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({ weight: meta([cols, 2]) });
+    // tap-major [kernel·in, out]: row tap·in + c holds both outputs' (c, tap)
+    const want = Array.from({ length: 2 * cols }, (_, i) => {
+      const [row, o] = [Math.floor(i / 2), i % 2];
+      const [tap, c] = [Math.floor(row / cIn), row % cIn];
+      return ints[o * cols + c * kernel + tap]! * (o === 0 ? 0.5 : 0.25);
+    });
+    expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
+  });
+
+  it.each([
+    { name: 'taps·in that is not a multiple of 8', cIn: 4, cOut: 4, kernel: 6 },
+    { name: 'out that is not a multiple of 4', cIn: 8, cOut: 2, kernel: 4 },
+  ])(
+    'loads a ConvTranspose1d weight on $name as its dequantized floats',
+    async ({ cIn, cOut, kernel }) => {
+      // stride 2; one scale per torch row c, (c + 1) / 4; ints −25 … 24
+      const [s, taps, cols] = [2, kernel / 2, cOut * kernel];
+      const ints = Array.from({ length: cIn * cols }, (_, i) => (i % 50) - 25);
+      const scales = Array.from({ length: cIn }, (_, c) => (c + 1) / 4);
+      const layer = new ConvTranspose1d(cIn, cOut, kernel, { stride: s, bias: false });
+      const sd = await quantCheckpoint(8, cols, {
+        weight: { ints, scales, shape: [cIn, cols] },
+      });
+      layer.transformStateDict(sd, '');
+      expect(shapes(layer)).toEqual({ weight: meta([taps * cIn, s * cOut]) });
+      // row i·in + c, column r·out + o holds kernel position (taps − 1 − i)·s + r
+      const want = Array.from({ length: taps * cIn * s * cOut }, (_, j) => {
+        const [row, col] = [Math.floor(j / (s * cOut)), j % (s * cOut)];
+        const [i, c, r, o] = [Math.floor(row / cIn), row % cIn, Math.floor(col / cOut), col % cOut];
+        return ints[c * cols + o * kernel + (taps - 1 - i) * s + r]! * scales[c]!;
+      });
+      expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
     },
-    {
-      name: 'in that is not a multiple of 4',
-      layer: () => new Conv1d(2, 4, 4),
-      file: () => quantCheckpoint(8, 8, { weight: zeros(4, 8, 1) }),
-      error: /needs in a multiple of 4 and 4·in of 8, got in 2/,
-    },
+  );
+
+  it.each([
     {
       name: 'a ConvTranspose1d weight in Conv1d layout',
       layer: () => new ConvTranspose1d(16, 8, 4, { stride: 2 }),
@@ -542,16 +579,16 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       error: /expected \[in, out·kernel\] = \[16, 32\]/,
     },
     {
+      name: 'a weight of another shape on one input channel',
+      layer: () => new Conv1d(1, 4, 3),
+      file: () => quantCheckpoint(8, 4, { weight: zeros(3, 4, 1) }),
+      error: /expected \[out, in·kernel\] = \[4, 3\]/,
+    },
+    {
       name: 'a weight of another shape',
       layer: () => new Conv1d(8, 4, 3),
       file: () => quantCheckpoint(8, 8, { weight: zeros(4, 16, 2) }),
       error: /expected \[out, in·kernel\] = \[4, 24\]/,
-    },
-    {
-      name: 'out that is not a multiple of 4',
-      layer: () => new ConvTranspose1d(8, 2, 4, { stride: 2 }),
-      file: () => quantCheckpoint(8, 8, { weight: zeros(8, 8, 1) }),
-      error: /needs out a multiple of 4 and stride·out of 4, got out 2, stride 2/,
     },
   ])('refuses $name with CHECKPOINT_MISMATCH', async ({ layer, file, error }) => {
     const sd = await file();
