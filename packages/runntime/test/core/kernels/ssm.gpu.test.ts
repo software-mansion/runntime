@@ -245,11 +245,9 @@ describe('ssm kernels', () => {
     expectClose(got, mergeRef(directional, s), { atol: 0, rtol: 0 });
   });
 
-  // Known bug: the kernels split the flat thread index with d.u32(thread / P),
-  // which TypeGPU compiles to u32(f32(thread) / f32(P)). f32 counts exactly
-  // only up to 2^24, so past 2^24 delta threads (4·C·P) some land on the
-  // wrong channel. Turn into a plain `it` with the fix.
-  it.fails('ssmScanProject past 2^24 delta threads', async () => {
+  // f32 counts exactly only up to 2^24, so the flat thread index past it must
+  // be split with integer division or threads land on the wrong channel.
+  it('ssmScanProject past 2^24 delta threads', async () => {
     const s = { c: 64, h: 200, w: 330, rank: 1 };
     const p = s.h * s.w;
     expect(SSM_DIRS * s.c * p).toBeGreaterThan(2 ** 24);

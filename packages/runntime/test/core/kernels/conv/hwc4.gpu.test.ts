@@ -787,6 +787,8 @@ describe('hwc4 kernels', () => {
             { c: 1, h: 1, w: 1 },
             { c: 5, h: 3, w: 7 },
             { c: 8, h: 4, w: 4 },
+            // c4 = 3: a block count that f32 division can split wrong.
+            { c: 10, h: 3, w: 5 },
           ].map((s) => ({ from, to, ...s })),
         ),
       ),
@@ -803,7 +805,9 @@ describe('hwc4 kernels', () => {
 
     it.for([false, true])('channelAffine, shift %s', async (withShift, ctx) => {
       needF16(ctx);
-      const [c, h, w] = [6, 3, 5];
+      const [c, h, w] = [10, 3, 5];
+      // c4 = 3: a block count that f32 division can split wrong, and a partial
+      // last block.
       const x = image(c, h, w, 1);
       const scale = randomF32(c, 2);
       const shift = randomF32(c, 3);
