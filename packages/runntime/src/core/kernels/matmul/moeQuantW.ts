@@ -85,7 +85,7 @@ const tileDots = (w0: number, w1: number, w2: number, w3: number, x: d.v4f) => {
 /** Word offset of column c inside a weight tile. */
 const colWord = (c: number) => {
   'use gpu';
-  return std.intdiv(c * config.$.bits * 4, 32);
+  return std.intdiv(d.u32(c) * config.$.bits * 4, 32);
 };
 
 /** Adds partialA (and partialB) over the K lanes of each unit, so lane 0
