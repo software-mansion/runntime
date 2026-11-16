@@ -362,11 +362,18 @@ describe('Linear with a quantized weight', () => {
     });
   });
 
+  // The quantized matmul takes in features a multiple of 8 and of the group
+  // size, out features a multiple of 4 (int8) or 8 (int4) and a group size a
+  // multiple of 4. A case names the one limit it sits on.
   it.each([
-    { name: 'in features off the 8-row tiles', inF: 12, outF: 4, bits: 8 as const, groupSize: 4 },
-    { name: 'int4 out features off 8 per word', inF: 8, outF: 4, bits: 4 as const, groupSize: 4 },
-    { name: 'a group size off 4', inF: 16, outF: 4, bits: 8 as const, groupSize: 2 },
-  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ inF, outF, bits, groupSize }) => {
+    // quantized: in 8 % 8 == 0, out 4 % 4 == 0, groups of 4
+    { name: 'int8 [4, 8] in groups of 4', inF: 8, outF: 4, bits: 8 as const, groupSize: 4 },
+    // quantized: int4 out 8 % 8 == 0
+    { name: 'int4 [8, 8] in groups of 4', inF: 8, outF: 8, bits: 4 as const, groupSize: 4 },
+    // quantized: one group over the whole row, 16 % 4 == 0
+    { name: 'int8 [4, 16] in groups of 16', inF: 16, outF: 4, bits: 8 as const, groupSize: 16 },
+  ])('loads $name as quantW', async ({ inF, outF, bits, groupSize }) => {
+    const layer = new Linear(inF, outF);
     const sd = await quantCheckpoint(bits, groupSize, {
       weight: {
         ints: new Array(inF * outF).fill(0),
@@ -374,11 +381,41 @@ describe('Linear with a quantized weight', () => {
         shape: [outF, inF],
       },
     });
+    layer.transformStateDict(sd, '');
+    expect(layer.weight.shape.dtype).toBe('quantW');
+    expect(layer.weightScale).toBeDefined();
+  });
+
+  it.each([
+    // float: in 12 % 8 != 0
+    { name: 'in features off the 8-row tiles', inF: 12, outF: 4, bits: 8 as const, groupSize: 4 },
+    // float: in 4 % 8 != 0
+    { name: 'in features under one tile', inF: 4, outF: 4, bits: 8 as const, groupSize: 4 },
+    // float: int8 out 6 % 4 != 0
+    { name: 'int8 out features off 4 per word', inF: 8, outF: 6, bits: 8 as const, groupSize: 4 },
+    // float: int4 out 4 % 8 != 0
+    { name: 'int4 out features off 8 per word', inF: 8, outF: 4, bits: 4 as const, groupSize: 4 },
+    // float: group size 2 % 4 != 0
+    { name: 'a group size off 4', inF: 16, outF: 4, bits: 8 as const, groupSize: 2 },
+    // float: group size 1
+    { name: 'a scale per value', inF: 8, outF: 4, bits: 8 as const, groupSize: 1 },
+  ])('loads $name as its dequantized floats', async ({ inF, outF, bits, groupSize }) => {
+    // ints −7 … 7 and one scale per group, (g % 5 + 1) / 4, f16-exact
+    const ints = Array.from({ length: inF * outF }, (_, i) => (i % 15) - 7);
+    const scales = Array.from({ length: (inF * outF) / groupSize }, (_, g) => ((g % 5) + 1) / 4);
+    const sd = await quantCheckpoint(bits, groupSize, {
+      weight: { ints, scales, shape: [outF, inF] },
+    });
     const layer = new Linear(inF, outF);
-    expect(() => layer.transformStateDict(sd, '')).toThrow(
-      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
-    );
-    expect(layer.weight.shape.dtype).toBe('f32');
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({ weight: meta([inF, outF]), bias: meta([outF]) });
+    expect(layer.weightScale).toBeUndefined();
+    // stored [in, out]: row i, column o is torch value o·in + i
+    const want = Array.from({ length: inF * outF }, (_, j) => {
+      const at = (j % outF) * inF + Math.floor(j / outF);
+      return ints[at]! * scales[Math.floor(at / groupSize)]!;
+    });
+    expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
   });
 
   it.each([

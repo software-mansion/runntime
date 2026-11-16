@@ -8,11 +8,13 @@ import { defaultRoot } from '../gpu/context.ts';
 import { inGpuErrorScopes } from '../gpu/errorScopes.ts';
 import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
 import { bf16ToF16Bits, f32ArrayToF16Bits } from '../weights/convert.ts';
-import type {
-  DerivedTensor,
-  FileSource,
-  FileTensor,
-  LazyStateDict,
+import {
+  deriveFromTensors,
+  quantTensor,
+  type DerivedTensor,
+  type FileSource,
+  type FileTensor,
+  type LazyStateDict,
 } from '../weights/safetensors.ts';
 import { CpuParameter, type AnyModule } from './module.ts';
 
@@ -121,6 +123,14 @@ async function bindStateDict(
   upload: UploadFn,
   opts: LoadStateDictOpts,
 ): Promise<void> {
+  // Whatever reads a quantized tensor as floats gets it dequantized. A weight
+  // its layer runs quantized is read as ints and never lands here.
+  const loadedAsFloat = new Set<string>();
+  for (const [name, t] of sd.tensors) {
+    if (t.kind !== 'quant') continue;
+    sd.tensors.set(name, quantTensor({ ...t, onFloatRead: () => loadedAsFloat.add(name) }));
+  }
+
   model.transformStateDict?.(sd, '');
   const visit = (parent: AnyModule, parentPrefix: string): void => {
     for (const [name, child] of parent.namedChildren()) {
@@ -182,15 +192,19 @@ async function bindStateDict(
   const total = params.reduce((sum, [name]) => sum + sd.tensors.get(name)!.byteLength, 0);
   let done = 0;
   for (const [name, p] of params) {
-    const t = sd.tensors.get(name)!;
+    let t = sd.tensors.get(name)!;
     // Linear's and the convs' hooks turn a quantized weight into quantW
-    // words, so a QuantTensor still here is bound to something else.
+    // words, so a QuantTensor still here is bound to something that reads
+    // floats: an embedding table, a norm, a plain parameter.
     if (t.kind === 'quant') {
-      throw new RunntimeError(
-        'CHECKPOINT_MISMATCH',
-        `loadStateDict: '${name}' is quantized (int${t.bits}), but only a Linear, Conv1d or ` +
-          `ConvTranspose1d weight loads quantized and this parameter holds ${p.shape.dtype}`,
-      );
+      if (p.shape.dtype === 'quantW') {
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `loadStateDict: '${name}' is quantized (int${t.bits}), but this quantW parameter ` +
+            'takes packed words, which only its layer makes',
+        );
+      }
+      t = deriveFromTensors(t.shape, [t], ([quant]) => quant.f32());
     }
     const numel = t.shape.reduce((a, b) => a * b, 1);
     // A quantW slot counts u32 words under logical dims. Privacy-filter's
@@ -216,6 +230,12 @@ async function bindStateDict(
     }
     done += t.byteLength;
     opts.onProgress?.(name, done, total);
+  }
+  if (loadedAsFloat.size > 0) {
+    console.warn(
+      'loadStateDict: quantized tensors loaded as float, no quantized kernel runs them: ' +
+        list([...loadedAsFloat]),
+    );
   }
   for (const [, b] of model.namedBuffers()) {
     // A Buffer's data is computed CPU-side and always f32, and half() only

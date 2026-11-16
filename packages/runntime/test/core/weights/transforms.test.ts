@@ -10,7 +10,6 @@ import {
 import {
   concatRows,
   dequantize,
-  floatTensor,
   permuteRows,
   readFloats,
   reshapeWeight,
@@ -469,15 +468,18 @@ describe.each([8, 4] as const)('int%i quantized sources', (bits) => {
     expect(() => transposeWeight(t)).toThrow(mismatch(/w\.weight is quantized/));
   });
 
-  it('floatTensor throws CHECKPOINT_MISMATCH naming the reader', async () => {
+  it('readFloats and f32() of an output give the dequantized values', async () => {
     const t = await quantSource(bits, 2, 'w.weight', w);
-    expect(() => floatTensor('test', t)).toThrow(mismatch(/^test: w\.weight is quantized/));
+    // int · scale of its group of 2
+    expect(await readFloats('test', t)).toEqual(
+      new Float32Array([0.5, -1, 3, -4, 10, -12, 28, -32]),
+    );
+    expect(await splitRows(t, [1, 1])[1]!.f32()).toEqual(new Float32Array([10, -12, 28, -32]));
   });
 
-  it('readFloats and the float accessors of an output reject it', async () => {
+  it('the readers of stored bits of an output reject it', async () => {
     const t = await quantSource(bits, 2, 'w.weight', w);
-    await expect(readFloats('test', t)).rejects.toThrow(mismatch(/^test: w\.weight is quantized/));
-    await expect(splitRows(t, [1, 1])[0]!.f32()).rejects.toThrow(
+    await expect(splitRows(t, [1, 1])[0]!.u16()).rejects.toThrow(
       mismatch(/splitRows\(w\.weight\) is quantized/),
     );
   });
