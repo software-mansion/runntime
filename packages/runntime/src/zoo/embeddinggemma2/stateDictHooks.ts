@@ -4,10 +4,10 @@
  *  own name, since the modules are named like the checkpoint.
  *
  *  An F16 checkpoint gives f16 derived tensors, except the text layer
- *  scalars and the audio tower's distance bias rows and q scales, which the
- *  CPU code and the attention kernel read as f32, and the scaled PLE
- *  projection and audio post norms, which stay f32 so an f32 model loads
- *  exact values. */
+ *  scalars and the audio tower's clip bounds, distance bias rows and q
+ *  scales, which the CPU code and the attention kernel read as f32, and the
+ *  scaled PLE projection and audio post norms, which stay f32 so an f32
+ *  model loads exact values. */
 
 import {
   concatRows,
@@ -158,6 +158,17 @@ export function transformEmbeddingGemma2AudioStateDict(
   const [c0, c1] = cfg.convChannels;
   const scalar = async (t: LazyTensor) => (await t.f32())[0]!;
   const BOUNDS = ['input_min', 'input_max', 'output_min', 'output_max'];
+  /** Rebuilds a clipped linear's bounds as f32: the CPU parameters they bind
+   *  to would hold a BF16 bound as raw bits. */
+  const f32Bounds = (linear: string) => {
+    for (const b of BOUNDS) {
+      const t = take(sd, what, q(`${linear}.${b}`));
+      put(
+        `${linear}.${b}`,
+        derivedTensor([1], () => t.f32(), t.byteLength),
+      );
+    }
+  };
 
   // The first conv has one input channel: [c0, 9] as a linear over 3×3
   // taps. The second reads its taps (row, column, channel) major, so each
@@ -191,6 +202,8 @@ export function transformEmbeddingGemma2AudioStateDict(
     for (const ff of ['feed_forward1', 'feed_forward2']) {
       const post = `${L}.${ff}.post_layer_norm.weight`;
       put(post, scaleWeight(take(sd, what, q(post)), cfg.residualWeight));
+      f32Bounds(`${L}.${ff}.ffw_layer_1`);
+      f32Bounds(`${L}.${ff}.ffw_layer_2`);
     }
 
     const A = `${L}.self_attn`;
@@ -217,6 +230,7 @@ export function transformEmbeddingGemma2AudioStateDict(
         ),
       );
     }
+    f32Bounds(`${A}.post`);
     // rel and q_scale stay f32 on purpose: the attention kernel reads them as
     // f32, so rounding them to f16 would only lose precision.
     const rk = take(sd, what, q(`${A}.relative_k_proj.weight`));
@@ -252,5 +266,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     // [hidden, 1, K] → [K, hidden].
     const conv = `${L}.lconv1d.depthwise_conv1d.weight`;
     put(conv, transposeWeight(reshapeWeight(take(sd, what, q(conv)), [hidden, K])));
+    f32Bounds(`${L}.lconv1d.linear_start`);
+    f32Bounds(`${L}.lconv1d.linear_end`);
   }
 }

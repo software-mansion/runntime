@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LazyStateDict } from '../../../src/core/weights/safetensors.ts';
+import { memoryStateDict, type LazyStateDict } from '../../../src/core/weights/safetensors.ts';
 import {
   EMBEDDINGGEMMA2_AUDIO,
   EMBEDDINGGEMMA2_TEXT,
@@ -305,7 +305,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
   const BOUNDS = ['input_min', 'input_max', 'output_min', 'output_max'];
   /** Tensors the hook leaves as they are, under their own names. */
   const UNTOUCHED = [
-    ...CLIPPED.flatMap((c) => [`${c}.linear.weight`, ...BOUNDS.map((b) => `${c}.${b}`)]),
+    ...CLIPPED.map((c) => `${c}.linear.weight`),
     `${sub}layer0.norm.weight`,
     `${sub}layer1.norm.weight`,
     `${sub}input_proj_linear.weight`,
@@ -373,6 +373,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
         `${T}.feed_forward2.post_layer_norm.weight`,
         `${T}.self_attn.qkv.linear.weight`,
         ...BOUNDS.map((b) => `${T}.self_attn.qkv.${b}`),
+        ...CLIPPED.flatMap((c) => BOUNDS.map((b) => `${c}.${b}`)),
         `${T}.self_attn.rel`,
         `${T}.self_attn.q_scale`,
         `${T}.lconv1d.depthwise_conv1d.weight`,
@@ -424,6 +425,15 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       expect(await contents(value)).toEqual({ type: 'f32', values: [[-3, 3, -4, 4][i]!] });
     }
 
+    // Every other clipped linear keeps its own bounds, f32.
+    for (const c of CLIPPED) {
+      for (const [i, b] of BOUNDS.entries()) {
+        const value = get(`${c}.${b}`);
+        expect(value.byteLength).toBe(elemBytes);
+        expect(await contents(value)).toEqual({ type: 'f32', values: [[-1, 1, -2, 2][i]!] });
+      }
+    }
+
     // Sinusoid rows for distances 0 and 1 at hidden 4: angle j·10000^-i for
     // i = 0, 1, sines then cosines.
     const rel = get(`${T}.self_attn.rel`);
@@ -449,5 +459,33 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
 
     // k's and v's bounds, 4 scalars each, are the only bytes lost.
     expect(sd.totalBytes()).toBe(total - 8 * elemBytes);
+  });
+
+  // The bounds bind to CPU parameters, which hold a BF16 file tensor as raw
+  // bits: 2 would read as 16384.
+  it('decodes the bounds of a BF16 checkpoint to f32', async () => {
+    /** bf16 bits: the top half of the f32 pattern. */
+    const bf16 = (values: number[]) =>
+      Uint16Array.from(new Uint32Array(new Float32Array(values).buffer), (bits) => bits >>> 16);
+    const sd = memoryStateDict(
+      Object.fromEntries(
+        Object.entries(CHECKPOINT).map(([name, { values, shape }]) => [
+          name,
+          { data: bf16(values), shape },
+        ]),
+      ),
+    );
+    transformEmbeddingGemma2AudioStateDict(sd, '', cfg);
+    for (const [prefix, want] of [
+      ...CLIPPED.map((c) => [c, [-1, 1, -2, 2]] as const),
+      [`${T}.self_attn.qkv`, [-3, 3, -4, 4]] as const,
+    ]) {
+      for (const [i, b] of BOUNDS.entries()) {
+        expect(await contents(sd.tensors.get(`${prefix}.${b}`)!)).toEqual({
+          type: 'f32',
+          values: [want[i]!],
+        });
+      }
+    }
   });
 });
