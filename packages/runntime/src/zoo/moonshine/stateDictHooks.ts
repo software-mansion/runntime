@@ -9,8 +9,8 @@
  *  Weights stay in torch layout for the core Linear hook to transpose. An F16
  *  checkpoint gives f16 derived tensors, except the scaled cross-attention q,
  *  which stays f32 so an f32 model loads exact values. Derived byteLengths
- *  carry the source file bytes, so load progress still sums to the
- *  checkpoint size. */
+ *  carry the source file bytes, so load progress counts every byte the model
+ *  reads. */
 
 import { concatRows, scaleWeight, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';

@@ -10,8 +10,8 @@
  *  Weights stay in torch layout for the core Linear hook to transpose. An F16
  *  checkpoint gives f16 decoder q/k/v; the scaled encoder q/k/v and
  *  cross-attention q, the norm gammas and k stay f32. Derived byteLengths
- *  carry the source file bytes, so load progress still sums to the
- *  checkpoint size. */
+ *  carry the source file bytes, so load progress counts every byte the model
+ *  reads. */
 
 import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { fuseQkv, qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';

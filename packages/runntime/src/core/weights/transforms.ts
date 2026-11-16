@@ -6,7 +6,7 @@
  *  `scaleWeight` and `dequantize`, which always give f32. BF16 decodes to
  *  f32, which is exact; a derived tensor's Uint16Array means f16, so bf16 bits
  *  have no derived form. Each output's byteLength is its share of the source
- *  bytes, so load progress still sums to the checkpoint size.
+ *  bytes, so load progress counts every byte the model reads.
  *
  *  A QuantTensor source gives a QuantTensor, except in `dequantize`: the
  *  helpers move its ints and scales together. Whatever would split a scale

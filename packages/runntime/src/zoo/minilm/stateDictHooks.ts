@@ -11,7 +11,7 @@
  *  fused q/k/v and the position sum are f32 even from an F16 checkpoint, so
  *  an f32 model loads exact values and an f16 model rounds once in the
  *  loader. Derived byteLengths carry the source file bytes, so load progress
- *  still sums to the checkpoint size. */
+ *  counts every byte the model reads. */
 
 import {
   concatRows,
