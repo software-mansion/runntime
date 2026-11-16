@@ -15,10 +15,10 @@
 import { RunntimeError } from '../error.ts';
 import { f16ToF32 } from './convert.ts';
 import {
+  dequantizeInts,
   deriveFromTensors,
   quantTensor,
   type DerivedTensor,
-  type FloatTensor,
   type LazyTensor,
   type QuantTensor,
 } from './safetensors.ts';
@@ -34,12 +34,13 @@ const numel = (shape: readonly number[]): number => shape.reduce((a, b) => a * b
 const mismatch = (helper: string, why: string) =>
   new RunntimeError('CHECKPOINT_MISMATCH', `${helper}: ${why}`);
 
-/** Reads `t` as f16 halfwords when it holds F16 and as f32 otherwise. Throws
+/** Reads `t` as f16 halfwords when it holds F16 and as f32 otherwise, a
+ *  QuantTensor as its dequantized values. Throws
  *  CHECKPOINT_MISMATCH, naming `helper`, on packed u32 words or on a derived
  *  tensor whose data does not fill its shape. A file tensor's length is
  *  checked by the header parser. */
 export async function readFloats(helper: string, t: LazyTensor): Promise<Floats> {
-  if (t.kind === 'quant') throw mismatch(helper, `${t.name} is quantized, not float`);
+  if (t.kind === 'quant') return t.f32();
   if (t.kind === 'file') return t.dtype === 'F16' ? t.u16() : t.f32();
   const data = await t.data();
   if (data instanceof Uint32Array) throw mismatch(helper, 'source holds packed u32 words');
@@ -47,13 +48,6 @@ export async function readFloats(helper: string, t: LazyTensor): Promise<Floats>
     throw mismatch(helper, `source holds ${data.length} values for shape [${t.shape.join(', ')}]`);
   }
   return data;
-}
-
-/** `t` as a tensor that has f32 values, for `derive`. Throws
- *  CHECKPOINT_MISMATCH, naming `what` reads it, on a QuantTensor. */
-export function floatTensor(what: string, t: LazyTensor): FloatTensor {
-  if (t.kind === 'quant') throw mismatch(what, `${t.name} is quantized, not float`);
-  return t;
 }
 
 const allocLike = (like: Floats, n: number): Floats =>
@@ -167,6 +161,7 @@ export function concatRows(parts: readonly LazyTensor[]): LazyTensor {
       bits: quant[0]!.bits,
       groupSize: quant[0]!.groupSize,
       byteLength,
+      onFloatRead: () => quant.forEach((p) => p.onFloatRead?.()),
       async ints() {
         const out = new Int8Array(numel(shape));
         let base = 0;
@@ -207,6 +202,7 @@ export function splitRows(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
         bits: t.bits,
         groupSize: t.groupSize,
         byteLength: share(rows),
+        onFloatRead: t.onFloatRead,
         ints: async () => (await ints()).slice(first * rowElems, (first + rows) * rowElems),
         scales: async () =>
           (await scales()).slice(first * scaleRowElems, (first + rows) * scaleRowElems),
@@ -258,6 +254,7 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
         bits: t.bits,
         groupSize,
         byteLength: share(cols),
+        onFloatRead: t.onFloatRead,
         ints: async () => copyCols(await ints(), new Int8Array(rows * cols), width, from, cols),
         async scales() {
           const data = await scales();
@@ -392,20 +389,16 @@ export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTens
   return { ...t, shape: [...shape] };
 }
 
-/** The values of `t` as f32 in `shape`, each int times the scale of its group.
- *  Throws CHECKPOINT_MISMATCH when the element counts differ. */
+/** The values of `t` as f32 in `shape`, each int times the scale of its group,
+ *  for a hook that means to load `t` as floats: loadStateDict's warning about
+ *  quantized tensors loaded as float leaves it out. Throws CHECKPOINT_MISMATCH
+ *  when the element counts differ. */
 export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): DerivedTensor {
   if (numel(shape) !== numel(t.shape)) {
     throw mismatch('dequantize', `cannot give [${t.shape.join(', ')}] shape [${shape.join(', ')}]`);
   }
   return deriveFromTensors([...shape], [t], async ([t]) => {
     const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
-    const f32 = toF32(scales);
-    const out = new Float32Array(ints.length);
-    for (let g = 0, i = 0; g < f32.length; g++) {
-      const scale = f32[g]!;
-      for (const end = i + t.groupSize; i < end; i++) out[i] = ints[i]! * scale;
-    }
-    return out;
+    return dequantizeInts(ints, scales, t.groupSize);
   });
 }

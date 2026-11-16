@@ -20,10 +20,7 @@ import {
   snake,
 } from '../graph/ops.ts';
 import { matrix, type Value } from '../graph/value.ts';
-import {
-  MATMUL_QUANT_TILED_BK,
-  matmulQuantTiledEligible,
-} from '../kernels/matmul/matmulQuantTiled.ts';
+import { matmulQuantTiledEligible } from '../kernels/matmul/matmulQuantTiled.ts';
 import {
   convToTapMajor,
   f16ToF32,
@@ -39,9 +36,10 @@ import {
   derive,
   deriveFromTensors,
   type LazyStateDict,
+  type LazyTensor,
   type QuantTensor,
 } from '../weights/safetensors.ts';
-import { dequantize, floatTensor, readFloats, transposeWeight } from '../weights/transforms.ts';
+import { readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -146,6 +144,12 @@ function loadQuantWeight(
   return scale;
 }
 
+/** A quantized weight its layer's quantized kernel cannot run, as its
+ *  dequantized f32 values in torch's `shape`. Reading it puts the tensor in
+ *  loadStateDict's warning. */
+const asFloat = (t: QuantTensor, shape: readonly number[]): LazyTensor =>
+  deriveFromTensors([...shape], [t], ([t]) => t.f32());
+
 /** `t`'s scales in f32, as stored. */
 async function scalesF32(t: QuantTensor): Promise<Float32Array> {
   const data = await t.scales();
@@ -169,7 +173,8 @@ async function scaleColumns(t: QuantTensor, groups: number, n: number): Promise<
  *  A quantized checkpoint weight loads as quantW words with its f32 scales in
  *  `weightScale` [in / groupSize, out], and forward() runs the quantized
  *  matmul. Only the checkpoint says which kind it is, so transformStateDict
- *  retypes the slot at load.
+ *  retypes the slot at load. A weight the quantized matmul cannot run loads
+ *  as its dequantized floats.
  *
  *  `addend` and `activation` fold a residual add and a following tanh or GELU
  *  into the matmul epilogue, as act(x·W + bias) + addend. */
@@ -210,33 +215,25 @@ export class Linear extends Module {
           `expected torch layout [${this.outFeatures}, ${this.inFeatures}]`,
       );
     }
-    if (tensor.kind === 'quant') {
-      this.loadQuantized(sd, prefix, name, tensor);
+    if (tensor.kind !== 'quant') {
+      sd.tensors.set(name, transposeWeight(tensor));
       return;
     }
-    sd.tensors.set(name, transposeWeight(tensor));
+    const { bits, groupSize } = tensor;
+    // The quantized matmul reads whole tiles of 4 columns and 8 rows, groups
+    // of whole 4-row chunks, and packs int4 columns 8 to a word.
+    const fits =
+      matmulQuantTiledEligible(this.inFeatures, this.outFeatures, groupSize) &&
+      this.outFeatures % (32 / bits) === 0;
+    if (fits) this.loadQuantized(sd, prefix, tensor);
+    else sd.tensors.set(name, transposeWeight(asFloat(tensor, tensor.shape)));
   }
-  /** Loads `name` as quantW words [in, out] with its scales
+  /** Loads the weight as quantW words [in, out] with its scales
    *  [in / groupSize, out]. */
-  private loadQuantized(
-    sd: LazyStateDict,
-    prefix: string,
-    name: string,
-    tensor: QuantTensor,
-  ): void {
+  private loadQuantized(sd: LazyStateDict, prefix: string, tensor: QuantTensor): void {
     const { bits, groupSize } = tensor;
     const k = this.inFeatures;
     const n = this.outFeatures;
-    // The quantized matmul reads whole tiles of 4 columns and 8 rows and
-    // packs int4 columns 8 to a word.
-    if (!matmulQuantTiledEligible(k, n, groupSize) || n % (32 / bits) !== 0) {
-      throw new RunntimeError(
-        'CHECKPOINT_MISMATCH',
-        `Linear: ${name} is int${bits} in groups of ${groupSize}, which needs in features ` +
-          `a multiple of ${MATMUL_QUANT_TILED_BK} and of the group size, out features a ` +
-          `multiple of ${32 / bits} and a group size a multiple of 4, got [out, in] = [${n}, ${k}]`,
-      );
-    }
     this.quantization = { bits, groupSize };
     const groups = k / groupSize;
     this.weightScale = loadQuantWeight(
@@ -358,7 +355,7 @@ export class Conv1d extends Module {
         this.loadQuantized(sd, prefix, name, tensor, n);
         return;
       }
-      tensor = dequantize(tensor, [cOut, cIn, kernel]);
+      tensor = asFloat(tensor, [cOut, cIn, kernel]);
     }
     // Without this a weight with equal in/out channels loads scrambled.
     if (
@@ -532,7 +529,7 @@ export class ConvTranspose1d extends Module {
       if (cOut % 4 === 0 && n % (32 / w.bits) === 0 && quantConvFits(cIn, taps, n)) {
         this.loadQuantized(sd, prefix, w);
       } else {
-        w = dequantize(w, [cIn, cOut, k]);
+        w = asFloat(w, [cIn, cOut, k]);
       }
     }
     if (w && w.kind !== 'quant') {
@@ -568,7 +565,7 @@ export class ConvTranspose1d extends Module {
     if (b && this.bias) {
       sd.tensors.set(
         at('bias'),
-        derive([s * cOut], [floatTensor('ConvTranspose1d', b)], ([src]) => {
+        derive([s * cOut], [b], ([src]) => {
           const out = new Float32Array(s * cOut);
           for (let r = 0; r < s; r++) out.set(src, r * cOut);
           return out;
@@ -657,7 +654,7 @@ export class Snake extends Module {
     const c = this.channels;
     sd.tensors.set(
       at('weight'),
-      derive([2, c], [floatTensor('Snake', alpha)], ([a]) => {
+      derive([2, c], [alpha], ([a]) => {
         const out = new Float32Array(2 * c);
         for (let i = 0; i < c; i++) {
           out[i] = a[i]!;

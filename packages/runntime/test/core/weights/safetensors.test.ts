@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WeightCache } from '../../../src/core/weights/cache.ts';
 import { f16ToF32 } from '../../../src/core/weights/convert.ts';
-import { floatTensor } from '../../../src/core/weights/transforms.ts';
 import {
   bufferSource,
   chunkedSource,
@@ -12,7 +11,7 @@ import {
   httpRangeSource,
   memoryStateDict,
   parseSafetensorsHeader,
-  type FloatTensor,
+  type LazyTensor,
   type RangeSource,
   type SafeTensorInfo,
 } from '../../../src/core/weights/safetensors.ts';
@@ -537,7 +536,26 @@ describe('fromSafetensors', () => {
       expect(sd.tensors.get('fc.weight')!.kind).toBe('quant');
     });
 
-    it.each(['f32', 'u16', 'halfWords', 'words'] as const)(
+    it('reads f32() of a quantized tensor as each int times the scale of its group', async () => {
+      // ints 1 2 | 3 4 and −1 −2 | −3 −4, scales 0.5 2 and 1 0.25
+      const sd = await open({
+        'fc.weight': {
+          dtype: 'I8',
+          shape: [2, 4],
+          bytes: Uint8Array.from([1, 2, 3, 4, 255, 254, 253, 252]),
+        },
+        'fc.weight_scale': {
+          dtype: 'F16',
+          shape: [2, 2],
+          bytes: u16Bytes([0x3800, 0x4000, 0x3c00, 0x3400]),
+        },
+      });
+      expect(await sd.tensors.get('fc.weight')!.f32()).toEqual(
+        new Float32Array([0.5, 1, 6, 8, -1, -2, -0.75, -1]),
+      );
+    });
+
+    it.each(['u16', 'halfWords', 'words'] as const)(
       'rejects %s() on a quantized tensor with CHECKPOINT_MISMATCH',
       async (call) => {
         const sd = await open({
@@ -957,10 +975,10 @@ describe('derive', () => {
     // bf16 bits of 3
     c: new Uint16Array([0x4040]),
   });
-  const [a, b, c] = ['a', 'b', 'c'].map((name) => floatTensor('test', sd.tensors.get(name)!)) as [
-    FloatTensor,
-    FloatTensor,
-    FloatTensor,
+  const [a, b, c] = ['a', 'b', 'c'].map((name) => sd.tensors.get(name)!) as [
+    LazyTensor,
+    LazyTensor,
+    LazyTensor,
   ];
 
   it('hands compute the f32 values of its inputs, in their order', async () => {
