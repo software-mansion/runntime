@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { ACT_CODE } from '../../../src/core/graph/ops/shared.ts';
 import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
@@ -520,6 +521,25 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5,
     ]);
   });
+
+  it.for([8, 4] as const)(
+    'takes the int%i Conv1d weight the Python quantizer writes',
+    async (bits) => {
+      // tools/python's golden file holds torch [out 6, in 16, kernel 4] as
+      // [6, 64] in groups of 32. 6 outputs pad to the packing width, 8.
+      const golden = new URL(
+        `../../../../../tools/python/tests/golden/tiny.int${bits}.safetensors`,
+        import.meta.url,
+      );
+      const sd = await fromSafetensors(bufferSource(readFileSync(golden)));
+      const layer = new Conv1d(16, 6, 4, { bias: false });
+      layer.transformStateDict(sd, 'conv');
+      expect(shapes(layer)).toEqual({
+        weight: { elems: (64 * 8 * bits) / 32, dtype: 'quantW', dims: [64, 8] },
+        weightScale: meta([2, 8]),
+      });
+    },
+  );
 
   it('keeps a Conv1d group that ends inside a channel', async () => {
     const layer = new Conv1d(8, 4, 3);
