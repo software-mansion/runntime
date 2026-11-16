@@ -636,21 +636,34 @@ describe('fromSafetensors', () => {
     it.for([4, 8])('reads int%i weights within half a step of the float source', async (bits) => {
       const source = await golden('tiny.safetensors');
       const sd = await golden(`tiny.int${bits}.safetensors`);
-      const w = sd.tensors.get('layer.weight')!;
-      if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
-      expect(w).toMatchObject({ shape: [8, 64], bits, groupSize: 32 });
-      const ints = await w.ints();
-      const halves = await w.scales();
-      const scales = halves instanceof Float32Array ? halves : f16ToF32(halves);
-      const want = await source.tensors.get('layer.weight')!.f32();
-      want.forEach((v, i) => {
-        const scale = scales[Math.floor(i / 32)]!;
-        expect(Math.abs(ints[i]! * scale - v)).toBeLessThanOrEqual(scale / 2 + 1e-6);
-      });
-      // The tensors it leaves alone keep their bytes.
-      for (const name of ['embed.weight', 'layer.bias', 'norm.weight']) {
+      // The tool stores a weight as rows of everything after its first dim:
+      // conv.weight is torch [6, 16, 4], and no file setting names the bits
+      // or the group size.
+      const quantized = {
+        'layer.weight': [8, 64],
+        'embed.weight': [16, 64],
+        'conv.weight': [6, 64],
+      };
+      for (const [name, shape] of Object.entries(quantized)) {
+        const w = sd.tensors.get(name)!;
+        if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
+        expect(w).toMatchObject({ shape, bits, groupSize: 32 });
+        const ints = await w.ints();
+        const halves = await w.scales();
+        const scales = halves instanceof Float32Array ? halves : f16ToF32(halves);
+        const want = await source.tensors.get(name)!.f32();
+        expect(ints.length).toBe(want.length);
+        want.forEach((v, i) => {
+          const scale = scales[Math.floor(i / 32)]!;
+          expect(Math.abs(ints[i]! * scale - v)).toBeLessThanOrEqual(scale / 2 + 1e-6);
+        });
+      }
+      // The tensors it leaves alone keep their bytes: a bias, a 1D norm and a
+      // row of 40 values that groups of 32 do not divide.
+      for (const name of ['layer.bias', 'norm.weight', 'odd.weight']) {
         expect(await sd.tensors.get(name)!.f32()).toEqual(await source.tensors.get(name)!.f32());
       }
+      expect(sd.tensors.size).toBe(6);
     });
   });
 
