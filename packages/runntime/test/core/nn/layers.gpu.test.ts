@@ -42,7 +42,7 @@ function loadWarnings(): () => unknown[] {
       .filter((message) => typeof message === 'string' && message.startsWith('loadStateDict:'));
 }
 
-const LOADED_AS_FLOAT = /^loadStateDict: quantized tensors loaded as float.*: weight$/;
+const LOADED_AS_FLOAT = /^loadStateDict: quantized weights loaded as float.*: weight$/;
 
 /** A Linear loaded from a quantized file matches a CPU loop of
  *  act(x·W + bias) + addend in f64, with W dequantized from the same ints as
@@ -97,6 +97,22 @@ async function checkQuantizedLinear(c: Case, bits: 4 | 8, dtype: 'f32' | 'f16') 
   // output to half precision, 2^-11 relative.
   const tol = dtype === 'f16' ? { atol: 1e-5 * inF, rtol: 1e-3 } : { atol: 1e-6 * inF, rtol: 1e-5 };
   expectClose(got, want, tol);
+  if (!float) return;
+
+  // The fallback is the float layer: a Linear loaded from the dequantized
+  // weight takes the same route and gives the same bits.
+  const reference = new Linear(inF, outF, { bias: c.bias, activation: c.activation });
+  if (dtype === 'f16') reference.half(root);
+  onTestFinished(() => reference.dispose());
+  await reference.loadStateDict(
+    memoryStateDict({
+      weight: { data: dequant, shape: [outF, inF] },
+      ...(c.bias ? { bias } : {}),
+    }),
+    { root },
+  );
+  expect(reference.weight.shape.dtype).toBe(dtype);
+  expectClose(await toArray(reference.forward(x, call), ex), got, { atol: 0, rtol: 0 });
 }
 
 describe('Linear with a quantized weight', () => {
@@ -243,7 +259,8 @@ describe('Linear with a quantized weight at the limits of the quantized matmul',
 
 describe('Embedding with a quantized table', () => {
   // No kernel reads a quantized lookup table, so it loads as its dequantized
-  // floats: on the GPU in the model's dtype, on the CPU as f32.
+  // floats, without a warning: on the GPU in the model's dtype, on the CPU as
+  // f32.
   const [vocab, dim, groupSize] = [10, 6, 3];
   const ids = [9, 0, 4, 4];
   it.for(
@@ -271,7 +288,7 @@ describe('Embedding with a quantized table', () => {
     await table.loadStateDict(await fromSafetensors(bufferSource(file), { chunkBytes: 0 }), {
       root,
     });
-    expect(warned()).toEqual([expect.stringMatching(LOADED_AS_FLOAT)]);
+    expect(warned()).toEqual([]);
     const got = await toArray(table.forward(ids), ex);
 
     const dequant = Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!);

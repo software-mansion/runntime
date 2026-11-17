@@ -383,8 +383,12 @@ describe('Linear with a quantized weight', () => {
       },
     });
     layer.transformStateDict(sd, '');
-    expect(layer.weight.shape.dtype).toBe('quantW');
-    expect(layer.weightScale).toBeDefined();
+    expect(shapes(layer)).toEqual({
+      weight: { elems: (inF * outF * bits) / 32, dtype: 'quantW', dims: [inF, outF] },
+      bias: meta([outF]),
+      weightScale: meta([inF / groupSize, outF]),
+    });
+    expect(sd.quantizedAsFloat).toBeUndefined();
   });
 
   it.each([
@@ -411,6 +415,7 @@ describe('Linear with a quantized weight', () => {
     layer.transformStateDict(sd, '');
     expect(shapes(layer)).toEqual({ weight: meta([inF, outF]), bias: meta([outF]) });
     expect(layer.weightScale).toBeUndefined();
+    expect(sd.quantizedAsFloat).toEqual(['weight']);
     // stored [in, out]: row i, column o is torch value o·in + i
     const want = Array.from({ length: inF * outF }, (_, j) => {
       const at = (j % outF) * inF + Math.floor(j / outF);

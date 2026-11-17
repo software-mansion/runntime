@@ -161,7 +161,6 @@ export function concatRows(parts: readonly LazyTensor[]): LazyTensor {
       bits: quant[0]!.bits,
       groupSize: quant[0]!.groupSize,
       byteLength,
-      onFloatRead: () => quant.forEach((p) => p.onFloatRead?.()),
       async ints() {
         const out = new Int8Array(numel(shape));
         let base = 0;
@@ -202,7 +201,6 @@ export function splitRows(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
         bits: t.bits,
         groupSize: t.groupSize,
         byteLength: share(rows),
-        onFloatRead: t.onFloatRead,
         ints: async () => (await ints()).slice(first * rowElems, (first + rows) * rowElems),
         scales: async () =>
           (await scales()).slice(first * scaleRowElems, (first + rows) * scaleRowElems),
@@ -254,7 +252,6 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
         bits: t.bits,
         groupSize,
         byteLength: share(cols),
-        onFloatRead: t.onFloatRead,
         ints: async () => copyCols(await ints(), new Int8Array(rows * cols), width, from, cols),
         async scales() {
           const data = await scales();
@@ -389,10 +386,8 @@ export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTens
   return { ...t, shape: [...shape] };
 }
 
-/** The values of `t` as f32 in `shape`, each int times the scale of its group,
- *  for a hook that means to load `t` as floats: loadStateDict's warning about
- *  quantized tensors loaded as float leaves it out. Throws CHECKPOINT_MISMATCH
- *  when the element counts differ. */
+/** The values of `t` as f32 in `shape`, each int times the scale of its group.
+ *  Throws CHECKPOINT_MISMATCH when the element counts differ. */
 export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): DerivedTensor {
   if (numel(shape) !== numel(t.shape)) {
     throw mismatch('dequantize', `cannot give [${t.shape.join(', ')}] shape [${shape.join(', ')}]`);
