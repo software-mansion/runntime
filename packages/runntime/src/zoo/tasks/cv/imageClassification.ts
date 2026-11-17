@@ -154,6 +154,8 @@ export async function createImageClassifier(
     const root = defaultRoot();
     const imageToChw = scope.track(createImageToChw(root));
     const softmaxTopK = createSoftmaxTopK(root);
+    // encodeClassify's own pipelines: the classifier's warm-up does not run them.
+    if (opts.warmUp !== false) await Promise.all([imageToChw.compile(), softmaxTopK.compile()]);
     const schemas = {
       input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),
       output: classScoreList,

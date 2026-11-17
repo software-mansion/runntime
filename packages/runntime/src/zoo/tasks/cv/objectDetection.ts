@@ -140,6 +140,7 @@ export async function createObjectDetector(
         maskSize: 0,
       }),
     );
+    if (opts.warmUp !== false) await encoder.compile();
     const schemas = { input: detector.schemas.input, output: encoder.schema };
 
     let disposed = false;
