@@ -639,11 +639,7 @@ describe('fromSafetensors', () => {
       // The tool stores a weight as rows of everything after its first dim:
       // conv.weight is torch [6, 16, 4], and no file setting names the bits
       // or the group size.
-      const quantized = {
-        'layer.weight': [8, 64],
-        'embed.weight': [16, 64],
-        'conv.weight': [6, 64],
-      };
+      const quantized = { 'layer.weight': [8, 64], 'conv.weight': [6, 64] };
       for (const [name, shape] of Object.entries(quantized)) {
         const w = sd.tensors.get(name)!;
         if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
@@ -658,9 +654,9 @@ describe('fromSafetensors', () => {
           expect(Math.abs(ints[i]! * scale - v)).toBeLessThanOrEqual(scale / 2 + 1e-6);
         });
       }
-      // The tensors it leaves alone keep their bytes: a bias, a 1D norm and a
-      // row of 40 values that groups of 32 do not divide.
-      for (const name of ['layer.bias', 'norm.weight', 'odd.weight']) {
+      // The tensors it leaves alone keep their bytes: an embedding table, a
+      // bias, a 1D norm and a row of 40 values that groups of 32 do not divide.
+      for (const name of ['embed.weight', 'layer.bias', 'norm.weight', 'odd.weight']) {
         expect(await sd.tensors.get(name)!.f32()).toEqual(await source.tensors.get(name)!.f32());
       }
       expect(sd.tensors.size).toBe(6);
