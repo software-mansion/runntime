@@ -4,7 +4,12 @@ import {
   transformHfPrivacyFilterStateDict,
 } from '../../../src/zoo/privacy-filter/stateDictHooks.ts';
 import { EagerModel, HIDDEN } from '../../../src/zoo/privacy-filter/model.ts';
-import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
+import {
+  checkpoint,
+  contents,
+  safetensorsFile,
+  type Entry,
+} from '../../core/weights/checkpoint.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
 
 const ZERO = { values: [0, 0], shape: [2] };
@@ -115,6 +120,64 @@ describe('transformHfPrivacyFilterStateDict', () => {
   });
 });
 
+describe('the official checkpoint', () => {
+  // The hook renames, stacks and splits every tensor before the load. Each
+  // must still bind where the file holds it, or the loader fetches an
+  // evicted chunk again.
+  it('lets the model fetch each chunk once', async () => {
+    const [blocks, experts, vocab, logits] = [2, 2, 8, 4];
+    const model = () => new EagerModel({ blocks, experts, vocab, logits, weightFormat: 'f32' });
+    // q is 14 heads of 64, k and v 2 heads each.
+    const [q, kv] = [896, 128];
+    const shapes: Record<string, number[]> = {
+      'model.embed_tokens.weight': [vocab, HIDDEN],
+      'model.norm.weight': [HIDDEN],
+      'score.weight': [logits, HIDDEN],
+      'score.bias': [logits],
+    };
+    for (let n = 0; n < blocks; n++) {
+      const layer = `model.layers.${n}`;
+      Object.assign(shapes, {
+        [`${layer}.input_layernorm.weight`]: [HIDDEN],
+        [`${layer}.post_attention_layernorm.weight`]: [HIDDEN],
+        [`${layer}.self_attn.q_proj.weight`]: [q, HIDDEN],
+        [`${layer}.self_attn.q_proj.bias`]: [q],
+        [`${layer}.self_attn.k_proj.weight`]: [kv, HIDDEN],
+        [`${layer}.self_attn.k_proj.bias`]: [kv],
+        [`${layer}.self_attn.v_proj.weight`]: [kv, HIDDEN],
+        [`${layer}.self_attn.v_proj.bias`]: [kv],
+        [`${layer}.self_attn.o_proj.weight`]: [HIDDEN, q],
+        [`${layer}.self_attn.o_proj.bias`]: [HIDDEN],
+        [`${layer}.self_attn.sinks`]: [14],
+        [`${layer}.mlp.router.weight`]: [experts, HIDDEN],
+        [`${layer}.mlp.router.bias`]: [experts],
+        [`${layer}.mlp.experts.gate_up_proj`]: [experts, HIDDEN, 2 * HIDDEN],
+        [`${layer}.mlp.experts.gate_up_proj_bias`]: [experts, 2 * HIDDEN],
+        [`${layer}.mlp.experts.down_proj`]: [experts, HIDDEN, HIDDEN],
+        [`${layer}.mlp.experts.down_proj_bias`]: [experts, HIDDEN],
+      });
+    }
+    const file = safetensorsFile(
+      Object.fromEntries(
+        Object.keys(shapes)
+          .sort()
+          .map((name) => {
+            const shape = shapes[name]!;
+            return [name, { data: new Float32Array(shape.reduce((a, b) => a * b, 1)), shape }];
+          }),
+      ),
+    );
+    // A block is about 15 MB, so the file spans far more chunks than the 4
+    // the source keeps. A chunk holds o_proj.weight, which sits between the
+    // k and q biases that one tensor reads.
+    const chunks = await chunksFetched(model(), file, 2 ** 21, transformHfPrivacyFilterStateDict);
+    expect(chunks.length).toBeGreaterThan(12);
+    // Once each, but not in order: the stacked q, k and v bias reads the v
+    // bias, a chunk past the q weight that binds next.
+    expect([...chunks].sort((a, b) => a - b)).toEqual(onceInFileOrder(chunks));
+  });
+});
+
 describe('renameExportedNormScales', () => {
   it('renames every RMSNorm scale of an exported file to weight', async () => {
     const sd = await checkpoint('F32', {
@@ -134,22 +197,6 @@ describe('renameExportedNormScales', () => {
     expect(sd.tensors.get('norm.weight')).toBe(before.get('norm.scale'));
   });
 
-  it('keeps every tensor at its place in the file', async () => {
-    const sd = await checkpoint('F32', {
-      'block.0.attn.norm.scale': ZERO,
-      'block.0.attn.qkv.weight': ZERO,
-      'norm.scale': ZERO,
-      'unembedding.weight': ZERO,
-    });
-    renameExportedNormScales(sd);
-    expect([...sd.tensors.keys()]).toEqual([
-      'block.0.attn.norm.weight',
-      'block.0.attn.qkv.weight',
-      'norm.weight',
-      'unembedding.weight',
-    ]);
-  });
-
   // The norms sit all over an exported file. Each must bind where the file
   // holds its scale, or the loader fetches an evicted chunk again.
   it('lets the model fetch each chunk of an exported file once, in file order', async () => {
@@ -164,8 +211,7 @@ describe('renameExportedNormScales', () => {
       norms,
       Object.fromEntries(scales.map((name) => [name, [HIDDEN]])),
     );
-    // A block is about 30 MB, so the file spans far more chunks than the 4
-    // the source keeps.
+    // The file is about 30 MB, far more chunks than the 4 the source keeps.
     const chunks = await chunksFetched(model(), file, 2 ** 20, renameExportedNormScales);
     expect(chunks.length).toBeGreaterThan(12);
     expect(chunks).toEqual(onceInFileOrder(chunks));

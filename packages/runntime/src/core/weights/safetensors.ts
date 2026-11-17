@@ -229,7 +229,7 @@ export const DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024;
 
 /** Coalesces small reads into aligned `chunkBytes` windows, so a checkpoint
  *  costs about ceil(size/chunk) requests rather than one per tensor. Only the
- *  two most recent chunks are kept. `totalBytes` clamps the last one, which
+ *  four most recent chunks are kept. `totalBytes` clamps the last one, which
  *  would otherwise trip the short-body check. */
 export function chunkedSource(
   inner: RangeSource,
@@ -239,7 +239,7 @@ export function chunkedSource(
   const chunks = new Map<number, Promise<Uint8Array>>(); // insertion order = LRU order
   // A fold reads its conv weight and its norm params in one Promise.all, and
   // exporters often park the small tensors at the front of the file, so two
-  // windows let a pair like that evict each other every time.
+  // windows would let a pair like that evict each other every time.
   const KEEP = 4;
   const chunk = (i: number): Promise<Uint8Array> => {
     let p = chunks.get(i);
@@ -285,16 +285,26 @@ export function chunkedSource(
   };
 }
 
+/** A tensor of a checkpoint file, as the tensors read from it know it. */
+export interface FileSource {
+  /** Its name in the file. */
+  name: string;
+  /** Where it sits in the file: its byte offset, or its index in a
+   *  memoryStateDict. Only the order matters. */
+  position: number;
+  byteLength: number;
+}
+
 /** A tensor that may not be fetched or computed yet. File-backed ones carry
  *  the real dtype; derived ones report a nominal 'F32' and say what they
  *  hold through data(). */
 interface LazyTensorBase {
   shape: number[];
   byteLength: number;
-  /** The file tensors it is read from, by their names in the file. Empty
-   *  when it is read from none. loadStateDict binds in the file order of
-   *  the sources, so each chunk of the file is fetched once. */
-  sources: readonly string[];
+  /** The file tensors it is read from. Empty when it is read from none.
+   *  loadStateDict binds in the file order of the sources, so each chunk of
+   *  the file is fetched once. */
+  sources: readonly FileSource[];
   f32(): Promise<Float32Array>;
   halfWords(): Promise<Uint32Array>;
   /** U32 file tensors, or a derived Uint32Array. */
@@ -339,6 +349,9 @@ export interface QuantTensor extends LazyTensorBase {
 
 export type LazyTensor = FileTensor | DerivedTensor | QuantTensor;
 
+/** A tensor whose f32() gives its values: any but a QuantTensor. */
+export type FloatTensor = FileTensor | DerivedTensor;
+
 export interface LazyStateDict {
   metadata: Record<string, string>;
   tensors: Map<string, LazyTensor>;
@@ -377,7 +390,7 @@ function fileTensor(name: string, info: SafeTensorInfo, source: RangeSource): Fi
     dtype: info.dtype,
     shape: info.shape,
     byteLength: info.end - info.begin,
-    sources: [name],
+    sources: [{ name, position: info.begin, byteLength: info.end - info.begin }],
     async f32() {
       const bytes = await fetchBytes();
       if (info.dtype === 'F32') return toF32(bytes);
@@ -416,13 +429,12 @@ function fileTensor(name: string, info: SafeTensorInfo, source: RangeSource): Fi
 }
 
 /** A QuantTensor over `ints` and `scales`. Like a derived tensor it holds
- *  nothing between reads. Without `sources` it is its own source. */
+ *  nothing between reads. */
 export function quantTensor(
   parts: Pick<
     QuantTensor,
-    'name' | 'shape' | 'bits' | 'groupSize' | 'byteLength' | 'ints' | 'scales'
-  > &
-    Partial<Pick<QuantTensor, 'sources'>>,
+    'name' | 'shape' | 'bits' | 'groupSize' | 'byteLength' | 'sources' | 'ints' | 'scales'
+  >,
 ): QuantTensor {
   const refuse = () =>
     Promise.reject(
@@ -431,11 +443,9 @@ export function quantTensor(
         `tensor ${parts.name} is quantized (int${parts.bits}, groups of ${parts.groupSize}) and has no float reading`,
       ),
     );
-  const sources = parts.sources ?? [parts.name];
   return {
     kind: 'quant',
     ...parts,
-    sources,
     f32: refuse,
     halfWords: refuse,
     words: refuse,
@@ -500,6 +510,7 @@ function fileQuantTensor(
     bits,
     groupSize,
     byteLength: info.end - info.begin + (scale.end - scale.begin),
+    sources: [{ name, position: info.begin, byteLength: info.end - info.begin }],
     async ints() {
       const bytes = await source.read(info.begin, info.end);
       if (bits === 4) return unpackInt4(bytes);
@@ -509,7 +520,7 @@ function fileQuantTensor(
   });
 }
 
-export function eagerTensor(data: Float32Array | Uint32Array, shape: number[]): LazyTensor {
+export function eagerTensor(data: Float32Array | Uint32Array, shape: number[]): DerivedTensor {
   return derive(shape, [], () => data, data.byteLength);
 }
 
@@ -518,13 +529,14 @@ export function eagerTensor(data: Float32Array | Uint32Array, shape: number[]): 
 type DerivedData = Float32Array | Uint16Array | Uint32Array;
 
 /** One f32 array per tensor of `T`. */
-type FloatsOf<T extends readonly LazyTensor[]> = { [K in keyof T]: Float32Array };
+type FloatsOf<T extends readonly FloatTensor[]> = { [K in keyof T]: Float32Array };
 
 /** A tensor that `compute` makes from the f32 values of `inputs`, which it
- *  receives in the same order. For a compute that reads halfwords or ints, or
- *  shares one read between outputs, see `deriveFromTensors`, which also says
- *  what `byteLength` is. */
-export function derive<const T extends readonly LazyTensor[]>(
+ *  receives in the same order. A QuantTensor has no f32 values to give:
+ *  `floatTensor` checks an input is not one. For a compute that reads
+ *  halfwords or ints, or shares one read between outputs, see
+ *  `deriveFromTensors`, which also says what `byteLength` is. */
+export function derive<const T extends readonly FloatTensor[]>(
   shape: number[],
   inputs: T,
   compute: (floats: FloatsOf<T>) => DerivedData | Promise<DerivedData>,
@@ -608,7 +620,8 @@ export function memoryStateDict(entries: MemoryStateDict): LazyStateDict {
       ? { data: entry, shape: [entry.length] }
       : entry;
     const tensor = data instanceof Uint16Array ? bf16Tensor(data, shape) : eagerTensor(data, shape);
-    tensors.set(name, { ...tensor, sources: [name] });
+    const source = { name, position: tensors.size, byteLength: tensor.byteLength };
+    tensors.set(name, { ...tensor, sources: [source] });
   }
   return {
     metadata: {},
@@ -617,15 +630,14 @@ export function memoryStateDict(entries: MemoryStateDict): LazyStateDict {
   };
 }
 
-/** In-memory bf16-bits tensor; f32() expands the bits into an f32's top
- *  half. */
-function bf16Tensor(bits: Uint16Array, shape: number[]): FileTensor {
+/** In-memory bf16-bits tensor, less the sources its caller gives it; f32()
+ *  expands the bits into an f32's top half. */
+function bf16Tensor(bits: Uint16Array, shape: number[]): Omit<FileTensor, 'sources'> {
   return {
     kind: 'file',
     dtype: 'BF16',
     shape,
     byteLength: bits.byteLength,
-    sources: [],
     u16: () => Promise.resolve(bits),
     f32: () => Promise.resolve(bf16ToF32(bits)),
     halfWords: () => Promise.reject(new Error('bf16 tensor holds raw bits, not packed f16')),

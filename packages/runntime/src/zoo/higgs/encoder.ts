@@ -15,6 +15,7 @@ import {
   cat,
   concatRows,
   derive,
+  floatTensor,
   elu,
   gatherRowsFrom,
   gelu,
@@ -217,7 +218,7 @@ class PositionConv extends nn.Module {
  *  in] slice scaled to norm g[tap]. In f64. */
 function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   const [out, cIn, kernel] = v.shape as [number, number, number];
-  return derive([out, cIn, kernel], [g, v], ([gs, vs]) => {
+  return derive([out, cIn, kernel], [floatTensor(WHAT, g), floatTensor(WHAT, v)], ([gs, vs]) => {
     const norm = new Float64Array(kernel);
     for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
     const w = new Float32Array(vs.length);
@@ -413,7 +414,7 @@ class Codebook extends nn.Module {
     this.score = new nn.Linear(dim, size);
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    const embed = requireTensor(sd, at(prefix, 'embed'), WHAT);
+    const embed = floatTensor(WHAT, requireTensor(sd, at(prefix, 'embed'), WHAT));
     const [size, dim] = embed.shape as [number, number];
     for (const name of ['cluster_size', 'embed_avg', 'inited']) sd.tensors.delete(at(prefix, name));
     // The rows' bytes count once, under embed.

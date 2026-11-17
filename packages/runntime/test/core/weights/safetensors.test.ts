@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WeightCache } from '../../../src/core/weights/cache.ts';
 import { f16ToF32 } from '../../../src/core/weights/convert.ts';
+import { floatTensor } from '../../../src/core/weights/transforms.ts';
 import {
   bufferSource,
   chunkedSource,
@@ -11,6 +12,7 @@ import {
   httpRangeSource,
   memoryStateDict,
   parseSafetensorsHeader,
+  type FloatTensor,
   type RangeSource,
   type SafeTensorInfo,
 } from '../../../src/core/weights/safetensors.ts';
@@ -930,14 +932,21 @@ describe('sources', () => {
       { 'runntime.quant': '{"version":1,"bits":8,"groupSize":2,"scheme":"symmetric"}' },
     );
     const sd = await fromSafetensors(bufferSource(file), { chunkBytes: 0 });
-    expect(sd.tensors.get('f.weight')!.sources).toEqual(['f.weight']);
-    expect(sd.tensors.get('q.weight')!.sources).toEqual(['q.weight']);
+    // The source is the tensor's name, byte offset and size; a quantized
+    // tensor's is its ints'.
+    const start = payloadStart(file);
+    expect(sd.tensors.get('f.weight')!.sources).toEqual([
+      { name: 'f.weight', position: start, byteLength: 8 },
+    ]);
+    expect(sd.tensors.get('q.weight')!.sources).toEqual([
+      { name: 'q.weight', position: start + 8, byteLength: 2 },
+    ]);
   });
 
   it('an in-memory tensor is its own source, float or bf16 bits', () => {
     const sd = memoryStateDict({ a: new Float32Array(1), b: new Uint16Array(1) });
-    expect(sd.tensors.get('a')!.sources).toEqual(['a']);
-    expect(sd.tensors.get('b')!.sources).toEqual(['b']);
+    expect(sd.tensors.get('a')!.sources).toEqual([{ name: 'a', position: 0, byteLength: 4 }]);
+    expect(sd.tensors.get('b')!.sources).toEqual([{ name: 'b', position: 1, byteLength: 2 }]);
   });
 });
 
@@ -948,7 +957,11 @@ describe('derive', () => {
     // bf16 bits of 3
     c: new Uint16Array([0x4040]),
   });
-  const [a, b, c] = [sd.tensors.get('a')!, sd.tensors.get('b')!, sd.tensors.get('c')!];
+  const [a, b, c] = ['a', 'b', 'c'].map((name) => floatTensor('test', sd.tensors.get(name)!)) as [
+    FloatTensor,
+    FloatTensor,
+    FloatTensor,
+  ];
 
   it('hands compute the f32 values of its inputs, in their order', async () => {
     const t = derive([2], [b, a, c], ([tens, units, three]) =>
@@ -960,11 +973,11 @@ describe('derive', () => {
 
   it('takes its sources and its byteLength from its inputs', () => {
     const sum = derive([2], [b, a], ([x]) => x);
-    expect(sum.sources).toEqual(['b', 'a']);
+    expect(sum.sources.map((s) => s.name)).toEqual(['b', 'a']);
     expect(sum.byteLength).toBe(16);
     // A tensor made from derived ones reads the file tensors behind them.
     const again = derive([2], [sum, a], ([x]) => x);
-    expect(again.sources).toEqual(['b', 'a']);
+    expect(again.sources.map((s) => s.name)).toEqual(['b', 'a']);
     expect(again.byteLength).toBe(24);
   });
 
@@ -986,7 +999,7 @@ describe('derive', () => {
       (await halves.u16()).slice().reverse(),
     );
     expect(await t.data()).toEqual(new Uint16Array([0xc000, 0x3c00]));
-    expect(t.sources).toEqual(['h']);
+    expect(t.sources.map((s) => s.name)).toEqual(['h']);
     expect(t.byteLength).toBe(4);
   });
 

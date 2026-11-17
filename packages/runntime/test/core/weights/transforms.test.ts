@@ -488,6 +488,7 @@ describe('quantized helpers', () => {
       bits: 8,
       groupSize: 2,
       byteLength: 6,
+      sources: [],
       ints,
       scales,
     });
@@ -564,15 +565,15 @@ describe('sources', () => {
   ];
 
   it.for(HELPERS)('%s passes on the sources of a float input', ([, helper, want]) => {
-    expect(helper(float('a'), float('b')).sources).toEqual(want);
+    expect(helper(float('a'), float('b')).sources.map((s) => s.name)).toEqual(want);
   });
 
   it.for(HELPERS)('%s passes on the sources of a quantized input', async ([, helper, want]) => {
-    expect(helper(await quant('a'), await quant('b')).sources).toEqual(want);
+    expect(helper(await quant('a'), await quant('b')).sources.map((s) => s.name)).toEqual(want);
   });
 
   it('transposeWeight and dequantize pass on the sources of their input', async () => {
-    expect(transposeWeight(float('a')).sources).toEqual(['a']);
-    expect(dequantize(await quant('a')).sources).toEqual(['a']);
+    expect(transposeWeight(float('a')).sources.map((s) => s.name)).toEqual(['a']);
+    expect(dequantize(await quant('a')).sources.map((s) => s.name)).toEqual(['a']);
   });
 });

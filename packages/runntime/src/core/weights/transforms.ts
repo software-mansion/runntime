@@ -17,6 +17,8 @@ import { f16ToF32 } from './convert.ts';
 import {
   deriveFromTensors,
   quantTensor,
+  type DerivedTensor,
+  type FloatTensor,
   type LazyTensor,
   type QuantTensor,
 } from './safetensors.ts';
@@ -45,6 +47,13 @@ export async function readFloats(helper: string, t: LazyTensor): Promise<Floats>
     throw mismatch(helper, `source holds ${data.length} values for shape [${t.shape.join(', ')}]`);
   }
   return data;
+}
+
+/** `t` as a tensor that has f32 values, for `derive`. Throws
+ *  CHECKPOINT_MISMATCH, naming `what` reads it, on a QuantTensor. */
+export function floatTensor(what: string, t: LazyTensor): FloatTensor {
+  if (t.kind === 'quant') throw mismatch(what, `${t.name} is quantized, not float`);
+  return t;
 }
 
 const allocLike = (like: Floats, n: number): Floats =>
@@ -385,7 +394,7 @@ export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTens
 
 /** The values of `t` as f32 in `shape`, each int times the scale of its group.
  *  Throws CHECKPOINT_MISMATCH when the element counts differ. */
-export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): LazyTensor {
+export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): DerivedTensor {
   if (numel(shape) !== numel(t.shape)) {
     throw mismatch('dequantize', `cannot give [${t.shape.join(', ')}] shape [${shape.join(', ')}]`);
   }

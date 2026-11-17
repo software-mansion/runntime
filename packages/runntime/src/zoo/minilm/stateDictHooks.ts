@@ -17,6 +17,7 @@
 import {
   concatRows,
   derive,
+  floatTensor,
   scaleWeight,
   type LazyStateDict,
   type LazyTensor,
@@ -26,9 +27,11 @@ import type { MinilmConfig } from './config.ts';
 
 const qualify = (prefix: string, name: string): string => (prefix ? `${prefix}.${name}` : name);
 
+const WHAT = 'minilm state dict';
+
 function take(sd: LazyStateDict, name: string): LazyTensor {
   const t = sd.tensors.get(name);
-  if (!t) throw checkpointMismatch('minilm state dict', `missing tensor '${name}'`);
+  if (!t) throw checkpointMismatch(WHAT, `missing tensor '${name}'`);
   sd.tensors.delete(name);
   return t;
 }
@@ -52,11 +55,15 @@ export function transformMinilmStateDict(
   const tokenType = take(sd, q('embeddings.token_type_embeddings.weight'));
   sd.tensors.set(
     positions,
-    derive(position.shape, [position, tokenType], ([pos, type]) => {
-      const out = new Float32Array(pos.length);
-      for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
-      return out;
-    }),
+    derive(
+      position.shape,
+      [floatTensor(WHAT, position), floatTensor(WHAT, tokenType)],
+      ([pos, type]) => {
+        const out = new Float32Array(pos.length);
+        for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
+        return out;
+      },
+    ),
   );
 
   for (let i = 0; i < cfg.layers; i++) {

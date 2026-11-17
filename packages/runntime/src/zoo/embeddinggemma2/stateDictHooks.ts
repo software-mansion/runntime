@@ -12,6 +12,7 @@
 import {
   concatRows,
   derive,
+  floatTensor,
   f32ArrayToF16Bits,
   permuteRows,
   reshapeWeight,
@@ -107,7 +108,7 @@ export function transformEmbeddingGemma2StateDict(
     // Derived, so the CPU parameter binds f32 rather than raw bf16 bits.
     put(
       `${L}.layer_scalar`,
-      derive([1], [s], ([value]) => value),
+      derive([1], [floatTensor(what, s)], ([value]) => value),
     );
   }
   const ple = 'ple.per_layer_model_projection.weight';
@@ -164,7 +165,7 @@ export function transformEmbeddingGemma2AudioStateDict(
       const t = take(sd, what, q(`${linear}.${b}`));
       put(
         `${linear}.${b}`,
-        derive([1], [t], ([value]) => value),
+        derive([1], [floatTensor(what, t)], ([value]) => value),
       );
     }
   };
@@ -213,7 +214,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     );
     // One set of bounds for the fused projection, checked to agree.
     for (const b of BOUNDS) {
-      const bounds = parts.map((n) => take(sd, what, q(`${A}.${n}.${b}`)));
+      const bounds = parts.map((n) => floatTensor(what, take(sd, what, q(`${A}.${n}.${b}`))));
       put(
         `${A}.qkv.${b}`,
         derive([1], bounds, (each) => {
@@ -231,7 +232,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     const rk = take(sd, what, q(`${A}.relative_k_proj.weight`));
     put(
       `${A}.rel`,
-      derive([window, hidden], [rk], ([w]) => {
+      derive([window, hidden], [floatTensor(what, rk)], ([w]) => {
         const out = new Float32Array(window * hidden);
         for (let j = 0; j < window; j++) {
           for (let o = 0; o < hidden; o++) {
@@ -246,7 +247,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     const dimScale = take(sd, what, q(`${A}.per_dim_scale`));
     put(
       `${A}.q_scale`,
-      derive([headDim], [dimScale], ([scale]) =>
+      derive([headDim], [floatTensor(what, dimScale)], ([scale]) =>
         scale.map((x) => qScale * Math.log1p(Math.exp(x))),
       ),
     );

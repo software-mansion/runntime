@@ -41,7 +41,7 @@ import {
   type LazyStateDict,
   type QuantTensor,
 } from '../weights/safetensors.ts';
-import { dequantize, readFloats, transposeWeight } from '../weights/transforms.ts';
+import { dequantize, floatTensor, readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -561,7 +561,7 @@ export class ConvTranspose1d extends Module {
     if (b && this.bias) {
       sd.tensors.set(
         at('bias'),
-        derive([s * cOut], [b], ([src]) => {
+        derive([s * cOut], [floatTensor('ConvTranspose1d', b)], ([src]) => {
           const out = new Float32Array(s * cOut);
           for (let r = 0; r < s; r++) out.set(src, r * cOut);
           return out;
@@ -650,7 +650,7 @@ export class Snake extends Module {
     const c = this.channels;
     sd.tensors.set(
       at('weight'),
-      derive([2, c], [alpha], ([a]) => {
+      derive([2, c], [floatTensor('Snake', alpha)], ([a]) => {
         const out = new Float32Array(2 * c);
         for (let i = 0; i < c; i++) {
           out[i] = a[i]!;

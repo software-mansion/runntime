@@ -21,6 +21,7 @@ import {
   type MemoryStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { f32ToF16Bits } from '../../../src/core/weights/convert.ts';
+import { concatRows, floatTensor } from '../../../src/core/weights/transforms.ts';
 import { meta } from '../graph/values.ts';
 import { safetensorsFile } from '../weights/checkpoint.ts';
 
@@ -41,6 +42,9 @@ function dict(entries: Entries): LazyStateDict {
   }
   return sd;
 }
+
+/** The float tensor `name` of `sd`, for `derive`. */
+const float = (sd: LazyStateDict, name: string) => floatTensor('test', sd.tensors.get(name)!);
 
 const load = (model: AnyModule, entries: Entries, upload = recorder()) =>
   loadLazyStateDict(model, dict(entries), { upload });
@@ -89,7 +93,7 @@ describe('transform hooks', () => {
     class Split extends Module {
       w = new Parameter(meta([2]));
       override transformStateDict(sd: LazyStateDict) {
-        const fused = sd.tensors.get('fused')!;
+        const fused = float(sd, 'fused');
         sd.tensors.set(
           'w',
           derive([2], [fused], ([values]) => values.subarray(0, 2)),
@@ -228,13 +232,13 @@ describe('binding', () => {
       made = new Parameter(meta([1]));
       override transformStateDict(sd: LazyStateDict) {
         const take = (name: string) => {
-          const t = sd.tensors.get(name)!;
+          const t = float(sd, name);
           sd.tensors.delete(name);
           return t;
         };
         const one = () => new Float32Array(1);
-        // One from no file tensor, one taken out and put back under its name
-        // with no inputs, one built from two others, and a rename.
+        // One from no file tensor, one replaced under its name by one from
+        // no file tensor, one built from two others, and a rename.
         sd.tensors.set('made', derive([1], [], one));
         sd.tensors.set('replaced', (take('replaced'), derive([1], [], one)));
         sd.tensors.set('summed', derive([1], [take('b'), take('a')], one));
@@ -253,7 +257,63 @@ describe('binding', () => {
       strict: true,
       onProgress: (name) => names.push(name),
     });
-    expect(names).toEqual(['first', 'moved', 'summed', 'replaced', 'last', 'made']);
+    expect(names).toEqual(['first', 'moved', 'summed', 'last', 'made', 'replaced']);
+  });
+
+  // A runner may rename or fuse tensors before the load, as privacy-filter
+  // does for the official checkpoint: the file order must survive it.
+  class Renamed extends Module {
+    b = new Parameter(meta([1, 1]));
+    c = new Parameter(meta([1, 1]));
+    renamed = new Parameter(meta([1, 1]));
+  }
+  class Stacked extends Module {
+    b = new Parameter(meta([1, 1]));
+    qkv = new Parameter(meta([3, 1]));
+  }
+  it.each<{
+    name: string;
+    file: string[];
+    model: AnyModule;
+    prepare: (sd: LazyStateDict) => void;
+    want: string[];
+  }>([
+    {
+      name: 'renamed',
+      file: ['a', 'b', 'c'],
+      model: new Renamed(),
+      prepare: (sd) => {
+        const a = sd.tensors.get('a')!;
+        sd.tensors.delete('a');
+        sd.tensors.set('renamed', a);
+      },
+      want: ['renamed', 'b', 'c'],
+    },
+    {
+      name: 'stacked from three',
+      file: ['q', 'k', 'v', 'b'],
+      model: new Stacked(),
+      prepare: (sd) => {
+        const parts = ['q', 'k', 'v'].map((name) => sd.tensors.get(name)!);
+        for (const name of ['q', 'k', 'v']) sd.tensors.delete(name);
+        sd.tensors.set('qkv', concatRows(parts));
+      },
+      want: ['qkv', 'b'],
+    },
+  ])('binds a tensor $name before the load where the file holds it', async (c) => {
+    const sd = memoryStateDict(
+      Object.fromEntries(
+        c.file.map((name) => [name, { data: new Float32Array(1), shape: [1, 1] }]),
+      ),
+    );
+    c.prepare(sd);
+    const names: string[] = [];
+    await loadLazyStateDict(c.model, sd, {
+      upload: recorder(),
+      strict: true,
+      onProgress: (name) => names.push(name),
+    });
+    expect(names).toEqual(c.want);
   });
 
   it('binds a tensor where the largest of its sources is, not a small one far from it', async () => {
@@ -262,11 +322,11 @@ describe('binding', () => {
       weight = new Parameter(meta([4]));
       late = new Parameter(meta([1]));
       override transformStateDict(sd: LazyStateDict) {
-        const norm = sd.tensors.get('norm')!;
+        const norm = float(sd, 'norm');
         sd.tensors.delete('norm');
         sd.tensors.set(
           'weight',
-          derive([4], [norm, sd.tensors.get('weight')!], ([, w]) => w),
+          derive([4], [norm, float(sd, 'weight')], ([, w]) => w),
         );
       }
     }
@@ -290,8 +350,8 @@ describe('binding', () => {
       weight = new Parameter(meta([1]));
       other = new Parameter(meta([1]));
       override transformStateDict(sd: LazyStateDict) {
-        const weight = sd.tensors.get('weight')!;
-        const norm = sd.tensors.get('norm')!;
+        const weight = float(sd, 'weight');
+        const norm = float(sd, 'norm');
         sd.tensors.delete('norm');
         sd.tensors.set(
           'weight',
@@ -379,6 +439,7 @@ describe('a quantized tensor', () => {
     bits: 8,
     groupSize: 2,
     byteLength: 8,
+    sources: [],
     ints,
     scales,
   });

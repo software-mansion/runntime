@@ -8,7 +8,12 @@ import { defaultRoot } from '../gpu/context.ts';
 import { inGpuErrorScopes } from '../gpu/errorScopes.ts';
 import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
 import { bf16ToF16Bits, f32ArrayToF16Bits } from '../weights/convert.ts';
-import type { DerivedTensor, FileTensor, LazyStateDict } from '../weights/safetensors.ts';
+import type {
+  DerivedTensor,
+  FileSource,
+  FileTensor,
+  LazyStateDict,
+} from '../weights/safetensors.ts';
 import { CpuParameter, type AnyModule } from './module.ts';
 
 export type UploadFn = (data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) => Value;
@@ -116,11 +121,6 @@ async function bindStateDict(
   upload: UploadFn,
   opts: LoadStateDictOpts,
 ): Promise<void> {
-  // The file's tensors in file order with their sizes, before a hook moves,
-  // renames or replaces a key.
-  const inFile = new Map(
-    [...sd.tensors].map(([name, t], position) => [name, { position, byteLength: t.byteLength }]),
-  );
   model.transformStateDict?.(sd, '');
   const visit = (parent: AnyModule, parentPrefix: string): void => {
     for (const [name, child] of parent.namedChildren()) {
@@ -151,25 +151,25 @@ async function bindStateDict(
 
   // Bind in file order, so each chunk is read once. Module order jumps
   // around the payload and refetches evicted chunks. A tensor sits where the
-  // largest of its sources does, wherever a hook put its key: exporters
-  // often park the small tensors at the front of the file, far from the
-  // weight they fold into. Of sources as large, the first in the file
-  // counts. One with no source in the file sits where the file holds its
-  // own name, or last.
+  // largest of its sources does, whatever key a hook gave it, before or
+  // during the load: exporters often park the small tensors at the front of
+  // the file, far from the weight they fold into. Of sources as large, the
+  // first in the file counts. One read from no file tensor sits last.
   const dictOrder = new Map([...sd.tensors.keys()].map((name, i) => [name, i]));
   const fileOrder = new Map(
     params.map(([name]) => {
-      const sources = sd.tensors.get(name)!.sources.flatMap((s) => inFile.get(s) ?? []);
-      const largest = sources.reduce<(typeof sources)[number] | undefined>(
-        (best, s) =>
-          !best ||
-          s.byteLength > best.byteLength ||
-          (s.byteLength === best.byteLength && s.position < best.position)
-            ? s
-            : best,
-        undefined,
-      );
-      return [name, (largest ?? inFile.get(name))?.position ?? Infinity];
+      const largest = sd.tensors
+        .get(name)!
+        .sources.reduce<FileSource | undefined>(
+          (best, s) =>
+            !best ||
+            s.byteLength > best.byteLength ||
+            (s.byteLength === best.byteLength && s.position < best.position)
+              ? s
+              : best,
+          undefined,
+        );
+      return [name, largest?.position ?? Infinity];
     }),
   );
   params.sort(([a], [b]) =>
