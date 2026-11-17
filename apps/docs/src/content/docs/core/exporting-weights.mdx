@@ -130,8 +130,9 @@ is a normal float tensor. An int tensor in a file without `runntime.quant`
 fails to load.
 
 **What is in the file.** `runntime quantize` quantizes every float tensor
-named `*.weight` that has 2 or more dims: Linear and conv weights and
-embedding tables. Biases and norms stay float. It stores each quantized
+named `*.weight` that has 2 or more dims: Linear and conv weights. Biases
+and norms stay float, and so do embedding tables and `lm_head`, because
+quantizing them usually costs too much quality. It stores each quantized
 tensor as rows, `[first dim, everything else]`, so a `Conv1d` weight
 `[out, in, k]` becomes `[out, in·k]`, and groups of `--group-size` values
 run along that row. The group size has to divide the row: `in` for a
@@ -139,11 +140,15 @@ Linear, `in·k` for a conv. A tensor it doesn't divide stays float. The
 runtime loads each tensor back into its layer's shape.
 
 **Which layers run quantized.** `Linear`, `Conv1d` and `ConvTranspose1d`
-run on the int weights. Everything else, like an embedding table, loads
-as float: the download is still smaller, the memory and speed are those of
-the float model. The same happens to a weight whose shape the quantized
-kernels can't take, such as a Linear with a group size that isn't a
-multiple of 4. A console warning lists the tensors that loaded as float.
+run on the int weights. Any other quantized tensor, like a `Conv2d` weight
+or an embedding table you chose to quantize, is turned back into floats at
+load. It keeps the rounding of its ints, so the download is smaller but
+the model is no faster and uses no less memory than the float one. A
+table kept on the CPU takes 4 bytes per value.
+
+A `Linear` or conv weight whose shape the quantized kernels can't take
+also loads as float, and a console warning names it. To stay on the
+quantized kernels, keep `--group-size` a multiple of 4.
 
 **Making a file.** `runntime quantize` lives in the repository under
 `tools/python` and runs with [uv](https://docs.astral.sh/uv/):
@@ -159,7 +164,7 @@ uv run --no-dev runntime quantize model.safetensors model.int8.safetensors --bit
 - `--group-size N`: how many values of a row share one scale. Default 32.
 - `--include GLOB`: which tensors to quantize. Default `*.weight`.
 - `--exclude GLOB`: tensors to keep float, like a layer that loses too
-  much.
+  much. Replaces the default `*embed*`, `*pos_emb*` and `lm_head.*`.
 - `--drop GLOB`: tensors to leave out of the file, like a pooler the model
   never reads.
 
@@ -167,10 +172,13 @@ The tool prints one line per tensor with its error against the float
 weights, or why it was skipped.
 
 **Picking a setting.** On all-MiniLM-L6-v2, int8 keeps every embedding at
-cosine similarity 0.9998 or higher against the float model; int4 drops to
-0.94 and changes the top 3 search results for 8 of 20 queries. Use int8.
-Try int4 only when the download size matters more, and check it on your
-own data.
+cosine similarity 0.9997 or higher against the float model. int4 drops as
+low as 0.93 and reorders the top 3 search results for 12 of 20 queries,
+where int8 reorders them for 2. Use int8. Try int4 only when the download
+size matters more, and check it on your own data.
+
+Use int8 for models built on 2D convolutions. int4 breaks the outputs of
+MobileNetV4, DepthART and YOLO26.
 
 A quantization-aware trained checkpoint quantizes the same way if it was
 trained on symmetric int8 or int4 with one scale per group of inputs.
