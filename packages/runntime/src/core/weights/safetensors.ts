@@ -346,9 +346,6 @@ export interface QuantTensor extends LazyTensorBase {
   /** Row-major, shape `[...lead, last / groupSize]`. F16 halfwords as stored
    *  in the file; f32 once a helper changed them. */
   scales(): Promise<Float32Array | Uint16Array>;
-  /** Runs when f32() is called. loadStateDict sets it to learn which tensors
-   *  loaded as float; a helper passes its sources' on to its outputs. */
-  onFloatRead?: () => void;
 }
 
 export type LazyTensor = FileTensor | DerivedTensor | QuantTensor;
@@ -356,6 +353,10 @@ export type LazyTensor = FileTensor | DerivedTensor | QuantTensor;
 export interface LazyStateDict {
   metadata: Record<string, string>;
   tensors: Map<string, LazyTensor>;
+  /** Names of the quantized weights a Linear, Conv1d or ConvTranspose1d
+   *  loaded as float because its quantized kernel cannot run them. The
+   *  layers' hooks fill it and loadStateDict warns about them. */
+  quantizedAsFloat?: string[];
   totalBytes(): number;
 }
 
@@ -450,15 +451,7 @@ export function dequantizeInts(
 export function quantTensor(
   parts: Pick<
     QuantTensor,
-    | 'name'
-    | 'shape'
-    | 'bits'
-    | 'groupSize'
-    | 'byteLength'
-    | 'sources'
-    | 'ints'
-    | 'scales'
-    | 'onFloatRead'
+    'name' | 'shape' | 'bits' | 'groupSize' | 'byteLength' | 'sources' | 'ints' | 'scales'
   >,
 ): QuantTensor {
   const refuse = () =>
@@ -469,7 +462,6 @@ export function quantTensor(
       ),
     );
   const f32 = async () => {
-    parts.onFloatRead?.();
     const [ints, scales] = await Promise.all([parts.ints(), parts.scales()]);
     return dequantizeInts(ints, scales, parts.groupSize);
   };

@@ -1,12 +1,13 @@
 import type { TgpuRoot } from 'typegpu';
 import { describe, expect, it, vi } from 'vitest';
 import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
-import { Conv1d, Linear } from '../../../src/core/nn/layers.ts';
+import { Conv1d, ConvTranspose1d, Linear } from '../../../src/core/nn/layers.ts';
 import { gpuUpload, loadLazyStateDict } from '../../../src/core/nn/loadStateDict.ts';
 import {
   Buffer,
   CpuParameter,
   Module,
+  ModuleList,
   Parameter,
   type AnyModule,
 } from '../../../src/core/nn/module.ts';
@@ -21,7 +22,7 @@ import {
   type MemoryStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { f32ToF16Bits } from '../../../src/core/weights/convert.ts';
-import { concatRows, dequantize } from '../../../src/core/weights/transforms.ts';
+import { concatRows } from '../../../src/core/weights/transforms.ts';
 import { meta } from '../graph/values.ts';
 import { safetensorsFile } from '../weights/checkpoint.ts';
 
@@ -455,6 +456,8 @@ describe('a quantized tensor', () => {
     const upload = recorder();
     await load(new Table(), { weight: quant }, upload);
     expect(upload.mock.calls).toEqual([[want, meta([2, 2], dtype)]]);
+    // No quantized kernel reads a plain parameter, so there is nothing to say.
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
@@ -468,6 +471,7 @@ describe('a quantized tensor', () => {
     await load(table, { weight: quant }, upload);
     expect(table.weight.data).toEqual(new Float32Array(DEQUANTIZED));
     expect(upload).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
@@ -479,16 +483,17 @@ describe('a quantized tensor', () => {
     const upload = recorder();
     await expect(load(new Packed(), { weight: quant }, upload)).rejects.toMatchObject({
       code: 'CHECKPOINT_MISMATCH',
-      message: expect.stringMatching(/'weight' is quantized \(int8\), but this quantW parameter/),
+      message:
+        "loadStateDict: 'weight' is quantized (int8), but this quantW parameter takes packed " +
+        'words, which only its layer makes',
     });
     expect(upload).not.toHaveBeenCalled();
     expect(ints).not.toHaveBeenCalled();
   });
 });
 
-describe('the warning about quantized tensors loaded as float', () => {
-  // int8 in groups of 4. fc is [out 4, in 8], which the quantized matmul
-  // takes. odd is [out 4, in 12]: 12 % 8 != 0, so it loads as float.
+describe('the warning about quantized weights loaded as float', () => {
+  // int8 in groups of 4, all zeros.
   const named = (prefix: string, rows: number, cols: number) => ({
     [`${prefix}.weight`]: { data: new Int8Array(rows * cols), shape: [rows, cols] },
     [`${prefix}.weight_scale`]: {
@@ -499,39 +504,47 @@ describe('the warning about quantized tensors loaded as float', () => {
   const setting = { 'runntime.quant': JSON.stringify({ version: 1, scheme: 'symmetric' }) };
   const open = (tensors: Parameters<typeof safetensorsFile>[0]) =>
     fromSafetensors(bufferSource(safetensorsFile(tensors, setting)), { chunkBytes: 0 });
+  const WARNING =
+    'loadStateDict: quantized weights loaded as float, the quantized kernel of their layer ' +
+    'cannot run their shape or group size: ';
 
-  class Net extends Module {
-    fc = new Linear(8, 4, { bias: false });
-    odd = new Linear(12, 4, { bias: false });
-    table = new Table();
-    conv = new Conv1d(3, 4, 4, { bias: false });
-  }
   class Table extends Module {
     weight = new Parameter(meta([4, 4]));
+  }
+  class Net extends Module {
+    // quantized: [out 4, in 8], in 8 % 8 == 0
+    fc = new Linear(8, 4, { bias: false });
+    // float, warned: [out 4, in 12], in 12 % 8 != 0
+    odd = new Linear(12, 4, { bias: false });
+    // float, silent: no quantized kernel reads a plain parameter
+    table = new Table();
+    // float, warned: Conv1d [out 4, in 3, kernel 4] as [4, 12], in 3 % 4 != 0
+    conv = new Conv1d(3, 4, 4, { bias: false });
+    // float, warned: ConvTranspose1d [in 4, out 2, kernel 2] as [4, 4], out 2 % 4 != 0
+    up = new ConvTranspose1d(4, 2, 2, { stride: 2, bias: false });
+  }
+  class Holder extends Module {
+    table = new Table();
   }
   class Fits extends Module {
     fc = new Linear(8, 4, { bias: false });
   }
 
-  it('names every tensor that fell back, once, and not the one that loaded quantized', async () => {
+  it('names every weight whose layer has a quantized kernel that cannot run it', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sd = await open({
       ...named('fc', 4, 8),
       ...named('odd', 4, 12),
       ...named('table', 4, 4),
-      // Conv1d [out 4, in 3, kernel 4] as [4, 12]: in 3 % 4 != 0
       ...named('conv', 4, 12),
+      ...named('up', 4, 4),
     });
     const upload = recorder();
     await loadLazyStateDict(new Net(), sd, { upload });
-    expect(warn.mock.calls).toEqual([
-      [
-        'loadStateDict: quantized tensors loaded as float, no quantized kernel runs them: ' +
-          'odd.weight, table.weight, conv.weight',
-      ],
-    ]);
+    expect(warn.mock.calls).toEqual([[`${WARNING}odd.weight, conv.weight, up.weight`]]);
     expect(upload.mock.calls.map(([, shape]) => shape.dtype)).toEqual([
       'quantW',
+      'f32',
       'f32',
       'f32',
       'f32',
@@ -540,12 +553,25 @@ describe('the warning about quantized tensors loaded as float', () => {
     warn.mockRestore();
   });
 
-  it('names the file tensors behind a weight a hook renamed, stacked and read as floats', async () => {
-    // q and k stack into one [8, 12] weight: in 12 % 8 != 0, so it loads as
-    // float. The hook reads pos as floats itself.
+  it('lists every name, however many', async () => {
+    class Many extends Module {
+      layers = new ModuleList(Array.from({ length: 12 }, () => new Linear(12, 4, { bias: false })));
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tensors = Object.assign(
+      {},
+      ...Array.from({ length: 12 }, (_, i) => named(`layers.${i}`, 4, 12)),
+    ) as Parameters<typeof safetensorsFile>[0];
+    await loadLazyStateDict(new Many(), await open(tensors), { upload: recorder() });
+    const names = Array.from({ length: 12 }, (_, i) => `layers.${i}.weight`);
+    expect(warn.mock.calls).toEqual([[WARNING + names.join(', ')]]);
+    warn.mockRestore();
+  });
+
+  it('names the sources of a weight a hook stacked', async () => {
+    // q and k stack into one [8, 12] weight: in 12 % 8 != 0.
     class Fused extends Module {
       qk = new Linear(12, 8, { bias: false });
-      pos = new Parameter(meta([4, 4]));
       override transformStateDict(sd: LazyStateDict): void {
         const take = (name: string) => {
           const t = sd.tensors.get(name)!;
@@ -553,44 +579,25 @@ describe('the warning about quantized tensors loaded as float', () => {
           return t;
         };
         sd.tensors.set('qk.weight', concatRows([take('q.weight'), take('k.weight')]));
-        const table = take('table.weight');
-        sd.tensors.set(
-          'pos',
-          derive([4, 4], [table], ([floats]) => floats),
-        );
       }
     }
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const sd = await open({ ...named('q', 4, 12), ...named('k', 4, 12), ...named('table', 4, 4) });
+    const sd = await open({ ...named('q', 4, 12), ...named('k', 4, 12) });
     await loadLazyStateDict(new Fused(), sd, { upload: recorder() });
-    expect(warn.mock.calls).toEqual([
-      [
-        'loadStateDict: quantized tensors loaded as float, no quantized kernel runs them: ' +
-          'q.weight, k.weight, table.weight',
-      ],
-    ]);
+    expect(warn.mock.calls).toEqual([[`${WARNING}concatRows(q.weight, k.weight)`]]);
     warn.mockRestore();
   });
 
-  it('leaves out a tensor a hook dequantized on purpose', async () => {
-    class Folded extends Module {
-      table = new Parameter(meta([4, 4]));
-      override transformStateDict(sd: LazyStateDict): void {
-        const t = sd.tensors.get('table.weight')!;
-        sd.tensors.delete('table.weight');
-        if (t.kind !== 'quant') throw new Error('expected a quantized tensor');
-        sd.tensors.set('table', dequantize(t));
-      }
-    }
+  it('stays silent about a tensor no quantized kernel reads', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await loadLazyStateDict(new Folded(), await open(named('table', 4, 4)), {
+    await loadLazyStateDict(new Holder(), await open(named('table', 4, 4)), {
       upload: recorder(),
     });
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 
-  it('stays silent when every quantized tensor loads quantized', async () => {
+  it('stays silent when every quantized weight loads quantized', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await loadLazyStateDict(new Fits(), await open(named('fc', 4, 8)), { upload: recorder() });
     expect(warn).not.toHaveBeenCalled();
