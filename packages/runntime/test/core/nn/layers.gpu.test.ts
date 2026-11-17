@@ -404,79 +404,45 @@ describe('FusedLinear', () => {
     groupSize,
     bias,
   });
-  const int4 = (out: number, groupSize = 16): FusedPart => ({
-    out,
-    bits: 4,
-    groupSize,
-    bias: true,
-  });
-  const CASES: {
-    name: string;
-    m: number;
-    inF: number;
-    parts: FusedPart[];
-    quantized: boolean;
-  }[] = [
-    { name: '1 float part', m: 3, inF: 24, parts: [float(10)], quantized: false },
-    { name: '2 float parts', m: 5, inF: 24, parts: [float(10), float(7)], quantized: false },
-    {
-      name: '3 float parts, the middle one without a bias',
-      m: 7,
-      inF: 64,
-      parts: [float(48), float(16, false), float(16)],
-      quantized: false,
-    },
-    {
-      name: '5 float parts without a bias',
-      m: 2,
-      inF: 16,
-      parts: [1, 4, 2, 7, 3].map((out) => float(out, false)),
-      quantized: false,
-    },
+  const int4 = (out: number): FusedPart => ({ out, bits: 4, groupSize: 16, bias: true });
+  const CASES: [name: string, m: number, inF: number, parts: FusedPart[], quantized: boolean][] = [
+    ['1 float part', 3, 24, [float(10)], false],
+    ['2 float parts', 5, 24, [float(10), float(7)], false],
+    [
+      '3 float parts, the middle one without a bias',
+      7,
+      64,
+      [float(48), float(16, false), float(16)],
+      false,
+    ],
+    ['5 float parts without a bias', 2, 16, [1, 4, 2, 7, 3].map((out) => float(out, false)), false],
     // quantized: in 64 % 8 == 0, stacked out 80 % 4 == 0, groups of 16
-    {
-      name: '3 int8 parts',
-      m: 7,
-      inF: 64,
-      parts: [int8(48), int8(16), int8(16)],
-      quantized: true,
-    },
+    ['3 int8 parts', 7, 64, [int8(48), int8(16), int8(16)], true],
     // quantized: stacked out 12 % 4 == 0, though no part is a multiple of 4
-    {
-      name: '5 int8 parts of sizes off the int8 word',
-      m: 4,
-      inF: 32,
-      parts: [1, 2, 3, 1, 5].map((out) => int8(out, 8, false)),
-      quantized: true,
-    },
+    [
+      '5 int8 parts of sizes off the int8 word',
+      4,
+      32,
+      [1, 2, 3, 1, 5].map((out) => int8(out, 8, false)),
+      true,
+    ],
     // quantized: stacked out 8 % 8 == 0, each part 4 % 8 != 0
-    { name: '2 int4 parts', m: 3, inF: 32, parts: [int4(4), int4(4)], quantized: true },
+    ['2 int4 parts', 3, 32, [int4(4), int4(4)], true],
     // float: a float part cannot stack with ints
-    {
-      name: 'a float part between two int8 parts',
-      m: 3,
-      inF: 32,
-      parts: [int8(8), float(5), int8(4)],
-      quantized: false,
-    },
+    ['a float part between two int8 parts', 3, 32, [int8(8), float(5), int8(4)], false],
     // float: int8 and int4 cannot share packed words
-    { name: 'int8 next to int4', m: 3, inF: 32, parts: [int8(8), int4(8)], quantized: false },
+    ['int8 next to int4', 3, 32, [int8(8), int4(8)], false],
     // float: two group sizes cannot share a scale grid
-    {
-      name: 'int8 in groups of 16 next to groups of 8',
-      m: 3,
-      inF: 32,
-      parts: [int8(8, 16), int8(8, 8)],
-      quantized: false,
-    },
+    ['int8 in groups of 16 next to groups of 8', 3, 32, [int8(8, 16), int8(8, 8)], false],
   ];
-  it.for(CASES.flatMap((c) => (['f32', 'f16'] as const).map((dtype) => ({ ...c, dtype }))))(
-    '$dtype $name: [$m, $inF]',
-    async (c, ctx) => {
-      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
-      await checkFusedLinear(c, c.dtype);
-    },
-  );
+  it.for(
+    CASES.flatMap(([name, m, inF, parts, quantized]) =>
+      (['f32', 'f16'] as const).map((dtype) => ({ name, m, inF, parts, quantized, dtype })),
+    ),
+  )('$dtype $name: [$m, $inF]', async (c, ctx) => {
+    if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    await checkFusedLinear(c, c.dtype);
+  });
 });
 
 describe('Embedding with a quantized table', () => {
