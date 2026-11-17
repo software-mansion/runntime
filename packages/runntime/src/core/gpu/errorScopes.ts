@@ -6,6 +6,7 @@
  * regions on the same device.
  */
 import { RunntimeError } from '../error.ts';
+import { withAsyncCompile } from './asyncCompile.ts';
 
 export async function inGpuErrorScopes<T>(
   device: GPUDevice,
@@ -42,12 +43,16 @@ export async function inGpuErrorScopes<T>(
   return result;
 }
 
+/** Runs the model once at load, so its pipelines compile, without blocking
+ *  the page, before the first call. Returns `run`'s output.
+ *  @throws RunntimeError `EXECUTION_FAILED` on a GPU error, a pipeline that
+ *  does not compile, or an output that is empty, non-finite or all zero. */
 export async function warmUp(
   device: GPUDevice,
   run: () => Promise<Float32Array>,
   stage = 'pipeline warm-up',
 ): Promise<Float32Array> {
-  const out = await inGpuErrorScopes(device, stage, run);
+  const out = await withAsyncCompile(device, () => inGpuErrorScopes(device, stage, run));
   if (out.length === 0 || !out.every(Number.isFinite) || out.every((v) => v === 0)) {
     throw new RunntimeError(
       'EXECUTION_FAILED',
