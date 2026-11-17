@@ -120,14 +120,31 @@ describe('compilePipelines', () => {
     expect(b.pipeline.initAsync).toHaveBeenCalledTimes(1);
   });
 
-  it('starts every compile before the first one finishes', () => {
+  it('starts each compile in a task of its own, before the first one finishes', async () => {
     const a = fakePipeline();
     const b = fakePipeline();
-    void compilePipelines([a.pipeline, b.pipeline]);
+    const done = compilePipelines([a.pipeline, b.pipeline]);
     expect(a.pipeline.initAsync).toHaveBeenCalledTimes(1);
-    expect(b.pipeline.initAsync).toHaveBeenCalledTimes(1);
+    // Microtasks run in the task that started a: b must not start in it.
+    await Promise.resolve();
+    expect(b.pipeline.initAsync).not.toHaveBeenCalled();
+    // a is still compiling when b starts.
+    await vi.waitFor(() => expect(b.pipeline.initAsync).toHaveBeenCalledTimes(1));
     a.finish();
     b.finish();
+    await done;
+  });
+
+  it('reports a compile that fails while a later one waits to start', async () => {
+    const a = fakePipeline();
+    const b = fakePipeline();
+    a.fail(new Error('bad shader'));
+    b.finish();
+    await expect(compilePipelines([a.pipeline, b.pipeline])).rejects.toMatchObject({
+      code: 'EXECUTION_FAILED',
+      message: 'GPU error during pipeline compile: bad shader',
+    });
+    expect(b.pipeline.initAsync).toHaveBeenCalledTimes(1);
   });
 
   it.each([

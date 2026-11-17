@@ -67,13 +67,36 @@ async function compile(pipeline: Pipeline): Promise<void> {
   }
 }
 
-/** Compiles each pipeline once, all at the same time, without blocking.
+/** Resolves in a later task, so the page handles input and paints first. A
+ *  message, not a timer: a hidden tab runs timers once a second. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => {
+    const { port1, port2 } = new MessageChannel();
+    port1.onmessage = () => {
+      port1.close();
+      resolve();
+    };
+    port2.postMessage(undefined);
+  });
+}
+
+/** Compiles each pipeline once, without blocking. The compiles overlap, but
+ *  each starts in a task of its own: initAsync() resolves the pipeline's WGSL
+ *  before it returns, and that is the part that runs on the main thread.
  *  @throws RunntimeError `EXECUTION_FAILED` when a pipeline does not compile. */
 export async function compilePipelines(pipelines: Iterable<Pipeline>): Promise<void> {
   if (!enabled) return;
   const pending = [...new Set(pipelines)].filter((p) => !compiled.has(p));
+  const compiles: Promise<void>[] = [];
+  for (const [i, pipeline] of pending.entries()) {
+    if (i > 0) await nextTask();
+    const started = compile(pipeline);
+    // Handled by the Promise.all below, which a later task attaches.
+    started.catch(() => undefined);
+    compiles.push(started);
+  }
   try {
-    await Promise.all(pending.map(compile));
+    await Promise.all(compiles);
   } catch (err) {
     throw new RunntimeError(
       'EXECUTION_FAILED',
