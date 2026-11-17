@@ -4,6 +4,14 @@ import { bufferSource, type RangeSource } from '../../src/core/weights/safetenso
 import type { AnyModule } from '../../src/core/nn/module.ts';
 import { randomF32 } from '../gpu.ts';
 
+/** One tensor of a random file. `offset` is added to every value: 1 keeps a
+ *  BatchNorm variance positive. */
+export interface RandomTensor {
+  name: string;
+  shape: number[];
+  offset?: number;
+}
+
 /** Every parameter and buffer of `model` under its own name and shape,
  *  random in [-scale, scale), with `shapes` overriding the shape a
  *  checkpoint stores differently. */
@@ -11,13 +19,23 @@ export function randomSafetensors(
   model: AnyModule,
   { scale = 1, shapes = {} }: { scale?: number; shapes?: Record<string, number[]> } = {},
 ): RangeSource {
-  const tensors: { name: string; shape: number[]; data: Float32Array }[] = [];
-  let seed = 1;
-  for (const [name, p] of [...model.namedParameters(), ...model.namedBuffers()]) {
-    const shape = shapes[name] ?? [...(p.shape.dims ?? [p.shape.elems])];
+  const slots = [...model.namedParameters(), ...model.namedBuffers()];
+  return randomTensorsFile(
+    slots.map(([name, p]) => ({
+      name,
+      shape: shapes[name] ?? [...(p.shape.dims ?? [p.shape.elems])],
+    })),
+    scale,
+  );
+}
+
+/** `list` as a safetensors file, each tensor random in [-scale, scale) plus
+ *  its offset. */
+export function randomTensorsFile(list: readonly RandomTensor[], scale = 1): RangeSource {
+  const tensors = list.map(({ name, shape, offset = 0 }, i) => {
     const elems = shape.reduce((a, b) => a * b, 1);
-    tensors.push({ name, shape, data: randomF32(elems, seed++).map((v) => v * scale) });
-  }
+    return { name, shape, data: randomF32(elems, i + 1).map((v) => v * scale + offset) };
+  });
   // The format: a u64 header length, the JSON header, then the raw bytes.
   const header: Record<string, unknown> = {};
   let offset = 0;

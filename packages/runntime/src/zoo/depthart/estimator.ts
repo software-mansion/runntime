@@ -13,6 +13,7 @@ import {
   toHwc4,
   uploadF32,
   warmUp,
+  withAsyncCompile,
   writeF32,
   type F32Buffer,
   type LazyStateDict,
@@ -63,6 +64,9 @@ export function variantFromStateDict(sd: LazyStateDict): DepthartVariant {
 interface Frame {
   buffer: F32Buffer;
   target: Value;
+  /** Resolves once the recording's submit has run; encodeReplay throws
+   *  before that. */
+  ready: Promise<void>;
   replay: () => void;
   encodeReplay: (encoder: GPUCommandEncoder) => void;
   ex: RunntimeExecutor;
@@ -111,6 +115,7 @@ export async function createEstimator(
       return {
         buffer,
         target: cap.targets,
+        ready: cap.ready,
         replay: cap.replay,
         encodeReplay: cap.encodeReplay,
         ex,
@@ -125,6 +130,16 @@ export async function createEstimator(
       }
       return f;
     };
+
+    // encode()'s frame. Its recording submit is the pipelines' first use, so
+    // it is warm-up work.
+    const recordAtInputSize = () => frame(size, size);
+    const atInputSize =
+      opts.warmUp !== false
+        ? withAsyncCompile(root.device, recordAtInputSize)
+        : recordAtInputSize();
+    // encode() is safe from the first call: the recorded pipelines are compiled.
+    await atInputSize.ready;
 
     let queue: Promise<unknown> = Promise.resolve();
     const run = (pixels: Float32Array, h: number, w: number) => {
