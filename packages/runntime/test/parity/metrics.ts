@@ -96,3 +96,45 @@ export function missing(
   for (const item of wanted) if (!have.has(item)) gaps.push(scores[item]! - best);
   return split(gaps, margin);
 }
+
+/** Vectors on the two sides of a ranking: each asking vector ranks the
+ *  ranked ones by dot product. */
+export interface RankingVectors {
+  readonly asking: readonly ArrayLike<number>[];
+  readonly ranked: readonly ArrayLike<number>[];
+}
+
+const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += a[i]! * b[i]!;
+  return sum;
+};
+
+/** How the top-k rankings `got` gives differ from the reference's, summed
+ *  over the asking vectors: the positions that hold another item, and the
+ *  items missing from the top k. `ranking` is the reference top k of each
+ *  asking vector, [asking · k]. The gaps come from the scores of `want`. */
+export function rankingDifferences(
+  got: RankingVectors,
+  want: RankingVectors,
+  ranking: ArrayLike<number>,
+  k: number,
+  margin: number,
+): { positions: Differences; items: Differences } {
+  const total = { positions: { count: 0, nearTies: 0 }, items: { count: 0, nearTies: 0 } };
+  got.asking.forEach((asking, q) => {
+    const gotTopK = topK(
+      got.ranked.map((item) => dot(asking, item)),
+      k,
+    );
+    const wantTopK = Array.from({ length: k }, (_, i) => ranking[q * k + i]!);
+    const wantScores = want.ranked.map((item) => dot(want.asking[q]!, item));
+    const positions = rankMismatches(gotTopK, wantTopK, wantScores, margin);
+    const items = missing(gotTopK, wantTopK, wantScores, margin);
+    total.positions.count += positions.count;
+    total.positions.nearTies += positions.nearTies;
+    total.items.count += items.count;
+    total.items.nearTies += items.nearTies;
+  });
+  return total;
+}
