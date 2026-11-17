@@ -14,6 +14,7 @@ export {
   ConvTranspose1d,
   ConvTranspose2d,
   Embedding,
+  FusedLinear,
   GroupNorm,
   LayerNorm,
   Linear,

@@ -2,7 +2,14 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { toArray } from '../../../src/core/gpu/eval.ts';
 import type { SlotAct } from '../../../src/core/graph/ops.ts';
 import { matrix } from '../../../src/core/graph/value.ts';
-import { Conv1d, ConvTranspose1d, Embedding, Linear } from '../../../src/core/nn/layers.ts';
+import {
+  Conv1d,
+  ConvTranspose1d,
+  Embedding,
+  FusedLinear,
+  Linear,
+} from '../../../src/core/nn/layers.ts';
+import { Module } from '../../../src/core/nn/module.ts';
 import {
   bufferSource,
   fromSafetensors,
@@ -11,7 +18,12 @@ import {
 } from '../../../src/core/weights/safetensors.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../gpu.ts';
 import { ACTIVATION_REF } from '../kernels/matmul/checkMatmul.ts';
-import { quantFile } from '../weights/checkpoint.ts';
+import {
+  mixedQuantFile,
+  quantFile,
+  safetensorsFile,
+  type BitsQuantEntry,
+} from '../weights/checkpoint.ts';
 
 const { root, ex } = await gpu();
 
@@ -255,6 +267,216 @@ describe('Linear with a quantized weight at the limits of the quantized matmul',
     if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
     await checkQuantizedLinear(c, c.bits, c.dtype);
   });
+});
+
+/** A part of a FusedLinear test: its out features, how its weight sits in
+ *  the file, and whether it has a bias. */
+type FusedPart = { out: number; bits?: 4 | 8; groupSize?: number; bias: boolean };
+
+/** Loads `parts` through a FusedLinear and through one Linear over their
+ *  hand-stacked rows. The FusedLinear output matches a CPU loop of each
+ *  part's x·W + bias side by side in f64, and the Linear's output bit for
+ *  bit, since both run the same matmul on the same weight. */
+async function checkFusedLinear(
+  c: { m: number; inF: number; parts: readonly FusedPart[]; quantized: boolean },
+  dtype: 'f32' | 'f16',
+) {
+  const { m, inF, parts } = c;
+  const outF = parts.reduce((sum, part) => sum + part.out, 0);
+  const xs = roundF16(randomF32(m * inF, 9));
+
+  // Each part's torch [out, in] weight: floats rounded to f16, or ints over
+  // the signed range with positive f16 scales.
+  const floats: Record<string, { data: Float32Array; shape: number[] }> = {};
+  const quant: Record<string, BitsQuantEntry> = {};
+  const weights: Float32Array[] = [];
+  const biases: Float32Array[] = [];
+  for (const [p, part] of parts.entries()) {
+    const { out, bits, groupSize = 1 } = part;
+    if (bits) {
+      const half = 2 ** (bits - 1);
+      const ints = Array.from(randomF32(out * inF, 10 + p), (v) =>
+        Math.min(half - 1, Math.floor(v * half)),
+      );
+      const scales = roundF16(
+        randomF32((out * inF) / groupSize, 20 + p).map((v) => (Math.abs(v) + 0.1) / half),
+      );
+      quant[`part${p}.weight`] = { ints, scales: [...scales], shape: [out, inF], bits };
+      weights.push(Float32Array.from(ints, (q, i) => q * scales[Math.floor(i / groupSize)]!));
+    } else {
+      const data = roundF16(randomF32(out * inF, 10 + p));
+      floats[`part${p}.weight`] = { data, shape: [out, inF] };
+      weights.push(data);
+    }
+    const bias = part.bias ? roundF16(randomF32(out, 30 + p)) : new Float32Array(out);
+    if (part.bias) floats[`part${p}.bias`] = { data: bias, shape: [out] };
+    biases.push(bias);
+  }
+  const hasBias = parts.some((part) => part.bias);
+
+  class Fused extends Module {
+    readonly fused: FusedLinear;
+    constructor() {
+      super();
+      const linears = parts.map((part) => new Linear(inF, part.out, { bias: part.bias }));
+      linears.forEach((linear, p) => {
+        (this as Record<string, unknown>)[`part${p}`] = linear;
+      });
+      this.fused = new FusedLinear(linears);
+    }
+  }
+  const model = new Fused();
+  if (dtype === 'f16') model.half(root);
+  onTestFinished(() => model.dispose());
+  const warned = loadWarnings();
+  await model.loadStateDict(
+    await fromSafetensors(bufferSource(mixedQuantFile(quant, floats)), { chunkBytes: 0 }),
+    { root, strict: true },
+  );
+  const differ = parts.map(({ bits, groupSize }, p) => {
+    return `part${p}.weight is ${bits ? `int${bits} in groups of ${groupSize}` : 'float'}`;
+  });
+  // A mix of float and quantized parts, or of bits or group sizes.
+  expect(warned()).toEqual(
+    c.quantized || Object.keys(quant).length === 0
+      ? []
+      : [
+          'loadStateDict: fused layers loaded as float, their parts are not quantized alike: ' +
+            `fused: ${differ.join(', ')}`,
+        ],
+  );
+
+  const x = upload(root, xs, { ...matrix(m, inF), dtype });
+  const got = await toArray(model.fused.forward(x), ex);
+
+  // A float weight in an f16 model is stored rounded to f16.
+  const stored = weights.map((w) => (dtype === 'f16' && !c.quantized ? roundF16(w) : w));
+  const want = new Float64Array(m * outF);
+  for (let i = 0; i < m; i++) {
+    let column = 0;
+    for (const [p, part] of parts.entries()) {
+      for (let o = 0; o < part.out; o++) {
+        let sum = biases[p]![o]!;
+        for (let k = 0; k < inF; k++) sum += xs[i * inF + k]! * stored[p]![o * inF + k]!;
+        want[i * outF + column++] = sum;
+      }
+    }
+  }
+  const tol = dtype === 'f16' ? { atol: 1e-5 * inF, rtol: 1e-3 } : { atol: 1e-6 * inF, rtol: 1e-5 };
+  expectClose(got, want, tol);
+
+  // One Linear over the stacked rows: the same file layout a hand-written
+  // fuse produced.
+  const single = new Linear(inF, outF, { bias: hasBias });
+  if (dtype === 'f16') single.half(root);
+  onTestFinished(() => single.dispose());
+  const stackedBias = { data: Float32Array.from(biases.flatMap((b) => [...b])), shape: [outF] };
+  const first = Object.values(quant)[0];
+  const file = c.quantized
+    ? quantFile(
+        first!.bits,
+        parts[0]!.groupSize!,
+        {
+          weight: {
+            ints: Object.values(quant).flatMap((entry) => entry.ints),
+            scales: Object.values(quant).flatMap((entry) => entry.scales),
+            shape: [outF, inF],
+          },
+        },
+        hasBias ? { bias: stackedBias } : {},
+      )
+    : safetensorsFile({
+        weight: { data: Float32Array.from(weights.flatMap((w) => [...w])), shape: [outF, inF] },
+        ...(hasBias ? { bias: stackedBias } : {}),
+      });
+  await single.loadStateDict(await fromSafetensors(bufferSource(file), { chunkBytes: 0 }), {
+    root,
+  });
+  expect(single.weight.shape.dtype).toBe(c.quantized ? 'quantW' : dtype);
+  expect([...got]).toEqual([...(await toArray(single.forward(x), ex))]);
+}
+
+describe('FusedLinear', () => {
+  const float = (out: number, bias = true): FusedPart => ({ out, bias });
+  const int8 = (out: number, groupSize = 16, bias = true): FusedPart => ({
+    out,
+    bits: 8,
+    groupSize,
+    bias,
+  });
+  const int4 = (out: number, groupSize = 16): FusedPart => ({
+    out,
+    bits: 4,
+    groupSize,
+    bias: true,
+  });
+  const CASES: {
+    name: string;
+    m: number;
+    inF: number;
+    parts: FusedPart[];
+    quantized: boolean;
+  }[] = [
+    { name: '1 float part', m: 3, inF: 24, parts: [float(10)], quantized: false },
+    { name: '2 float parts', m: 5, inF: 24, parts: [float(10), float(7)], quantized: false },
+    {
+      name: '3 float parts, the middle one without a bias',
+      m: 7,
+      inF: 64,
+      parts: [float(48), float(16, false), float(16)],
+      quantized: false,
+    },
+    {
+      name: '5 float parts without a bias',
+      m: 2,
+      inF: 16,
+      parts: [1, 4, 2, 7, 3].map((out) => float(out, false)),
+      quantized: false,
+    },
+    // quantized: in 64 % 8 == 0, stacked out 80 % 4 == 0, groups of 16
+    {
+      name: '3 int8 parts',
+      m: 7,
+      inF: 64,
+      parts: [int8(48), int8(16), int8(16)],
+      quantized: true,
+    },
+    // quantized: stacked out 12 % 4 == 0, though no part is a multiple of 4
+    {
+      name: '5 int8 parts of sizes off the int8 word',
+      m: 4,
+      inF: 32,
+      parts: [1, 2, 3, 1, 5].map((out) => int8(out, 8, false)),
+      quantized: true,
+    },
+    // quantized: stacked out 8 % 8 == 0, each part 4 % 8 != 0
+    { name: '2 int4 parts', m: 3, inF: 32, parts: [int4(4), int4(4)], quantized: true },
+    // float: a float part cannot stack with ints
+    {
+      name: 'a float part between two int8 parts',
+      m: 3,
+      inF: 32,
+      parts: [int8(8), float(5), int8(4)],
+      quantized: false,
+    },
+    // float: int8 and int4 cannot share packed words
+    { name: 'int8 next to int4', m: 3, inF: 32, parts: [int8(8), int4(8)], quantized: false },
+    // float: two group sizes cannot share a scale grid
+    {
+      name: 'int8 in groups of 16 next to groups of 8',
+      m: 3,
+      inF: 32,
+      parts: [int8(8, 16), int8(8, 8)],
+      quantized: false,
+    },
+  ];
+  it.for(CASES.flatMap((c) => (['f32', 'f16'] as const).map((dtype) => ({ ...c, dtype }))))(
+    '$dtype $name: [$m, $inF]',
+    async (c, ctx) => {
+      if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+      await checkFusedLinear(c, c.dtype);
+    },
+  );
 });
 
 describe('Embedding with a quantized table', () => {
