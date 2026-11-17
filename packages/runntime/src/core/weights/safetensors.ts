@@ -353,9 +353,9 @@ export type LazyTensor = FileTensor | DerivedTensor | QuantTensor;
 export interface LazyStateDict {
   metadata: Record<string, string>;
   tensors: Map<string, LazyTensor>;
-  /** Names of the quantized weights a Linear, Conv1d or ConvTranspose1d
-   *  loaded as float because its quantized kernel cannot run them. The
-   *  layers' hooks fill it and loadStateDict warns about them. */
+  /** The quantized weights a Linear, Conv1d or ConvTranspose1d loaded as
+   *  float because its quantized kernel cannot run them, by their names in
+   *  the file. The layers' hooks fill it and loadStateDict warns about them. */
   quantizedAsFloat?: string[];
   totalBytes(): number;
 }

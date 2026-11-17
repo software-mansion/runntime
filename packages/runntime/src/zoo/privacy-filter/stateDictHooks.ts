@@ -30,9 +30,10 @@ function move(sd: LazyStateDict, from: string, to: string): void {
   sd.tensors.set(to, take(sd, from));
 }
 
-/** An expert tensor [E, …]. Throws CHECKPOINT_MISMATCH on a quantized one: a
- *  file stores it as rows [E, everything else], so splitting or folding it
- *  would mix the experts' values. */
+/** An expert tensor [E, …]. Throws CHECKPOINT_MISMATCH on a quantized one. A
+ *  file stores a 3D expert weight as rows [E, everything else], so splitting
+ *  or folding it would mix the experts' values. The bias is 2D and would
+ *  split, but its halves go with float weights, so it is refused with them. */
 function takeExperts(sd: LazyStateDict, name: string): LazyTensor {
   const t = take(sd, name);
   if (t.kind === 'quant') {

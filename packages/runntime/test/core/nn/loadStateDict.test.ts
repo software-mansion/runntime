@@ -22,7 +22,7 @@ import {
   type MemoryStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { f32ToF16Bits } from '../../../src/core/weights/convert.ts';
-import { concatRows } from '../../../src/core/weights/transforms.ts';
+import { concatRows, scaleWeight } from '../../../src/core/weights/transforms.ts';
 import { meta } from '../graph/values.ts';
 import { safetensorsFile } from '../weights/checkpoint.ts';
 
@@ -558,17 +558,15 @@ describe('the warning about quantized weights loaded as float', () => {
       layers = new ModuleList(Array.from({ length: 12 }, () => new Linear(12, 4, { bias: false })));
     }
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const tensors = Object.assign(
-      {},
-      ...Array.from({ length: 12 }, (_, i) => named(`layers.${i}`, 4, 12)),
-    ) as Parameters<typeof safetensorsFile>[0];
+    let tensors: Parameters<typeof safetensorsFile>[0] = {};
+    for (let i = 0; i < 12; i++) tensors = { ...tensors, ...named(`layers.${i}`, 4, 12) };
     await loadLazyStateDict(new Many(), await open(tensors), { upload: recorder() });
     const names = Array.from({ length: 12 }, (_, i) => `layers.${i}.weight`);
     expect(warn.mock.calls).toEqual([[WARNING + names.join(', ')]]);
     warn.mockRestore();
   });
 
-  it('names the sources of a weight a hook stacked', async () => {
+  it("names a hook-stacked weight's tensors as the file names them", async () => {
     // q and k stack into one [8, 12] weight: in 12 % 8 != 0.
     class Fused extends Module {
       qk = new Linear(12, 8, { bias: false });
@@ -578,13 +576,16 @@ describe('the warning about quantized weights loaded as float', () => {
           sd.tensors.delete(name);
           return t;
         };
-        sd.tensors.set('qk.weight', concatRows([take('q.weight'), take('k.weight')]));
+        sd.tensors.set(
+          'qk.weight',
+          concatRows([scaleWeight(take('q.weight'), 0.5), take('k.weight')]),
+        );
       }
     }
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sd = await open({ ...named('q', 4, 12), ...named('k', 4, 12) });
     await loadLazyStateDict(new Fused(), sd, { upload: recorder() });
-    expect(warn.mock.calls).toEqual([[`${WARNING}concatRows(q.weight, k.weight)`]]);
+    expect(warn.mock.calls).toEqual([[`${WARNING}q.weight, k.weight`]]);
     warn.mockRestore();
   });
 
