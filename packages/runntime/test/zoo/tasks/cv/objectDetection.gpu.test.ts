@@ -6,7 +6,7 @@ import { createObjectDetector } from '../../../../src/zoo/tasks/cv/objectDetecti
 import { imageBuffer } from '../../../../src/zoo/tasks/cv/image.ts';
 import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imagePreprocessor.ts';
 import { Yolo26Model } from '../../../../src/zoo/yolo26/model.ts';
-import { expectClose, gpu, requireFeature } from '../../../gpu.ts';
+import { expectClose, freshDefaultRoot, gpu, requireFeature } from '../../../gpu.ts';
 import { randomSafetensors } from '../../randomWeights.ts';
 import { rgbaTexture, randomRgba } from './images.ts';
 
@@ -92,19 +92,50 @@ describe('encodeDetectObjects', () => {
   });
 
   it.for([
+    { name: 'no pipeline with a warm-up', warmUp: true, blocks: false },
+    { name: 'the model without a warm-up', warmUp: false, blocks: true },
+  ])('the load compiles $name on first use', async ({ warmUp, blocks }, ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    // A device of its own: on the shared one an earlier test compiled the model.
+    const fresh = await freshDefaultRoot();
+    const blocking = vi.spyOn(fresh.device, 'createComputePipeline');
+    await detector(warmUp);
+    expect(blocking.mock.calls.length > 0).toBe(blocks);
+  });
+
+  it.for([
     { name: 'nothing after a load with warm-up', warmUp: true, compiles: false },
     { name: 'its own pipelines after a load without warm-up', warmUp: false, compiles: true },
   ])('compiles $name', async ({ warmUp, compiles }, ctx) => {
     requireFeature(ctx, root, 'shader-f16');
-    const blocking = vi.spyOn(root.device, 'createComputePipeline');
-    onTestFinished(() => blocking.mockRestore());
+    const fresh = await freshDefaultRoot();
     const runner = await detector(warmUp);
-    const texture = rgbaTexture(root, randomRgba(96, 48, 5), 96, 48);
-    const target = root.createBuffer(runner.schemas.output(84)).$usage('storage');
+    const blocking = vi.spyOn(fresh.device, 'createComputePipeline');
+    const texture = rgbaTexture(fresh, randomRgba(96, 48, 5), 96, 48);
+    const target = fresh.createBuffer(runner.schemas.output(84)).$usage('storage');
     onTestFinished(() => target.destroy());
 
     runner.encodeDetectObjects({ source: texture, target });
     expect(blocking.mock.calls.length > 0).toBe(compiles);
+  });
+
+  it('encodes right after a load without warm-up that ran during another load', async (ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    const fresh = await freshDefaultRoot();
+    // The second load records its frame while the first compiles the same
+    // pipelines without blocking.
+    const warming = detector(true);
+    const runner = await detector(false);
+    const source = fresh.createBuffer(runner.schemas.input).$usage('storage');
+    const target = fresh.createBuffer(runner.schemas.output(84)).$usage('storage');
+    onTestFinished(() => {
+      source.destroy();
+      target.destroy();
+    });
+
+    runner.encodeDetectObjects({ source, target, confidenceThreshold: 0 });
+    expect((await target.read()).count).toBe(84);
+    await warming;
   });
 
   it.for([
