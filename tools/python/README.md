@@ -14,10 +14,11 @@ uv run runntime quantize model.safetensors model.int8.safetensors --bits 8
 - The source is a `.safetensors` file or a Hugging Face model folder, sharded
   or not. The output is one `.safetensors` file.
 - Float tensors named `*.weight` with 2 or more dims are quantized, under
-  their own names. `--include GLOB` replaces `*.weight`, and `--exclude GLOB`
-  keeps matching tensors as stored. Embedding tables are quantized too:
-  int8 changes an embedding's cosine by under 0.0001 on all-MiniLM-L6-v2 and
-  EmbeddingGemma 2.
+  their own names. `--include GLOB` replaces `*.weight`.
+- Tensors matching `*embed*`, `*pos_emb*` or `lm_head.*` stay as stored. This
+  is a quality default, not a format rule: quantized embedding tables only
+  rarely hold up. `--exclude GLOB` replaces it, so `--exclude none` quantizes
+  them too.
 - A quantized tensor is stored as rows, `[first dim, everything else]`: a
   Conv1d weight `[out, in, k]` becomes `[out, in·k]`. Each row is cut into
   groups of `--group-size` values (default 32, any positive integer), each

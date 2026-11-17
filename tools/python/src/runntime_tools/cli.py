@@ -26,6 +26,10 @@ FLOAT_DTYPES = frozenset({"F32", "F16", "BF16"})
 
 DEFAULT_INCLUDE = ("*.weight",)
 
+DEFAULT_EXCLUDE = ("*embed*", "*pos_emb*", "lm_head.*")
+"""A quality choice, not a format rule: quantized embedding tables only rarely
+hold up, and lm_head often shares the embedding's weights."""
+
 F16_MAX = float(np.finfo(np.float16).max)
 """The largest finite f16. A tensor with a bigger value cannot be stored as F16."""
 
@@ -144,9 +148,8 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     command.add_argument(
         "--exclude",
         action="append",
-        default=[],
         metavar="GLOB",
-        help="tensor names to keep as stored, repeatable",
+        help=f"tensor names to keep as stored, repeatable, replaces the default {' '.join(DEFAULT_EXCLUDE)}",
     )
     command.add_argument(
         "--drop",
@@ -165,7 +168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         bits=args.bits,
         group_size=args.group_size,
         include=args.include or DEFAULT_INCLUDE,
-        exclude=args.exclude,
+        exclude=args.exclude or DEFAULT_EXCLUDE,
         drop=args.drop,
         float16=args.f16,
     )
