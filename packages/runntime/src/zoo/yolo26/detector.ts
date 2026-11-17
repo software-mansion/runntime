@@ -139,6 +139,8 @@ export async function createDetector(
       });
     // The recording submit is the pipelines' first use, so it is warm-up work.
     const cap = opts.warmUp !== false ? withAsyncCompile(root.device, record) : record();
+    // encode() is safe from the first call: the recorded pipelines are compiled.
+    await cap.ready;
     // Each level is [4 + classes + extra, h, w].
     const numClasses = cap.targets[0]!.shape.dims![0]! - 4 - extraChannels(task);
     if (numClasses <= 0) throw mismatch(`the ${task} head has too few channels`);

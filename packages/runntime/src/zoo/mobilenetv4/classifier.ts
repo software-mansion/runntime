@@ -82,6 +82,8 @@ export async function createClassifier(
       });
     // The recording submit is the pipelines' first use, so it is warm-up work.
     const cap = opts.warmUp !== false ? withAsyncCompile(root.device, record) : record();
+    // encode() is safe from the first call: the recorded pipelines are compiled.
+    await cap.ready;
     let queue: Promise<unknown> = Promise.resolve();
     const run = (pixels: Float32Array) => {
       if (disposed)
