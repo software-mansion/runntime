@@ -2,6 +2,7 @@ import {
   defaultRoot,
   fromSafetensors,
   inGpuErrorScopes,
+  withAsyncCompile,
   supportsF16,
 } from '../../../core/index.ts';
 import type { PretrainedConfig } from '@huggingface/transformers';
@@ -76,8 +77,11 @@ export function moonshineLoader(
         onProgress: opts.onProgress,
       });
       // One second of silence compiles every pipeline before the first call.
-      await inGpuErrorScopes(defaultRoot().device, 'plugin warm-up', () =>
-        transcriber.transcribe(new Float32Array(16_000)),
+      const device = defaultRoot().device;
+      await withAsyncCompile(device, () =>
+        inGpuErrorScopes(device, 'plugin warm-up', () =>
+          transcriber.transcribe(new Float32Array(16_000)),
+        ),
       );
       return new RunntimeMoonshineForConditionalGeneration(config, transcriber, cfg);
     },

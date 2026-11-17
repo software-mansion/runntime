@@ -11,6 +11,7 @@ import {
   tensor3d,
   uploadF32,
   warmUp,
+  withAsyncCompile,
   writeF32,
   type F32Buffer,
   type LazyStateDict,
@@ -129,12 +130,15 @@ export async function createDetector(
     await model.loadStateDict(sd, { onProgress: opts.onProgress });
     const input = materialized(tensor3d(3, size, size), buffer);
     // Targets are the three levels, then the prototypes for segment.
-    const cap = ex.captureFrame(() => {
-      const out = model.forward(input);
-      const targets: Value[] = Array.isArray(out) ? [...out] : [...out.levels, out.proto];
-      evalValues(targets, ex);
-      return targets;
-    });
+    const record = () =>
+      ex.captureFrame(() => {
+        const out = model.forward(input);
+        const targets: Value[] = Array.isArray(out) ? [...out] : [...out.levels, out.proto];
+        evalValues(targets, ex);
+        return targets;
+      });
+    // The recording submit is the pipelines' first use, so it is warm-up work.
+    const cap = opts.warmUp !== false ? withAsyncCompile(root.device, record) : record();
     // Each level is [4 + classes + extra, h, w].
     const numClasses = cap.targets[0]!.shape.dims![0]! - 4 - extraChannels(task);
     if (numClasses <= 0) throw mismatch(`the ${task} head has too few channels`);
