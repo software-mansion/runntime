@@ -8,6 +8,7 @@ import {
   checkpoint,
   contents,
   safetensorsFile,
+  storeAsQuantizedRows,
   type Entry,
 } from '../../core/weights/checkpoint.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
@@ -117,6 +118,25 @@ describe('transformHfPrivacyFilterStateDict', () => {
 
     // The dropped score.bias (2 elems) is the only byte loss.
     expect(sd.totalBytes()).toBe(total - 2 * elemBytes);
+  });
+
+  // A file stores a quantized [E, K, 2H] as rows [E, K·2H], which the hook
+  // cannot split into glu and lin halves per expert.
+  it.for([
+    'model.layers.0.mlp.experts.gate_up_proj',
+    'model.layers.0.mlp.experts.gate_up_proj_bias',
+    'model.layers.0.mlp.experts.down_proj',
+  ])('refuses a quantized %s with CHECKPOINT_MISMATCH', async (name) => {
+    const sd = await checkpoint('F32', CHECKPOINT);
+    await storeAsQuantizedRows(sd, name, CHECKPOINT[name]!.values, 2);
+    expect(() => transformHfPrivacyFilterStateDict(sd)).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message:
+          `privacy-filter state dict: '${name}' is quantized, and a quantized expert ` +
+          'tensor cannot be split into experts: keep it float in the file',
+      }),
+    );
   });
 });
 

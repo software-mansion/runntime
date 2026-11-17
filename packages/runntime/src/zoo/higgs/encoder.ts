@@ -18,6 +18,7 @@ import {
   elu,
   gatherRowsFrom,
   gelu,
+  inTorchShape,
   logitStats,
   matrix,
   mul,
@@ -188,10 +189,19 @@ class PositionConv extends nn.Module {
    *  conv checks the shape of its rows. */
   private weight(sd: LazyStateDict, prefix: string): LazyTensor {
     if (sd.tensors.has(at(prefix, 'conv.weight'))) return take(sd, prefix, 'conv.weight');
-    const g = take(sd, prefix, 'conv.parametrizations.weight.original0');
-    const v = take(sd, prefix, 'conv.parametrizations.weight.original1');
     const { hidden, kernel, groups } = this;
     const width = hidden / groups;
+    // The norm folds per tap, across the scale groups of a quantized tensor.
+    const g = inTorchShape(take(sd, prefix, 'conv.parametrizations.weight.original0'), [
+      1,
+      1,
+      kernel,
+    ]);
+    const v = inTorchShape(take(sd, prefix, 'conv.parametrizations.weight.original1'), [
+      hidden,
+      width,
+      kernel,
+    ]);
     if (
       v.shape.join() !== [hidden, width, kernel].join() ||
       g.shape.join() !== [1, 1, kernel].join()
