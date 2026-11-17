@@ -43,7 +43,7 @@ def test_golden_file_reads_back_with_the_safetensors_library() -> None:
         assert (weight.dtype, weight.shape) == (np.uint8, (8, 32))
         scale = quantized.get_tensor("layer.weight_scale")
         assert (scale.dtype, scale.shape) == (np.float16, (8, 2))
-        for name in ("layer.bias", "norm.weight", "odd.weight"):
+        for name in ("embed.weight", "layer.bias", "norm.weight", "odd.weight"):
             np.testing.assert_array_equal(quantized.get_tensor(name), source.get_tensor(name))
 
 
@@ -107,13 +107,34 @@ def test_skip_reason(name: str, stored: Tensor, bits: Bits, group_size: int, rea
     assert skip_reason(name, stored, options) == reason
 
 
-def test_quantizes_embeddings_and_lm_head_by_default(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    source = tmp_path / "model.safetensors"
-    weight = from_array("F32", np.ones((4, 32), dtype=np.float32))
-    names = ("embed_tokens.weight", "pos_emb.weight", "lm_head.weight")
-    write_safetensors(source, dict.fromkeys(names, weight), {})
+EMBEDDING_NAMES = ("embed_tokens.weight", "decoder.pos_emb.weight", "lm_head.weight")
+
+
+def embedding_checkpoint(folder: Path) -> Path:
+    """A checkpoint of EMBEDDING_NAMES and one Linear weight, each [4, 32] of
+    127: the top int8 at scale 1, so it quantizes without error."""
+    source = folder / "model.safetensors"
+    weight = from_array("F32", np.full((4, 32), 127, dtype=np.float32))
+    write_safetensors(source, dict.fromkeys((*EMBEDDING_NAMES, "fc.weight"), weight), {})
+    return source
+
+
+def test_keeps_embeddings_and_lm_head_float_by_default(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = embedding_checkpoint(tmp_path)
     assert main(["quantize", str(source), str(tmp_path / "out.safetensors"), "--bits", "8"]) == 0
-    assert [line.split()[0] for line in capsys.readouterr().out.splitlines()] == ["quantized"] * 3
+    assert capsys.readouterr().out.splitlines() == [
+        "skipped    embed_tokens.weight [4, 32]: excluded by *embed*",
+        "skipped    decoder.pos_emb.weight [4, 32]: excluded by *pos_emb*",
+        "skipped    lm_head.weight [4, 32]: excluded by lm_head.*",
+        "quantized  fc.weight [4, 32]: max error 0, mean 0",
+    ]
+
+
+def test_exclude_replaces_the_default(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = embedding_checkpoint(tmp_path)
+    argv = ["quantize", str(source), str(tmp_path / "out.safetensors"), "--bits", "8", "--exclude", "fc.*"]
+    assert main(argv) == 0
+    assert [line.split()[0] for line in capsys.readouterr().out.splitlines()] == [*["quantized"] * 3, "skipped"]
 
 
 @pytest.mark.parametrize("size", ["1", "3", "6", "640"])
@@ -143,7 +164,7 @@ def test_quantize_fails_when_no_tensor_is_selected(tmp_path: Path, capsys: pytes
 
 def test_quantize_fails_on_a_quantized_source(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     destination = tmp_path / "out.safetensors"
-    argv = ["quantize", str(GOLDEN / "tiny.int8.safetensors"), str(destination), "--bits", "4"]
+    argv = ["quantize", str(GOLDEN / "tiny.int8.safetensors"), str(destination), "--bits", "4", "--exclude", "none"]
     assert main(argv) == 1
     assert "is already quantized" in capsys.readouterr().err
     assert not destination.exists()
@@ -158,7 +179,7 @@ def test_f16_stores_the_float_tensors_that_stay_as_f16(tmp_path: Path) -> None:
         safe_open(GOLDEN / "tiny.safetensors", "numpy") as source,
     ):
         assert quantized.get_tensor("layer.weight").dtype == np.int8
-        for name in ("layer.bias", "norm.weight", "odd.weight"):
+        for name in ("embed.weight", "layer.bias", "norm.weight", "odd.weight"):
             stored = quantized.get_tensor(name)
             assert stored.dtype == np.float16
             np.testing.assert_array_equal(stored, source.get_tensor(name).astype(np.float16))
@@ -179,6 +200,6 @@ def test_drop_leaves_matching_tensors_out(tmp_path: Path) -> None:
     assert main(argv) == 0
     with safe_open(destination, "numpy") as quantized:
         dropped = {"norm.weight"}
-        scales = {"conv.weight_scale", "embed.weight_scale", "layer.weight_scale"}
+        scales = {"conv.weight_scale", "layer.weight_scale"}
         with safe_open(GOLDEN / "tiny.safetensors", "numpy") as source:
             assert set(quantized.keys()) == set(source.keys()) - dropped | scales
