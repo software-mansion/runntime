@@ -15,10 +15,14 @@ uv run runntime quantize model.safetensors model.int8.safetensors --bits 8
   or not. The output is one `.safetensors` file.
 - Float tensors named `*.weight` with 2 or more dims are quantized, under
   their own names. `--include GLOB` replaces `*.weight`.
-- Tensors matching `*embed*`, `*pos_emb*` or `lm_head.*` stay as stored. This
-  is a quality default, not a format rule: quantized embedding tables only
-  rarely hold up. `--exclude GLOB` replaces it, so `--exclude none` quantizes
-  them too.
+- By default it skips tensors whose names match `*embed*`, `*pos_emb*` or
+  `lm_head.*`. The skips are by name, so they also catch layers like an
+  `embedding_projection`. `--exclude GLOB` replaces them, and `--exclude none`
+  quantizes those tensors too. Whether your model tolerates that is yours to
+  check: compare its outputs with the float model's before shipping the file.
+- Add `--f16` when the source is F32, so the skipped tensors take half the
+  size. Without it a default int8 file of all-MiniLM-L6-v2 (59 MB) is bigger
+  than the F16 checkpoint (45 MB); with it, 35 MB.
 - A quantized tensor is stored as rows, `[first dim, everything else]`: a
   Conv1d weight `[out, in, k]` becomes `[out, in·k]`. Each row is cut into
   groups of `--group-size` values (default 32, any positive integer), each
