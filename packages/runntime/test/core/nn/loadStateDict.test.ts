@@ -12,7 +12,7 @@ import {
 } from '../../../src/core/nn/module.ts';
 import {
   bufferSource,
-  derivedTensor,
+  derive,
   fromSafetensors,
   memoryStateDict,
   quantTensor,
@@ -92,7 +92,7 @@ describe('transform hooks', () => {
         const fused = sd.tensors.get('fused')!;
         sd.tensors.set(
           'w',
-          derivedTensor([2], async () => (await fused.f32()).subarray(0, 2)),
+          derive([2], [fused], ([values]) => values.subarray(0, 2)),
         );
         sd.tensors.delete('fused');
       }
@@ -106,7 +106,7 @@ describe('transform hooks', () => {
 
   it('reads a derived tensor once and leaves it holding nothing', async () => {
     const compute = vi.fn(async () => new Float32Array([1, 2]));
-    const w = derivedTensor([2], compute);
+    const w = derive([2], [], compute);
     class One extends Module {
       w = new Parameter(meta([2]));
     }
@@ -205,7 +205,7 @@ describe('binding', () => {
       override transformStateDict(sd: LazyStateDict) {
         sd.tensors.set(
           'a',
-          derivedTensor([1], () => Promise.resolve(new Float32Array(1))),
+          derive([1], [], () => Promise.resolve(new Float32Array(1))),
         );
       }
     }
@@ -218,13 +218,111 @@ describe('binding', () => {
     expect(names).toEqual(['c', 'b', 'a']);
   });
 
+  it('binds a tensor where the file holds its sources, wherever a hook put its key', async () => {
+    class Net extends Module {
+      first = new Parameter(meta([1]));
+      moved = new Parameter(meta([1]));
+      summed = new Parameter(meta([1]));
+      replaced = new Parameter(meta([1]));
+      last = new Parameter(meta([1]));
+      made = new Parameter(meta([1]));
+      override transformStateDict(sd: LazyStateDict) {
+        const take = (name: string) => {
+          const t = sd.tensors.get(name)!;
+          sd.tensors.delete(name);
+          return t;
+        };
+        const one = () => new Float32Array(1);
+        // One from no file tensor, one taken out and put back under its name
+        // with no inputs, one built from two others, and a rename.
+        sd.tensors.set('made', derive([1], [], one));
+        sd.tensors.set('replaced', (take('replaced'), derive([1], [], one)));
+        sd.tensors.set('summed', derive([1], [take('b'), take('a')], one));
+        sd.tensors.set('moved', take('old_name'));
+      }
+    }
+    const names: string[] = [];
+    const file = Object.fromEntries(
+      ['first', 'old_name', 'a', 'replaced', 'b', 'last'].map((name) => [
+        name,
+        new Float32Array(1),
+      ]),
+    );
+    await loadLazyStateDict(new Net(), memoryStateDict(file), {
+      upload: recorder(),
+      strict: true,
+      onProgress: (name) => names.push(name),
+    });
+    expect(names).toEqual(['first', 'moved', 'summed', 'replaced', 'last', 'made']);
+  });
+
+  it('binds a tensor where the largest of its sources is, not a small one far from it', async () => {
+    class Folded extends Module {
+      early = new Parameter(meta([1]));
+      weight = new Parameter(meta([4]));
+      late = new Parameter(meta([1]));
+      override transformStateDict(sd: LazyStateDict) {
+        const norm = sd.tensors.get('norm')!;
+        sd.tensors.delete('norm');
+        sd.tensors.set(
+          'weight',
+          derive([4], [norm, sd.tensors.get('weight')!], ([, w]) => w),
+        );
+      }
+    }
+    const names: string[] = [];
+    const file = {
+      norm: new Float32Array(1),
+      early: new Float32Array(1),
+      weight: new Float32Array(4),
+      late: new Float32Array(1),
+    };
+    await loadLazyStateDict(new Folded(), memoryStateDict(file), {
+      upload: recorder(),
+      onProgress: (name) => names.push(name),
+    });
+    expect(names).toEqual(['early', 'weight', 'late']);
+  });
+
+  it('binds two tensors with the same sources in state-dict order', async () => {
+    class Folded extends Module {
+      bias = new Parameter(meta([1]));
+      weight = new Parameter(meta([1]));
+      other = new Parameter(meta([1]));
+      override transformStateDict(sd: LazyStateDict) {
+        const weight = sd.tensors.get('weight')!;
+        const norm = sd.tensors.get('norm')!;
+        sd.tensors.delete('norm');
+        sd.tensors.set(
+          'weight',
+          derive([1], [weight, norm], ([w]) => w),
+        );
+        sd.tensors.set(
+          'bias',
+          derive([1], [weight, norm], ([w]) => w, 0),
+        );
+      }
+    }
+    const names: string[] = [];
+    const file = {
+      weight: new Float32Array(1),
+      norm: new Float32Array(1),
+      other: new Float32Array(1),
+    };
+    await loadLazyStateDict(new Folded(), memoryStateDict(file), {
+      upload: recorder(),
+      onProgress: (name) => names.push(name),
+    });
+    expect(names).toEqual(['weight', 'bias', 'other']);
+  });
+
   it('reports cumulative file bytes, with derived keys adding none', async () => {
     const progress: [number, number][] = [];
     await loadLazyStateDict(
       new Pair(),
       dict({
         a: new Float32Array(2),
-        b: derivedTensor([2], () => Promise.resolve(new Float32Array(2))),
+        b: derive([2], [], () => Promise.resolve(new Float32Array(2))),
       }),
       { upload: recorder(), onProgress: (_, done, total) => progress.push([done, total]) },
     );
@@ -397,7 +495,7 @@ describe('a quantW slot', () => {
   it('takes derived words counted in logical values', async () => {
     const words = new Uint32Array([1, 2, 3, 4]);
     const upload = recorder();
-    await load(new Packed(), { w: derivedTensor([4, 4], () => Promise.resolve(words)) }, upload);
+    await load(new Packed(), { w: derive([4, 4], [], () => Promise.resolve(words)) }, upload);
     expect(upload).toHaveBeenCalledWith(words, { elems: 4, dtype: 'quantW', dims: [4, 4] });
   });
 
@@ -405,7 +503,7 @@ describe('a quantW slot', () => {
     { name: 'U32 words of another count', sd: () => wordFile(new Uint32Array(5), [5]) },
     {
       name: 'derived words of another logical size',
-      sd: async () => dict({ w: derivedTensor([4], () => Promise.resolve(new Uint32Array(4))) }),
+      sd: async () => dict({ w: derive([4], [], () => Promise.resolve(new Uint32Array(4))) }),
     },
   ])('refuses $name with CHECKPOINT_MISMATCH', async ({ sd }) => {
     await expect(
@@ -449,12 +547,12 @@ describe('materializing an f16 slot', () => {
       want: new Uint16Array([F16[2], F16['-1.5']]),
     },
   ])('takes a derived tensor with $name', async ({ data, want }) => {
-    expect(await bits(dict({ w: derivedTensor([2], () => Promise.resolve(data)) }))).toEqual(want);
+    expect(await bits(dict({ w: derive([2], [], () => Promise.resolve(data)) }))).toEqual(want);
   });
 
   it('refuses packed u32 words', async () => {
     await expect(
-      bits(dict({ w: derivedTensor([2], () => Promise.resolve(new Uint32Array(2))) })),
+      bits(dict({ w: derive([2], [], () => Promise.resolve(new Uint32Array(2))) })),
     ).rejects.toThrow(/'w' holds packed u32 words, not loadable as f16/);
   });
 

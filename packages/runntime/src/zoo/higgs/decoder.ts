@@ -12,7 +12,8 @@
 import {
   add,
   dequantize,
-  derivedTensor,
+  derive,
+  deriveFromTensors,
   nn,
   RunntimeError,
   type LazyStateDict,
@@ -77,22 +78,17 @@ class Block extends nn.Module {
     if (t?.kind !== 'quant' || t.shape.join() !== `${out},${cIn * k}`) return;
     sd.tensors.set(
       name,
-      derivedTensor(
-        [cIn, out, k],
-        async () => {
-          const src = await weightValues(t);
-          const dst = new Float32Array(src.length);
-          for (let o = 0; o < out; o++) {
-            for (let c = 0; c < cIn; c++) {
-              for (let kk = 0; kk < k; kk++) {
-                dst[(c * out + o) * k + kk] = src[(o * cIn + c) * k + k - 1 - kk]!;
-              }
+      derive([cIn, out, k], [dequantize(t)], ([src]) => {
+        const dst = new Float32Array(src.length);
+        for (let o = 0; o < out; o++) {
+          for (let c = 0; c < cIn; c++) {
+            for (let kk = 0; kk < k; kk++) {
+              dst[(c * out + o) * k + kk] = src[(o * cIn + c) * k + k - 1 - kk]!;
             }
           }
-          return dst;
-        },
-        t.byteLength,
-      ),
+        }
+        return dst;
+      }),
     );
   }
   override forward(x: Value): Value {
@@ -172,49 +168,51 @@ function foldCodebooks(
       }
       return t;
     }));
-  const sources = [...books.flatMap((b) => [b.embed, b.weight, b.bias]), fc2W, fc2B];
-  const table = derivedTensor(
-    [books.length * codebookSize, latent],
-    async () => {
-      const f = await fc2T();
-      const out = new Float32Array(books.length * codebookSize * latent);
-      const m = new Float64Array(dim * latent);
-      const row = new Float64Array(latent);
-      for (const [k, b] of books.entries()) {
-        const w = await weightValues(b.weight);
-        const e = await b.embed.f32();
-        // m = project_outᵀ·fc2ᵀ, [dim, latent].
-        m.fill(0);
-        for (let j = 0; j < hidden; j++) {
-          for (let a = 0; a < dim; a++) {
-            const p = w[j * dim + a]!;
-            for (let o = 0; o < latent; o++) m[a * latent + o]! += p * f[j * latent + o]!;
-          }
-        }
-        for (let i = 0; i < codebookSize; i++) {
-          row.fill(0);
-          for (let a = 0; a < dim; a++) {
-            const v = e[i * dim + a]!;
-            for (let o = 0; o < latent; o++) row[o]! += v * m[a * latent + o]!;
-          }
-          out.set(row, (k * codebookSize + i) * latent);
+  const inputs = [...books.flatMap((b) => [b.embed, b.weight, b.bias]), fc2W, fc2B];
+  // The fold's bytes count once, under the table.
+  const table = deriveFromTensors([books.length * codebookSize, latent], inputs, async () => {
+    const f = await fc2T();
+    const out = new Float32Array(books.length * codebookSize * latent);
+    const m = new Float64Array(dim * latent);
+    const row = new Float64Array(latent);
+    for (const [k, b] of books.entries()) {
+      const w = await weightValues(b.weight);
+      const e = await b.embed.f32();
+      // m = project_outᵀ·fc2ᵀ, [dim, latent].
+      m.fill(0);
+      for (let j = 0; j < hidden; j++) {
+        for (let a = 0; a < dim; a++) {
+          const p = w[j * dim + a]!;
+          for (let o = 0; o < latent; o++) m[a * latent + o]! += p * f[j * latent + o]!;
         }
       }
-      return out;
-    },
-    sources.reduce((sum, t) => sum + t.byteLength, 0),
-  );
-  const bias = derivedTensor([latent], async () => {
-    const f = await fc2T();
-    const out = Float64Array.from(await fc2B.f32());
-    for (const b of books) {
-      const pb = await b.bias.f32();
-      for (let j = 0; j < hidden; j++) {
-        for (let o = 0; o < latent; o++) out[o]! += pb[j]! * f[j * latent + o]!;
+      for (let i = 0; i < codebookSize; i++) {
+        row.fill(0);
+        for (let a = 0; a < dim; a++) {
+          const v = e[i * dim + a]!;
+          for (let o = 0; o < latent; o++) row[o]! += v * m[a * latent + o]!;
+        }
+        out.set(row, (k * codebookSize + i) * latent);
       }
     }
-    return Float32Array.from(out);
+    return out;
   });
+  const bias = deriveFromTensors(
+    [latent],
+    inputs,
+    async () => {
+      const f = await fc2T();
+      const out = Float64Array.from(await fc2B.f32());
+      for (const b of books) {
+        const pb = await b.bias.f32();
+        for (let j = 0; j < hidden; j++) {
+          for (let o = 0; o < latent; o++) out[o]! += pb[j]! * f[j * latent + o]!;
+        }
+      }
+      return Float32Array.from(out);
+    },
+    0,
+  );
   return { table, bias };
 }
 

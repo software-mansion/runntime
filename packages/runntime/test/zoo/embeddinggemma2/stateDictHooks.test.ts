@@ -417,11 +417,11 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       values: [0, 100, 200].flatMap((base) => gridRows(base, [0, 1, 2, 3], 4)),
     });
 
-    // The fused projection's bounds are q's, f32, each carrying one
-    // scalar's bytes.
+    // The fused projection's bounds are q's, f32, each carrying the bytes
+    // of the q, k and v scalars it reads.
     for (const [i, b] of BOUNDS.entries()) {
       const value = get(`${T}.self_attn.qkv.${b}`);
-      expect(value.byteLength).toBe(elemBytes);
+      expect(value.byteLength).toBe(3 * elemBytes);
       expect(await contents(value)).toEqual({ type: 'f32', values: [[-3, 3, -4, 4][i]!] });
     }
 
@@ -457,8 +457,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     expect(lconv.byteLength).toBe(8 * elemBytes);
     expect(await contents(lconv)).toEqual({ type, values: [1, 3, 5, 7, 2, 4, 6, 8] });
 
-    // k's and v's bounds, 4 scalars each, are the only bytes lost.
-    expect(sd.totalBytes()).toBe(total - 8 * elemBytes);
+    expect(sd.totalBytes()).toBe(total);
   });
 
   // The bounds bind to CPU parameters, which hold a BF16 file tensor as raw

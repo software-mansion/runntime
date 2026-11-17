@@ -35,7 +35,12 @@ import {
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
 import { packQuantW } from '../weights/quantPack.ts';
-import { derivedTensor, type LazyStateDict, type QuantTensor } from '../weights/safetensors.ts';
+import {
+  derive,
+  deriveFromTensors,
+  type LazyStateDict,
+  type QuantTensor,
+} from '../weights/safetensors.ts';
 import { dequantize, readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
@@ -122,17 +127,13 @@ function loadQuantWeight(
   weight.retype('quantW', (k * n * t.bits) / 32, [k, n]);
   const elems = scales.dims.reduce((a, b) => a * b, 1);
   const scale = new Parameter({ elems, dtype: 'f32', dims: scales.dims }, undefined, true);
-  const words = derivedTensor(
-    [k, n],
-    async () => packQuantW(await ints(), k, n, t.bits),
-    t.byteLength,
-  );
+  const words = deriveFromTensors([k, n], [t], async () => packQuantW(await ints(), k, n, t.bits));
   const entries = [...sd.tensors];
   sd.tensors.clear();
   for (const [key, tensor] of entries) {
     sd.tensors.set(key, key === at('weight') ? words : tensor);
     if (key === at('weight')) {
-      sd.tensors.set(at('weightScale'), derivedTensor(scales.dims, scales.data));
+      sd.tensors.set(at('weightScale'), deriveFromTensors(scales.dims, [t], scales.data, 0));
     }
   }
   return scale;
@@ -367,16 +368,16 @@ export class Conv1d extends Module {
     }
     sd.tensors.set(
       name,
-      derivedTensor(
+      deriveFromTensors(
         [this.kernelSize * this.inChannels, this.outChannels],
-        async () =>
+        [tensor],
+        async ([torch]) =>
           convToTapMajor(
-            await readFloats('Conv1d', tensor),
+            await readFloats('Conv1d', torch),
             this.outChannels,
             this.inChannels,
             this.kernelSize,
           ),
-        tensor.byteLength,
       ),
     );
   }
@@ -427,16 +428,12 @@ export class Conv1d extends Module {
       this.bias.retype(this.bias.shape.dtype, n, [n]);
       sd.tensors.set(
         biasName,
-        derivedTensor(
-          [n],
-          async () => {
-            const src = await readFloats('Conv1d', b);
-            const out = src instanceof Uint16Array ? new Uint16Array(n) : new Float32Array(n);
-            out.set(src);
-            return out;
-          },
-          b.byteLength,
-        ),
+        deriveFromTensors([n], [b], async ([b]) => {
+          const src = await readFloats('Conv1d', b);
+          const out = src instanceof Uint16Array ? new Uint16Array(n) : new Float32Array(n);
+          out.set(src);
+          return out;
+        }),
       );
     }
   }
@@ -543,42 +540,32 @@ export class ConvTranspose1d extends Module {
       // that row uses kernel position (taps − 1 − i)·s + r.
       sd.tensors.set(
         at('weight'),
-        derivedTensor(
-          [taps * cIn, s * cOut],
-          async () => {
-            const src = await w.f32();
-            const out = new Float32Array(taps * cIn * s * cOut);
-            for (let i = 0; i < taps; i++) {
-              for (let c = 0; c < cIn; c++) {
-                const row = (i * cIn + c) * s * cOut;
-                for (let r = 0; r < s; r++) {
-                  const kk = (taps - 1 - i) * s + r;
-                  for (let o = 0; o < cOut; o++) {
-                    out[row + r * cOut + o] = src[(c * cOut + o) * k + kk]!;
-                  }
+        derive([taps * cIn, s * cOut], [w], ([src]) => {
+          const out = new Float32Array(taps * cIn * s * cOut);
+          for (let i = 0; i < taps; i++) {
+            for (let c = 0; c < cIn; c++) {
+              const row = (i * cIn + c) * s * cOut;
+              for (let r = 0; r < s; r++) {
+                const kk = (taps - 1 - i) * s + r;
+                for (let o = 0; o < cOut; o++) {
+                  out[row + r * cOut + o] = src[(c * cOut + o) * k + kk]!;
                 }
               }
             }
-            return out;
-          },
-          w.byteLength,
-        ),
+          }
+          return out;
+        }),
       );
     }
     const b = sd.tensors.get(at('bias'));
     if (b && this.bias) {
       sd.tensors.set(
         at('bias'),
-        derivedTensor(
-          [s * cOut],
-          async () => {
-            const src = await b.f32();
-            const out = new Float32Array(s * cOut);
-            for (let r = 0; r < s; r++) out.set(src, r * cOut);
-            return out;
-          },
-          b.byteLength,
-        ),
+        derive([s * cOut], [b], ([src]) => {
+          const out = new Float32Array(s * cOut);
+          for (let r = 0; r < s; r++) out.set(src, r * cOut);
+          return out;
+        }),
       );
     }
   }
@@ -663,19 +650,14 @@ export class Snake extends Module {
     const c = this.channels;
     sd.tensors.set(
       at('weight'),
-      derivedTensor(
-        [2, c],
-        async () => {
-          const a = await alpha.f32();
-          const out = new Float32Array(2 * c);
-          for (let i = 0; i < c; i++) {
-            out[i] = a[i]!;
-            out[c + i] = 1 / (a[i]! + 1e-9);
-          }
-          return out;
-        },
-        alpha.byteLength,
-      ),
+      derive([2, c], [alpha], ([a]) => {
+        const out = new Float32Array(2 * c);
+        for (let i = 0; i < c; i++) {
+          out[i] = a[i]!;
+          out[c + i] = 1 / (a[i]! + 1e-9);
+        }
+        return out;
+      }),
     );
   }
   forward(x: Value): Value {

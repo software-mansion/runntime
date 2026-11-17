@@ -39,7 +39,7 @@ import {
   type ConvAct,
 } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
-import { derivedTensor, type LazyStateDict } from '../../core/index.ts';
+import { derive, type LazyStateDict } from '../../core/index.ts';
 import { requireTensor } from '../errors.ts';
 import { Conv2dBN, RepDW } from './layers.ts';
 
@@ -100,16 +100,11 @@ export class SS2D extends Module {
     // f32 on purpose: A is an f32 parameter of the scan.
     sd.tensors.set(
       key,
-      derivedTensor(
-        [src.shape.reduce((a, b) => a * b, 1)],
-        async () => {
-          const logs = await src.f32();
-          const out = new Float32Array(logs.length);
-          for (let i = 0; i < logs.length; i++) out[i] = -Math.exp(logs[i]!);
-          return out;
-        },
-        src.byteLength,
-      ),
+      derive([src.shape.reduce((a, b) => a * b, 1)], [src], ([logs]) => {
+        const out = new Float32Array(logs.length);
+        for (let i = 0; i < logs.length; i++) out[i] = -Math.exp(logs[i]!);
+        return out;
+      }),
     );
   }
 

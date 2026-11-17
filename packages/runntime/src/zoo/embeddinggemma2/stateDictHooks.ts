@@ -11,7 +11,7 @@
 
 import {
   concatRows,
-  derivedTensor,
+  derive,
   f32ArrayToF16Bits,
   permuteRows,
   reshapeWeight,
@@ -51,7 +51,7 @@ function ropeOrder(rows: number, block: number): number[] {
 /** A weightless norm's ones, as f16 halfwords: exact, and stacked with an F16
  *  checkpoint's norms they keep the result f16. */
 const ones = (n: number) =>
-  derivedTensor([n], () => Promise.resolve(f32ArrayToF16Bits(new Float32Array(n).fill(1)).data));
+  derive([n], [], () => f32ArrayToF16Bits(new Float32Array(n).fill(1)).data);
 
 /** q, k and v in one weight. q and k rows go from the checkpoint's
  *  half-split rope layout to the kernel's interleaved pairs, per `block`
@@ -107,7 +107,7 @@ export function transformEmbeddingGemma2StateDict(
     // Derived, so the CPU parameter binds f32 rather than raw bf16 bits.
     put(
       `${L}.layer_scalar`,
-      derivedTensor([1], () => s.f32(), s.byteLength),
+      derive([1], [s], ([value]) => value),
     );
   }
   const ple = 'ple.per_layer_model_projection.weight';
@@ -156,7 +156,6 @@ export function transformEmbeddingGemma2AudioStateDict(
   const put = (name: string, t: LazyTensor) => sd.tensors.set(q(name), t);
   const { hidden, headDim, convKernel: K, window } = cfg;
   const [c0, c1] = cfg.convChannels;
-  const scalar = async (t: LazyTensor) => (await t.f32())[0]!;
   const BOUNDS = ['input_min', 'input_max', 'output_min', 'output_max'];
   /** Rebuilds a clipped linear's bounds as f32: the CPU parameters they bind
    *  to would hold a BF16 bound as raw bits. */
@@ -165,7 +164,7 @@ export function transformEmbeddingGemma2AudioStateDict(
       const t = take(sd, what, q(`${linear}.${b}`));
       put(
         `${linear}.${b}`,
-        derivedTensor([1], () => t.f32(), t.byteLength),
+        derive([1], [t], ([value]) => value),
       );
     }
   };
@@ -217,17 +216,13 @@ export function transformEmbeddingGemma2AudioStateDict(
       const bounds = parts.map((n) => take(sd, what, q(`${A}.${n}.${b}`)));
       put(
         `${A}.qkv.${b}`,
-        derivedTensor(
-          [1],
-          async () => {
-            const values = await Promise.all(bounds.map(scalar));
-            if (values.some((v) => v !== values[0])) {
-              throw checkpointMismatch(what, `${q(A)}: q, k and v have different ${b}`);
-            }
-            return Float32Array.of(values[0]!);
-          },
-          bounds[0]!.byteLength,
-        ),
+        derive([1], bounds, (each) => {
+          const values = each.map((bound) => bound[0]!);
+          if (values.some((v) => v !== values[0])) {
+            throw checkpointMismatch(what, `${q(A)}: q, k and v have different ${b}`);
+          }
+          return Float32Array.of(values[0]!);
+        }),
       );
     }
     f32Bounds(`${A}.post`);
@@ -236,30 +231,23 @@ export function transformEmbeddingGemma2AudioStateDict(
     const rk = take(sd, what, q(`${A}.relative_k_proj.weight`));
     put(
       `${A}.rel`,
-      derivedTensor(
-        [window, hidden],
-        async () => {
-          const w = await rk.f32();
-          const out = new Float32Array(window * hidden);
-          for (let j = 0; j < window; j++) {
-            for (let o = 0; o < hidden; o++) {
-              let s = 0;
-              for (let n = 0; n < hidden; n++) s += pe[j * hidden + n]! * w[o * hidden + n]!;
-              out[j * hidden + o] = s;
-            }
+      derive([window, hidden], [rk], ([w]) => {
+        const out = new Float32Array(window * hidden);
+        for (let j = 0; j < window; j++) {
+          for (let o = 0; o < hidden; o++) {
+            let s = 0;
+            for (let n = 0; n < hidden; n++) s += pe[j * hidden + n]! * w[o * hidden + n]!;
+            out[j * hidden + o] = s;
           }
-          return out;
-        },
-        rk.byteLength,
-      ),
+        }
+        return out;
+      }),
     );
     const dimScale = take(sd, what, q(`${A}.per_dim_scale`));
     put(
       `${A}.q_scale`,
-      derivedTensor(
-        [headDim],
-        async () => (await dimScale.f32()).map((x) => qScale * Math.log1p(Math.exp(x))),
-        dimScale.byteLength,
+      derive([headDim], [dimScale], ([scale]) =>
+        scale.map((x) => qScale * Math.log1p(Math.exp(x))),
       ),
     );
 

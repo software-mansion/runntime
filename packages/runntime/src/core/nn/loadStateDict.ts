@@ -116,6 +116,11 @@ async function bindStateDict(
   upload: UploadFn,
   opts: LoadStateDictOpts,
 ): Promise<void> {
+  // The file's tensors in file order with their sizes, before a hook moves,
+  // renames or replaces a key.
+  const inFile = new Map(
+    [...sd.tensors].map(([name, t], position) => [name, { position, byteLength: t.byteLength }]),
+  );
   model.transformStateDict?.(sd, '');
   const visit = (parent: AnyModule, parentPrefix: string): void => {
     for (const [name, child] of parent.namedChildren()) {
@@ -144,11 +149,34 @@ async function bindStateDict(
     );
   }
 
-  // Bind in state-dict (file) order, so each chunk is read once. Module order
-  // jumps around the payload and refetches evicted chunks. Keys a transform
-  // added sort last; they read nothing new.
-  const position = new Map([...sd.tensors.keys()].map((name, i) => [name, i]));
-  params.sort(([a], [b]) => (position.get(a) ?? Infinity) - (position.get(b) ?? Infinity));
+  // Bind in file order, so each chunk is read once. Module order jumps
+  // around the payload and refetches evicted chunks. A tensor sits where the
+  // largest of its sources does, wherever a hook put its key: exporters
+  // often park the small tensors at the front of the file, far from the
+  // weight they fold into. Of sources as large, the first in the file
+  // counts. One with no source in the file sits where the file holds its
+  // own name, or last.
+  const dictOrder = new Map([...sd.tensors.keys()].map((name, i) => [name, i]));
+  const fileOrder = new Map(
+    params.map(([name]) => {
+      const sources = sd.tensors.get(name)!.sources.flatMap((s) => inFile.get(s) ?? []);
+      const largest = sources.reduce<(typeof sources)[number] | undefined>(
+        (best, s) =>
+          !best ||
+          s.byteLength > best.byteLength ||
+          (s.byteLength === best.byteLength && s.position < best.position)
+            ? s
+            : best,
+        undefined,
+      );
+      return [name, (largest ?? inFile.get(name))?.position ?? Infinity];
+    }),
+  );
+  params.sort(([a], [b]) =>
+    fileOrder.get(a) === fileOrder.get(b)
+      ? dictOrder.get(a)! - dictOrder.get(b)!
+      : fileOrder.get(a)! - fileOrder.get(b)!,
+  );
 
   // Unbound tensors are never read, so they do not count towards the total.
   const total = params.reduce((sum, [name]) => sum + sd.tensors.get(name)!.byteLength, 0);

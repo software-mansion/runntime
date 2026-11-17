@@ -3,7 +3,7 @@
 
 import { channelAffine, nn, pad2d, type ConvAct } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
-import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { deriveFromTensors, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { requireTensor } from '../errors.ts';
 
 const { BatchNorm2d, Conv2d, Module, Parameter } = nn;
@@ -80,14 +80,15 @@ export class BatchNormC extends Module {
         }
         return { scale, shift };
       })());
-    const bytes = g.byteLength + b.byteLength + m.byteLength + v.byteLength;
+    // The fold's bytes count once, under scale.
+    const inputs = [g, b, m, v];
     sd.tensors.set(
       key('scale'),
-      derivedTensor([c], async () => (await affine()).scale, bytes),
+      deriveFromTensors([c], inputs, async () => (await affine()).scale),
     );
     sd.tensors.set(
       key('shift'),
-      derivedTensor([c], async () => (await affine()).shift),
+      deriveFromTensors([c], inputs, async () => (await affine()).shift, 0),
     );
     for (const n of ['weight', 'bias', 'running_mean', 'running_var', 'num_batches_tracked']) {
       sd.tensors.delete(key(n));
@@ -195,16 +196,15 @@ export class RepDW extends Module {
         return { w, b };
       })());
 
-    const bytes = [kw, innerG, innerB, innerM, innerV, pw, pb, outerG, outerB, outerM, outerV]
-      .map((t) => t.byteLength)
-      .reduce((a, x) => a + x, 0);
+    // The merge's bytes count once, under the weight.
+    const inputs = [kw, innerG, innerB, innerM, innerV, pw, pb, outerG, outerB, outerM, outerV];
     sd.tensors.set(
       key('merged.weight'),
-      derivedTensor([c, 1, this.kH, this.kW], async () => (await merged()).w, bytes),
+      deriveFromTensors([c, 1, this.kH, this.kW], inputs, async () => (await merged()).w),
     );
     sd.tensors.set(
       key('merged.bias'),
-      derivedTensor([c], async () => (await merged()).b),
+      deriveFromTensors([c], inputs, async () => (await merged()).b, 0),
     );
     for (const branch of [
       'conv.c.weight',

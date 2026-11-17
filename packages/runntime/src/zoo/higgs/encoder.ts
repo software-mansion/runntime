@@ -14,7 +14,7 @@ import {
   add,
   cat,
   concatRows,
-  derivedTensor,
+  derive,
   elu,
   gatherRowsFrom,
   gelu,
@@ -217,22 +217,16 @@ class PositionConv extends nn.Module {
  *  in] slice scaled to norm g[tap]. In f64. */
 function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   const [out, cIn, kernel] = v.shape as [number, number, number];
-  return derivedTensor(
-    [out, cIn, kernel],
-    async () => {
-      const gs = await g.f32();
-      const vs = await v.f32();
-      const norm = new Float64Array(kernel);
-      for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
-      const w = new Float32Array(vs.length);
-      for (let i = 0; i < vs.length; i++) {
-        const k = i % kernel;
-        w[i] = (vs[i]! * gs[k]!) / Math.sqrt(norm[k]!);
-      }
-      return w;
-    },
-    g.byteLength + v.byteLength,
-  );
+  return derive([out, cIn, kernel], [g, v], ([gs, vs]) => {
+    const norm = new Float64Array(kernel);
+    for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
+    const w = new Float32Array(vs.length);
+    for (let i = 0; i < vs.length; i++) {
+      const k = i % kernel;
+      w[i] = (vs[i]! * gs[k]!) / Math.sqrt(norm[k]!);
+    }
+    return w;
+  });
 }
 
 /** Self-attention with q, k and v in one projection. The load stacks them
@@ -425,20 +419,24 @@ class Codebook extends nn.Module {
     // The rows' bytes count once, under embed.
     sd.tensors.set(
       at(prefix, 'score.weight'),
-      derivedTensor([size, dim], async () => (await embed.f32()).map((x) => 2 * x)),
+      derive([size, dim], [embed], ([e]) => e.map((x) => 2 * x), 0),
     );
     sd.tensors.set(
       at(prefix, 'score.bias'),
-      derivedTensor([size], async () => {
-        const e = await embed.f32();
-        const out = new Float32Array(size);
-        for (let i = 0; i < size; i++) {
-          let sq = 0;
-          for (let j = 0; j < dim; j++) sq += e[i * dim + j]! ** 2;
-          out[i] = -sq;
-        }
-        return out;
-      }),
+      derive(
+        [size],
+        [embed],
+        ([e]) => {
+          const out = new Float32Array(size);
+          for (let i = 0; i < size; i++) {
+            let sq = 0;
+            for (let j = 0; j < dim; j++) sq += e[i * dim + j]! ** 2;
+            out[i] = -sq;
+          }
+          return out;
+        },
+        0,
+      ),
     );
   }
 }

@@ -13,23 +13,18 @@
  *  carry the source file bytes, so load progress counts every byte the model
  *  reads. */
 
-import { derivedTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { derive, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { fuseQkv, qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
 import type { MoonshineStreamingConfig } from './config.ts';
 
 /** Stays f32 for any checkpoint: rounding gamma + 1 to f16 would drop the low
  *  bits of gamma, which an f32 run keeps. */
 function gammaPlusOne(t: LazyTensor): LazyTensor {
-  return derivedTensor(
-    t.shape,
-    async () => {
-      const gamma = await t.f32();
-      const out = new Float32Array(gamma.length);
-      for (let j = 0; j < gamma.length; j++) out[j] = gamma[j]! + 1;
-      return out;
-    },
-    t.byteLength,
-  );
+  return derive(t.shape, [t], ([gamma]) => {
+    const out = new Float32Array(gamma.length);
+    for (let j = 0; j < gamma.length; j++) out[j] = gamma[j]! + 1;
+    return out;
+  });
 }
 
 export function transformStreamingStateDict(
@@ -46,11 +41,7 @@ export function transformStreamingStateDict(
   const logK = take(sd, `${comp}.log_k`);
   sd.tensors.set(
     `${comp}.k`,
-    derivedTensor(
-      [1],
-      async () => Float32Array.from([Math.exp((await logK.f32())[0]!)]),
-      logK.byteLength,
-    ),
+    derive([1], [logK], ([log]) => Float32Array.from([Math.exp(log[0]!)])),
   );
 
   // Encoder: no rope, so the full score scale folds into the q rows.

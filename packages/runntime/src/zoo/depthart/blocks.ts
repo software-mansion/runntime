@@ -8,7 +8,7 @@
  *  The depthwise conv's own identity branch lives inside RepDW, so it is not
  *  a block-level residual. */
 
-import { add, derivedTensor, nn, type LazyStateDict } from '../../core/index.ts';
+import { add, derive, nn, type LazyStateDict } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
 import { requireTensor } from '../errors.ts';
 import { Conv2dBN, RepDW } from './layers.ts';
@@ -56,12 +56,10 @@ export class ConvBlock extends Module {
       const src = at(n);
       sd.tensors.set(
         key(n),
-        derivedTensor(
+        derive(
           src.shape,
-          async () => {
-            const [v, s] = await Promise.all([src.f32(), scale.f32()]);
-            return v.map((x, o) => x * s[o]!);
-          },
+          [src, scale],
+          ([v, s]) => v.map((x, o) => x * s[o]!),
           src.byteLength + (n.endsWith('weight') ? scale.byteLength : 0),
         ),
       );

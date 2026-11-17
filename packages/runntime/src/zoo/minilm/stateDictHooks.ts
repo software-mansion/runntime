@@ -15,7 +15,7 @@
 
 import {
   concatRows,
-  derivedTensor,
+  derive,
   scaleWeight,
   type LazyStateDict,
   type LazyTensor,
@@ -47,17 +47,11 @@ export function transformMinilmStateDict(
   const tokenType = take(sd, q('embeddings.token_type_embeddings.weight'));
   sd.tensors.set(
     positions,
-    derivedTensor(
-      position.shape,
-      async () => {
-        const pos = await position.f32();
-        const type = await tokenType.f32();
-        const out = new Float32Array(pos.length);
-        for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
-        return out;
-      },
-      position.byteLength + tokenType.byteLength,
-    ),
+    derive(position.shape, [position, tokenType], ([pos, type]) => {
+      const out = new Float32Array(pos.length);
+      for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
+      return out;
+    }),
   );
 
   for (let i = 0; i < cfg.layers; i++) {
