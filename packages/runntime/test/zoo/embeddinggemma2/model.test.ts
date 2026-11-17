@@ -7,7 +7,7 @@ import { EmbeddingGemma2Model } from '../../../src/zoo/embeddinggemma2/model.ts'
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
 
 describe('EmbeddingGemma2Model', () => {
-  // The hook builds each layer's qkv from q_proj, k_proj and v_proj and its
+  // Each layer stacks q_proj, k_proj and v_proj, and the hook builds its
   // qkv_norm from q_norm and k_norm, rewrites layer_scalar and scales the PLE
   // projection. Each must bind where the file holds its sources, or the
   // loader fetches an evicted chunk again.
@@ -29,14 +29,11 @@ describe('EmbeddingGemma2Model', () => {
     const layer = (i: number) => `language_model.layers.${i}.self_attn`;
     const file = zeroCheckpoint(
       new EmbeddingGemma2Model(cfg),
-      cfg.layerTypes.flatMap((_, i) => [`${layer(i)}.qkv.weight`, `${layer(i)}.qkv_norm`]),
+      cfg.layerTypes.map((_, i) => `${layer(i)}.qkv_norm`),
       Object.fromEntries(
         cfg.layerTypes.flatMap((type, i) => {
-          const { headDim, kvHeads } = cfg.attention[type];
+          const { headDim } = cfg.attention[type];
           return [
-            [`${layer(i)}.q_proj.weight`, [cfg.heads * headDim, cfg.hidden]],
-            [`${layer(i)}.k_proj.weight`, [kvHeads * headDim, cfg.hidden]],
-            [`${layer(i)}.v_proj.weight`, [kvHeads * headDim, cfg.hidden]],
             [`${layer(i)}.q_norm.weight`, [headDim]],
             [`${layer(i)}.k_norm.weight`, [headDim]],
           ];
