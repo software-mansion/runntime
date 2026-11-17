@@ -29,7 +29,8 @@ const STEADY_CALLS = 20;
 function loadRandomWeights(model: AnyModule, root: TgpuRoot): void {
   const upload = gpuUpload(root);
   let seed = 1;
-  for (const [, p] of model.namedParameters()) {
+  // The stored parameters: a FusedLinear's stacked weight, not its parts.
+  for (const [, p] of model.storageParameters()) {
     const f32 = randomF32(p.shape.elems, seed++);
     if (p instanceof CpuParameter) {
       p.bindData(f32);

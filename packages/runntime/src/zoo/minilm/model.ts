@@ -2,8 +2,8 @@
  *  LayerNorm runs after each residual add and every one carries a bias.
  *
  *  Attention is one fused qkv matmul sliced back into q/k/v, with an unbounded
- *  window both ways. The score scale is folded into the q and k projections at
- *  load, so the kernel applies none. Positions are a learned table with the
+ *  window both ways. The score scale is folded into the query and key
+ *  projections at load, so the kernel applies none. Positions are a learned table with the
  *  constant token-type row folded in. Module fields are named like the
  *  checkpoint (BertModel), so `LayerNorm` is capitalized. */
 
@@ -57,13 +57,19 @@ class MinilmEmbeddings extends nn.Module<
 
 /** BertSelfAttention: q, k and v as one projection, scores through `mha`. */
 class SelfAttention extends nn.Module {
-  /** q | k | v rows, fused at load with the score scale split over q and k. */
-  readonly qkv: nn.Linear;
+  /** Carries half of the score scale, folded in at load, like `key`. */
+  readonly query: nn.Linear;
+  readonly key: nn.Linear;
+  readonly value: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   constructor(cfg: MinilmConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
-    this.qkv = new nn.Linear(cfg.hidden, 3 * qw);
+    this.query = new nn.Linear(cfg.hidden, qw);
+    this.key = new nn.Linear(cfg.hidden, qw);
+    this.value = new nn.Linear(cfg.hidden, qw);
+    this.qkv = new nn.FusedLinear([this.query, this.key, this.value]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: cfg.heads,
       kvHeads: cfg.heads,
