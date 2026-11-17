@@ -10,7 +10,6 @@ import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
 import { bf16ToF16Bits, f32ArrayToF16Bits } from '../weights/convert.ts';
 import {
   deriveFromTensors,
-  quantTensor,
   type DerivedTensor,
   type FileSource,
   type FileTensor,
@@ -123,14 +122,6 @@ async function bindStateDict(
   upload: UploadFn,
   opts: LoadStateDictOpts,
 ): Promise<void> {
-  // Whatever reads a quantized tensor as floats gets it dequantized. A weight
-  // its layer runs quantized is read as ints and never lands here.
-  const loadedAsFloat = new Set<string>();
-  for (const [name, t] of sd.tensors) {
-    if (t.kind !== 'quant') continue;
-    sd.tensors.set(name, quantTensor({ ...t, onFloatRead: () => loadedAsFloat.add(name) }));
-  }
-
   model.transformStateDict?.(sd, '');
   const visit = (parent: AnyModule, parentPrefix: string): void => {
     for (const [name, child] of parent.namedChildren()) {
@@ -140,6 +131,13 @@ async function bindStateDict(
     }
   };
   visit(model, '');
+  if (sd.quantizedAsFloat?.length) {
+    console.warn(
+      'loadStateDict: quantized weights loaded as float, the quantized kernel of their layer ' +
+        `cannot run their shape or group size: ${sd.quantizedAsFloat.join(', ')}`,
+    );
+    sd.quantizedAsFloat = undefined;
+  }
 
   const params = [...model.namedParameters()];
   const paramNames = new Set(params.map(([n]) => n));
@@ -194,8 +192,8 @@ async function bindStateDict(
   for (const [name, p] of params) {
     let t = sd.tensors.get(name)!;
     // Linear's and the convs' hooks turn a quantized weight into quantW
-    // words, so a QuantTensor still here is bound to something that reads
-    // floats: an embedding table, a norm, a plain parameter.
+    // words, so a QuantTensor still here is bound to something no quantized
+    // kernel reads: an embedding table, a norm, a plain parameter.
     if (t.kind === 'quant') {
       if (p.shape.dtype === 'quantW') {
         throw new RunntimeError(
@@ -230,12 +228,6 @@ async function bindStateDict(
     }
     done += t.byteLength;
     opts.onProgress?.(name, done, total);
-  }
-  if (loadedAsFloat.size > 0) {
-    console.warn(
-      'loadStateDict: quantized tensors loaded as float, no quantized kernel runs them: ' +
-        list([...loadedAsFloat]),
-    );
   }
   for (const [, b] of model.namedBuffers()) {
     // A Buffer's data is computed CPU-side and always f32, and half() only

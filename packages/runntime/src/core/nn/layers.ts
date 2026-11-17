@@ -39,7 +39,7 @@ import {
   type LazyTensor,
   type QuantTensor,
 } from '../weights/safetensors.ts';
-import { readFloats, transposeWeight } from '../weights/transforms.ts';
+import { dequantize, readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -138,10 +138,12 @@ function loadQuantWeight(
 }
 
 /** A quantized weight its layer's quantized kernel cannot run, as its
- *  dequantized f32 values in torch's `shape`. Reading it puts the tensor in
+ *  dequantized f32 values in torch's `shape`, and noted on `sd` for
  *  loadStateDict's warning. */
-const asFloat = (t: QuantTensor, shape: readonly number[]): LazyTensor =>
-  deriveFromTensors([...shape], [t], ([t]) => t.f32());
+function asFloat(sd: LazyStateDict, t: QuantTensor, shape: readonly number[]): LazyTensor {
+  (sd.quantizedAsFloat ??= []).push(t.name);
+  return dequantize(t, shape);
+}
 
 /** `t`'s scales in f32, as stored. */
 async function scalesF32(t: QuantTensor): Promise<Float32Array> {
@@ -219,7 +221,7 @@ export class Linear extends Module {
       matmulQuantTiledEligible(this.inFeatures, this.outFeatures, groupSize) &&
       this.outFeatures % (32 / bits) === 0;
     if (fits) this.loadQuantized(sd, prefix, tensor);
-    else sd.tensors.set(name, transposeWeight(asFloat(tensor, tensor.shape)));
+    else sd.tensors.set(name, transposeWeight(asFloat(sd, tensor, tensor.shape)));
   }
   /** Loads the weight as quantW words [in, out] with its scales
    *  [in / groupSize, out]. */
@@ -348,7 +350,7 @@ export class Conv1d extends Module {
         this.loadQuantized(sd, prefix, name, tensor, n);
         return;
       }
-      tensor = asFloat(tensor, [cOut, cIn, kernel]);
+      tensor = asFloat(sd, tensor, [cOut, cIn, kernel]);
     }
     // Without this a weight with equal in/out channels loads scrambled.
     if (
@@ -522,7 +524,7 @@ export class ConvTranspose1d extends Module {
       if (cOut % 4 === 0 && n % (32 / w.bits) === 0 && quantConvFits(cIn, taps, n)) {
         this.loadQuantized(sd, prefix, w);
       } else {
-        w = asFloat(w, [cIn, cOut, k]);
+        w = asFloat(sd, w, [cIn, cOut, k]);
       }
     }
     if (w && w.kind !== 'quant') {
