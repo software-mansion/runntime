@@ -14,6 +14,7 @@ import {
   type F32Buffer,
   type U32Buffer,
 } from '../common.ts';
+import { compilePipelines } from '../../gpu/asyncCompile.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import type { FitMode } from '../image/imageToChw.ts';
 
@@ -401,6 +402,14 @@ export function createDecodeDetections(root: TgpuRoot, task: DecodeTask, inputSi
   const slotCell = root.createBuffer(d.arrayOf(d.u32, cells)).$usage('storage');
   const workgroups = Math.ceil(cells / WORKGROUP_SIZE);
   return {
+    /** Compiles the pipelines this task uses without blocking, for the
+     *  load-time warm-up. */
+    compile: (): Promise<void> =>
+      compilePipelines(
+        task === 'segment'
+          ? [scorePipeline, rankPipeline, maskPipeline]
+          : [scorePipeline, rankPipeline],
+      ),
     /** Decodes `levels`, the three `[channels, h, w]` f32 head levels, and
      *  `proto` for segment, into `out` as a detectionList. `imageSize` holds
      *  the image's `[width, height]`. */

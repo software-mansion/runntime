@@ -1,7 +1,7 @@
 /** encodeClassify against classify on the same model input: the GPU list
  *  has the classes and confidences classify() returns, best first. Random
  *  weights, so the values mean nothing; the two paths must agree. */
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   IMAGENET_MEAN,
   IMAGENET_STD,
@@ -13,12 +13,12 @@ import { createImageClassifier } from '../../../../src/zoo/tasks/cv/imageClassif
 import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imagePreprocessor.ts';
 import { expectClose, gpu, requireFeature } from '../../../gpu.ts';
 import { randomSafetensors } from '../../randomWeights.ts';
-import { randomRgba } from './images.ts';
+import { randomRgba, rgbaTexture } from './images.ts';
 
 const { root } = await gpu();
 const { inputSize: SIZE, numClasses, headHidden } = MOBILENETV4_CONV_S;
 
-async function classifier() {
+async function classifier(warmUp = true) {
   const template = new MobileNetV4Model(MOBILENETV4_CONV_S, { root });
   const weights = randomSafetensors(template, {
     scale: 0.1,
@@ -27,7 +27,10 @@ async function classifier() {
   });
   template.dispose();
   // Stretch at the input size, so the fit is the identity on both paths.
-  const runner = await createImageClassifier({ modelPath: weights, resizeMode: 'stretch' });
+  const runner = await createImageClassifier(
+    { modelPath: weights, resizeMode: 'stretch' },
+    { warmUp },
+  );
   onTestFinished(() => runner.dispose());
   return runner;
 }
@@ -71,6 +74,22 @@ describe('encodeClassify', () => {
       want.map((c) => c.confidence),
       { atol: 1e-7, rtol: 1e-4 },
     );
+  });
+
+  it.for([
+    { name: 'nothing after a load with warm-up', warmUp: true, compiles: false },
+    { name: 'its own pipelines after a load without warm-up', warmUp: false, compiles: true },
+  ])('compiles $name', async ({ warmUp, compiles }, ctx) => {
+    requireFeature(ctx, root, 'shader-f16');
+    const blocking = vi.spyOn(root.device, 'createComputePipeline');
+    onTestFinished(() => blocking.mockRestore());
+    const runner = await classifier(warmUp);
+    const texture = rgbaTexture(root, randomRgba(SIZE, SIZE, 3), SIZE, SIZE);
+    const target = root.createBuffer(runner.schemas.output(5)).$usage('storage');
+    onTestFinished(() => target.destroy());
+
+    runner.encodeClassify({ source: texture, target });
+    expect(blocking.mock.calls.length > 0).toBe(compiles);
   });
 
   it('rejects a topk past what the target holds', async (ctx) => {

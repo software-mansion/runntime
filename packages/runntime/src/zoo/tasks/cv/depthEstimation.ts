@@ -134,6 +134,14 @@ export async function createDepthEstimator(
     const root = defaultRoot();
     const imageToChw = scope.track(createImageToChw(root));
     const mapToTexture = scope.track(createMapToTexture(root));
+    // encodeEstimateDepth's own pipelines: the estimator's warm-up does not
+    // run them. The draw pipeline is the one for a canvas target.
+    if (opts.warmUp !== false) {
+      await Promise.all([
+        imageToChw.compile(),
+        mapToTexture.compile(navigator.gpu.getPreferredCanvasFormat()),
+      ]);
+    }
     const schemas = {
       input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),
       output: d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize),

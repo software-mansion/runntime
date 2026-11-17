@@ -4,6 +4,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { flatIndex, WORKGROUP_SIZE, type F32Buffer, type U32Buffer } from '../common.ts';
+import { compilePipelines } from '../../gpu/asyncCompile.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** How the image is fitted into the input, as the CPU preprocessor's
@@ -151,6 +152,8 @@ export function createImageToChw(root: TgpuRoot) {
   // back onto the image reads it from here.
   const size: U32Buffer = root.createBuffer(d.arrayOf(d.u32, 2)).$usage('storage');
   return {
+    /** Compiles both pipelines without blocking, for the load-time warm-up. */
+    compile: (): Promise<void> => compilePipelines([pipelines.texture, pipelines.external]),
     /** `[width, height]` of the image the last encode() read, written by
      *  the pass that encode() records. */
     size,
