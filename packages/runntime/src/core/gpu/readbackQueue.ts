@@ -6,7 +6,7 @@ import type { TgpuRoot } from 'typegpu';
 import type { Value } from '../graph/value.ts';
 import { leaseStaging, shapeSpan } from './buffers.ts';
 
-interface PendingReadback {
+export interface PendingReadback {
   values: readonly Value[];
   resolve: (a: Float32Array[]) => void;
   reject: (e: unknown) => void;
@@ -37,25 +37,33 @@ export class ReadbackQueue {
     rb.reject(err);
   }
 
-  submit(build: (encoder: GPUCommandEncoder) => void): void {
+  /** Removes the queued request and returns it, for a submit that runs
+   *  later: it then carries this request, not one queued in between. */
+  take(): PendingReadback | undefined {
+    const rb = this.pending;
+    this.pending = undefined;
+    return rb;
+  }
+
+  submit(build: (encoder: GPUCommandEncoder) => void, rb = this.take()): void {
     const encoder = this.root.device.createCommandEncoder();
     let finish: ((err?: unknown) => void) | undefined;
     try {
       build(encoder);
-      finish = this.encodePending(encoder);
+      if (rb !== undefined) finish = this.encodeReadback(encoder, rb);
       this.root.device.queue.submit([encoder.finish()]);
     } catch (err) {
       if (finish !== undefined) finish(err);
-      else this.rejectPending(err);
+      else rb?.reject(err);
       throw err;
     }
     finish?.();
   }
 
-  private encodePending(encoder: GPUCommandEncoder): ((err?: unknown) => void) | undefined {
-    if (this.pending === undefined) return undefined;
-    const rb = this.pending;
-    this.pending = undefined;
+  private encodeReadback(
+    encoder: GPUCommandEncoder,
+    rb: PendingReadback,
+  ): ((err?: unknown) => void) | undefined {
     let lease: ReturnType<typeof leaseStaging>;
     const spans: ReturnType<typeof shapeSpan>[] = [];
     let total = 0;

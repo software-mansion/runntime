@@ -25,7 +25,8 @@ import {
 import type { GpuPerfSink, GpuSubmitTiming } from './perf.ts';
 import { encodePass } from './encode.ts';
 import { encodeTimed, type KernelTiming, profileHandles } from './timing.ts';
-import { ReadbackQueue } from './readbackQueue.ts';
+import { type PendingReadback, ReadbackQueue } from './readbackQueue.ts';
+import { compilePipelines, needsAsyncCompile } from './asyncCompile.ts';
 import type { GpuBufferRef, Value } from '../graph/value.ts';
 import { defaultRoot, executorPerRoot, setDefaultRoot } from './context.ts';
 import { copyChHwc4Handle } from '../kernels/conv/hwc4.ts';
@@ -186,6 +187,46 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
   let disposals = 0;
 
   const readbacks = new ReadbackQueue(root);
+  /** The last submit waiting for its pipelines to compile. Later submits and
+   *  readbacks wait for it, so GPU work keeps the order it was issued in. */
+  let deferred: Promise<void> | undefined;
+  const mustDefer = (batch: readonly KernelHandle[]): boolean =>
+    deferred !== undefined || needsAsyncCompile(root.device, batch);
+  /** Runs `submit` once `batch`'s pipelines are compiled and every earlier
+   *  deferred submit has run. A failure rejects the readback queued for it. */
+  const submitWhenCompiled = (
+    batch: readonly KernelHandle[],
+    submit: (rb: PendingReadback | undefined) => void,
+  ): void => {
+    const rb = readbacks.take();
+    const earlier = deferred;
+    const run = async (): Promise<void> => {
+      try {
+        await Promise.all([earlier, compilePipelines(batch.map((h) => h.pipeline))]);
+        submit(rb);
+      } catch (err) {
+        rb?.reject(err);
+        throw err;
+      }
+    };
+    const tail = run();
+    deferred = tail;
+    const settle = () => {
+      if (deferred === tail) deferred = undefined;
+    };
+    tail.then(settle, settle);
+  };
+  const submitBatch = (batch: readonly KernelHandle[], rb?: PendingReadback): void => {
+    let readTiming: (() => Promise<GpuSubmitTiming>) | undefined;
+    readbacks.submit((encoder) => {
+      if (perf !== undefined && canTime) {
+        readTiming = encodeTimed(root.device, encoder, batch, perf.perOp === true);
+      } else {
+        encodePass(encoder, batch);
+      }
+    }, rb);
+    perf?.onSubmit(batch.length, readTiming?.());
+  };
   const scratches = new Map<string, { buf: F32Buffer; elems: number }>();
   const ctx: DispatchCtx = {
     root,
@@ -247,7 +288,10 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
         targets,
         replay: () => {
           live();
-          readbacks.submit((encoder) => encodePass(encoder, recorded));
+          const submit = (rb?: PendingReadback) =>
+            readbacks.submit((encoder) => encodePass(encoder, recorded), rb);
+          if (mustDefer(recorded)) submitWhenCompiled(recorded, submit);
+          else submit();
         },
         encodeReplay: (encoder) => {
           live();
@@ -302,21 +346,18 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
       handles.push(...encoded);
       if (key !== undefined) handleCache.set(key, encoded);
     },
-    /** Encodes every queued handle into one pass and submits once. */
+    /** Encodes every queued handle into one pass and submits once. In a
+     *  warm-up the submit waits for its pipelines to compile. */
     submit: () => {
       if (handles.length === 0) return;
-      const n = handles.length;
-      let readTiming: (() => Promise<GpuSubmitTiming>) | undefined;
-      readbacks.submit((encoder) => {
-        if (perf !== undefined && canTime) {
-          readTiming = encodeTimed(root.device, encoder, handles, perf.perOp === true);
-        } else {
-          encodePass(encoder, handles);
-        }
-      });
+      if (mustDefer(handles)) {
+        const batch = [...handles];
+        submitWhenCompiled(batch, (rb) => submitBatch(batch, rb));
+      } else {
+        submitBatch(handles);
+      }
       if (capturing) capturing.push(...handles);
       handles.length = 0;
-      perf?.onSubmit(n, readTiming?.());
     },
     /** Copies one concat input the driver could not elide; hwc4 needs a
      *  strided copy. */
@@ -363,8 +404,14 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
         v.markReleased();
       }
     },
-    readback: (buffer, shape) => readbackShape(root, buffer, shape),
-    readbackMany: (items) => readbackShapes(root, items),
+    readback: (buffer, shape) =>
+      deferred === undefined
+        ? readbackShape(root, buffer, shape)
+        : deferred.then(() => readbackShape(root, buffer, shape)),
+    readbackMany: (items) =>
+      deferred === undefined
+        ? readbackShapes(root, items)
+        : deferred.then(() => readbackShapes(root, items)),
     readbackManyOnSubmit: (values) => readbacks.request(values),
     readbackOnSubmit: (value) => executor.readbackManyOnSubmit([value]).then((outs) => outs[0]!),
     toArrayFused: (value) => {
