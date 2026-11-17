@@ -110,6 +110,13 @@ export interface CaptureExecutor {
    *  overwrite inputs in place before each replay. */
   captureFrame<T>(fn: () => T): {
     targets: T;
+    /** Resolves once the recording's own submit has run. That submit waits
+     *  while a pipeline of the frame compiles without blocking, in this
+     *  model's warm-up or another's on the same device, and encodeReplay()
+     *  and profileReplay() throw until it has run.
+     *  Rejects with RunntimeError `EXECUTION_FAILED` when a pipeline does
+     *  not compile. */
+    ready: Promise<void>;
     replay: () => void;
     /** Records the frame's dispatches into `encoder` without submitting, so
      *  other work can run before and after it in one command buffer. */
@@ -286,6 +293,7 @@ export function gpuExecutor(root: TgpuRoot, opts: { perf?: GpuPerfSink } = {}): 
       };
       return {
         targets,
+        ready: deferred ?? Promise.resolve(),
         replay: () => {
           live();
           const submit = (rb?: PendingReadback) =>

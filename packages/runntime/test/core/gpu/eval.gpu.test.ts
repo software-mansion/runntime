@@ -340,6 +340,7 @@ describe('gpuExecutor in a warm-up', () => {
     const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
     onTestFinished(() => root.destroy());
     return {
+      root,
       device: root.device,
       ex: gpuExecutor(root),
       a: tensor(root, new Float32Array([1, 2, 3, 4]), [2, 2]),
@@ -402,6 +403,25 @@ describe('gpuExecutor in a warm-up', () => {
     const got = ex.readbackOnSubmit(y);
     replay();
     expectClose(await got, PRODUCT);
+    expect(blocking).not.toHaveBeenCalled();
+  });
+
+  it('encodes a replay once ready, captured while another warm-up compiles its pipeline', async () => {
+    const { root, device, ex, a, b, blocking } = await freshDevice();
+    const other = gpuExecutor(root);
+    const warming = warmUp(device, () => toArray(matmul(a, b), other));
+    const cap = ex.captureFrame(() => {
+      const y = matmul(a, b);
+      evalValues([y], ex);
+      return y;
+    });
+    // Before this, encodeReplay() throws: matmul is still compiling.
+    await cap.ready;
+    const encoder = device.createCommandEncoder();
+    cap.encodeReplay(encoder);
+    device.queue.submit([encoder.finish()]);
+    expectClose(await ex.readback(cap.targets.buffer, cap.targets.shape), PRODUCT);
+    expectClose(await warming, PRODUCT);
     expect(blocking).not.toHaveBeenCalled();
   });
 
