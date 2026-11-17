@@ -1,7 +1,7 @@
 /** Loads a model from a checkpoint read in chunks and reports the chunks
  *  fetched, for the tests that check a load walks its file once. */
 import { pending } from '../../src/core/graph/value.ts';
-import { Linear } from '../../src/core/nn/layers.ts';
+import { Conv1d, Linear } from '../../src/core/nn/layers.ts';
 import type { AnyModule } from '../../src/core/nn/module.ts';
 import {
   bufferSource,
@@ -11,7 +11,8 @@ import {
 import { safetensorsFile } from '../core/weights/checkpoint.ts';
 
 /** A checkpoint of zeros that `model` loads: a tensor for each declared
- *  parameter, a Linear's weight in torch's [out, in], without the names in
+ *  parameter, a Linear's weight in torch's [out, in] and a Conv1d's in
+ *  torch's [out, in, kernel], without the names in
  *  `derived` (the parameters a hook computes) and with `sources` (the
  *  tensors it computes them from). Names are sorted, as a safetensors file
  *  holds them. */
@@ -20,15 +21,19 @@ export function zeroCheckpoint(
   derived: readonly string[],
   sources: Record<string, number[]>,
 ): Uint8Array {
-  const linears = new Set(
-    [...model.namedModules()].filter(([, m]) => m instanceof Linear).map(([path]) => path),
-  );
+  const modules = new Map(model.namedModules());
   const shapes: Record<string, number[]> = { ...sources };
   for (const [name, p] of model.namedParameters()) {
     if (derived.includes(name)) continue;
     const dims = [...(p.shape.dims ?? [p.shape.elems])];
-    const linearWeight = name.endsWith('.weight') && linears.has(name.slice(0, -'.weight'.length));
-    shapes[name] = linearWeight ? dims.reverse() : dims;
+    const layer = name.endsWith('.weight')
+      ? modules.get(name.slice(0, -'.weight'.length))
+      : undefined;
+    if (layer instanceof Conv1d) {
+      shapes[name] = [layer.outChannels, layer.inChannels, layer.kernelSize];
+    } else {
+      shapes[name] = layer instanceof Linear ? dims.reverse() : dims;
+    }
   }
   return safetensorsFile(
     Object.fromEntries(

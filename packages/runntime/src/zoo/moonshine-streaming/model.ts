@@ -3,7 +3,7 @@
  *  length, and one loadStateDict binds the whole checkpoint.
  *
  *  The decoder's embedding weight serves as both token lookup and the tied LM
- *  head, so the checkpoint's `proj_out.weight` is left unread. */
+ *  head, so the load drops the checkpoint's tied `proj_out.weight`. */
 
 import {
   argmaxDot,

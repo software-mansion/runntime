@@ -1,7 +1,8 @@
 /** Derives what the HF BertModel checkpoint stores differently from the
  *  model's parameters, as lazy tensors; nothing is fetched here. Every other
  *  tensor binds under its own name, since the modules are named like the
- *  checkpoint; the pooler and `position_ids` are left unread.
+ *  checkpoint. The pooler and `position_ids`, which the model never reads,
+ *  are dropped.
  *
  *  The constant token-type row folds into the position table, and q/k/v fuse
  *  into one weight with the score scale split across the q and k parts, so
@@ -40,6 +41,10 @@ export function transformMinilmStateDict(
   const q = (name: string) => qualify(prefix, name);
   // qkScale on q and k each — their product is the 1/√headDim score scale.
   const qkScale = cfg.headDim ** -0.25;
+
+  for (const unread of ['pooler.dense.weight', 'pooler.dense.bias', 'embeddings.position_ids']) {
+    sd.tensors.delete(q(unread));
+  }
 
   // position' = position + tokenType[0] (every real input is token type 0).
   const positions = q('embeddings.position_embeddings.weight');

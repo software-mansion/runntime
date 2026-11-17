@@ -35,6 +35,9 @@ const CHECKPOINT: Record<string, Entry> = {
   'pooler.dense.bias': { values: [0, 0], shape: [2] },
 };
 
+/** The checkpoint's tensors the model never reads. */
+const UNREAD = ['embeddings.position_ids', 'pooler.dense.weight', 'pooler.dense.bias'];
+
 /** The checkpoint's tensors the hook consumes into derived ones. */
 const CONSUMED = [
   'embeddings.token_type_embeddings.weight',
@@ -55,9 +58,12 @@ describe('transformMinilmStateDict', () => {
     transformMinilmStateDict(sd, '', CFG);
     const get = (name: string) => sd.tensors.get(name)!;
 
-    // Every other tensor stays as it is, the pooler and position_ids too.
+    // The unread tensors are gone. Every other tensor stays as it is.
     const untouched = Object.keys(CHECKPOINT).filter(
-      (name) => !CONSUMED.includes(name) && name !== 'embeddings.position_embeddings.weight',
+      (name) =>
+        !CONSUMED.includes(name) &&
+        !UNREAD.includes(name) &&
+        name !== 'embeddings.position_embeddings.weight',
     );
     expect([...sd.tensors.keys()].sort()).toEqual(
       [
@@ -89,7 +95,8 @@ describe('transformMinilmStateDict', () => {
     expect(position.byteLength).toBe(8 * elemBytes);
     expect(await contents(position)).toEqual({ type: 'f32', values: [11, 22, 13, 24] });
 
-    // Nothing is dropped: every derived tensor carries its sources' bytes.
-    expect(sd.totalBytes()).toBe(total);
+    // Every derived tensor carries its sources' bytes, so the 8 values of the
+    // unread tensors are the only bytes lost.
+    expect(sd.totalBytes()).toBe(total - 8 * elemBytes);
   });
 });

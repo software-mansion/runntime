@@ -1,6 +1,7 @@
 /** Fuses the HF Moonshine checkpoint's attention projections as lazy derived
  *  tensors; nothing is fetched here. Every other tensor binds under its own
- *  name, since the modules are named like the checkpoint.
+ *  name, since the modules are named like the checkpoint, except the tied
+ *  `proj_out.weight`, which the model never reads and is dropped.
  *
  *  q/k/v row-stack into one fused weight, so the hot path is a single matmul.
  *  No rotary permutation is needed, since HF's convention already matches the
@@ -54,6 +55,8 @@ export function transformDecoder(
   prefix: string,
   dec: { layers: number; hidden: number; headDim: number },
 ): void {
+  // The LM head is the embedding weight, so the tied copy is never read.
+  sd.tensors.delete(qualify(prefix, 'proj_out.weight'));
   const crossQScale = 1 / Math.sqrt(dec.headDim);
   for (let i = 0; i < dec.layers; i++) {
     const L = qualify(prefix, `model.decoder.layers.${i}`);

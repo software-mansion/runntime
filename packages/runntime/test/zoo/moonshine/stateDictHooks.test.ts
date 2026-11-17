@@ -38,12 +38,13 @@ const UNTOUCHED = [
   'model.decoder.layers.0.mlp.fc2.weight',
   'model.decoder.layers.0.mlp.fc2.bias',
   'model.decoder.norm.weight',
-  'proj_out.weight',
 ];
 
 /** A one-layer Moonshine checkpoint with HF names. Every value is exact in f16. */
 const CHECKPOINT: Record<string, Entry> = {
   ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
+  // The tied LM head, which the model never reads.
+  'proj_out.weight': ZERO,
   'model.encoder.layers.0.self_attn.q_proj.weight': square([1, 2, 3, 4]),
   'model.encoder.layers.0.self_attn.k_proj.weight': square([5, 6, 7, 8]),
   'model.encoder.layers.0.self_attn.v_proj.weight': square([9, 10, 11, 12]),
@@ -102,8 +103,9 @@ describe('transformMoonshineStateDict', () => {
     expect(crossKv.byteLength).toBe(8 * elemBytes);
     expect(await contents(crossKv)).toEqual({ type, values: [2, 4, 6, 8, 10, 20, 30, 40] });
 
-    // Nothing is dropped: the fused tensors carry their parts' bytes.
-    expect(sd.totalBytes()).toBe(total);
+    // The derived tensors carry their sources' bytes, so the unread
+    // proj_out.weight is the only loss.
+    expect(sd.totalBytes()).toBe(total - ZERO.values.length * elemBytes);
   });
 
   it('rejects a projection whose width is not dModel', async () => {

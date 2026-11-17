@@ -4,8 +4,7 @@
  *  as forward arguments — and one loadStateDict binds the whole checkpoint.
  *
  *  The decoder's embedding weight serves as both token lookup and the tied LM
- *  head, so a checkpoint that also stores the tied `proj_out.weight` gets it
- *  reported as unread. */
+ *  head, so the load drops a checkpoint's tied `proj_out.weight`. */
 
 import {
   argmaxDot,

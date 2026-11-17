@@ -44,13 +44,14 @@ const UNTOUCHED = [
   'model.decoder.layers.0.mlp.fc2.weight',
   'model.decoder.layers.0.mlp.fc2.bias',
   'model.decoder.norm.weight',
-  'proj_out.weight',
 ];
 
 /** A one-layer Moonshine v2 checkpoint with HF names. Every value is exact in
  *  f16. */
 const CHECKPOINT: Record<string, Entry> = {
   ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
+  // The tied LM head, which the model never reads.
+  'proj_out.weight': ZERO,
   'model.encoder.embedder.comp.log_k': { values: [1], shape: [1] },
   'model.encoder.layers.0.input_layernorm.gamma': { values: [0.5, -0.25], shape: [2] },
   'model.encoder.layers.0.post_attention_layernorm.gamma': { values: [0, 2], shape: [2] },
@@ -141,7 +142,8 @@ describe('transformStreamingStateDict', () => {
       values: [2, 4, 6, 8, 10, 12, 10, 20, 30, 40, 50, 60],
     });
 
-    // Nothing is dropped: every derived tensor carries its source's bytes.
-    expect(sd.totalBytes()).toBe(total);
+    // The derived tensors carry their sources' bytes, so the unread
+    // proj_out.weight is the only loss.
+    expect(sd.totalBytes()).toBe(total - ZERO.values.length * elemBytes);
   });
 });
