@@ -141,7 +141,7 @@ function loadQuantWeight(
  *  dequantized f32 values in torch's `shape`, and noted on `sd` for
  *  loadStateDict's warning. */
 function asFloat(sd: LazyStateDict, t: QuantTensor, shape: readonly number[]): LazyTensor {
-  (sd.quantizedAsFloat ??= []).push(t.name);
+  (sd.quantizedAsFloat ??= []).push(...t.sources.map((s) => s.name));
   return dequantize(t, shape);
 }
 
