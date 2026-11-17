@@ -4,17 +4,16 @@
  *  checkpoint.
  *
  *  The encoder norm gammas gain back their −1 offset, `log_k` becomes k, and
- *  q/k/v stack into fused weights — scaled on the encoder, which has no
- *  rope, and unscaled on the decoder, whose rope tables carry the scale.
+ *  the score scale folds into q on the encoder, which has no rope, and on the
+ *  cross attention. The decoder's rope tables carry its self-attention scale.
  *
- *  Weights stay in torch layout for the core Linear hook to transpose. An F16
- *  checkpoint gives f16 decoder q/k/v; the scaled encoder q/k/v and
- *  cross-attention q, the norm gammas and k stay f32. Derived byteLengths
- *  carry the source file bytes, so load progress counts every byte the model
- *  reads. */
+ *  Weights stay in torch layout for the core Linear hook to transpose. The
+ *  scaled q, the norm gammas and k stay f32 even from an F16 checkpoint.
+ *  Derived byteLengths carry the source file bytes, so load progress counts
+ *  every byte the model reads. */
 
 import { derive, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
-import { fuseQkv, qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
+import { qualify, scaleQuery, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
 import type { MoonshineStreamingConfig } from './config.ts';
 
 /** Stays f32 for any checkpoint: rounding gamma + 1 to f16 would drop the low
@@ -44,19 +43,14 @@ export function transformStreamingStateDict(
     derive([1], [logK], ([log]) => Float32Array.from([Math.exp(log[0]!)])),
   );
 
-  // Encoder: no rope, so the full score scale folds into the q rows.
-  const encQScale = 1 / Math.sqrt(cfg.enc.headDim);
   for (let i = 0; i < cfg.enc.layers; i++) {
     const L = q(`model.encoder.layers.${i}`);
     gammaNorm(`${L}.input_layernorm`);
-    fuseQkv(sd, `${L}.self_attn`, cfg.enc.hidden, encQScale);
+    // No rope, so the full score scale folds into the q rows.
+    scaleQuery(sd, `${L}.self_attn`, cfg.enc.headDim);
     gammaNorm(`${L}.post_attention_layernorm`);
   }
   gammaNorm(q('model.encoder.final_norm'));
 
-  transformDecoder(sd, prefix, {
-    layers: cfg.dec.layers,
-    hidden: cfg.dec.hidden,
-    headDim: cfg.dec.headDim,
-  });
+  transformDecoder(sd, prefix, { layers: cfg.dec.layers, headDim: cfg.dec.headDim });
 }

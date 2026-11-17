@@ -29,14 +29,19 @@ export interface SelfKV {
 }
 
 class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
-  /** q | k | v rows, fused at load. */
-  readonly qkv: nn.Linear;
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly o_proj: nn.Linear;
   constructor(private readonly cfg: MoonshineConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
-    this.qkv = new nn.Linear(cfg.dModel, 3 * qw, { bias: false });
+    this.q_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.k_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.v_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: cfg.heads,
       kvHeads: cfg.heads,
@@ -79,15 +84,18 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
 class DecoderCrossAttn extends nn.Module<[Value, CrossKV, Value?], Value> {
   /** Carries the 1/√headDim score scale, folded in at load. */
   readonly q_proj: nn.Linear;
-  /** k | v rows, fused at load. */
-  readonly kv: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly kv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly o_proj: nn.Linear;
   constructor(cfg: MoonshineConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
     this.q_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
-    this.kv = new nn.Linear(cfg.dModel, 2 * qw, { bias: false });
+    this.k_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.v_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.kv = new nn.FusedLinear([this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: cfg.heads,
       kvHeads: cfg.heads,
