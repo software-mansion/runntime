@@ -108,6 +108,24 @@ above:
 - Use `nn.ModuleList` where PyTorch does. It adds the index to the name.
 - Give each layer the same sizes.
 
+Layers that read the same input, like an attention block's `query`, `key`
+and `value`, can run as one matmul. Keep them as fields, so the names still
+match, and add an `nn.FusedLinear` over them:
+
+```ts
+class Block extends Module {
+  query = new Linear(384, 384);
+  key = new Linear(384, 384);
+  value = new Linear(384, 384);
+  qkv = new FusedLinear([this.query, this.key, this.value]);
+}
+
+// block.qkv.forward(x): query, key and value of x side by side, [rows, 1152]
+```
+
+The file doesn't change. Call `qkv.forward(x)` instead of the three layers:
+a layer inside a `FusedLinear` can't run on its own.
+
 Then load the file:
 
 ```ts
@@ -148,6 +166,10 @@ the model is no faster and uses no less memory than the float one.
 A `Linear` or conv weight whose shape the quantized kernels can't take
 also loads as float, and a console warning names it. To stay on the
 quantized kernels, keep `--group-size` a multiple of 4.
+
+The layers of a `FusedLinear` run quantized together or not at all. If only
+some of them are quantized, or they differ in bits or group size, the whole
+fused layer loads as float, with the same warning.
 
 **Making a file.** `runntime quantize` lives in the repository under
 `tools/python` and runs with [uv](https://docs.astral.sh/uv/):
