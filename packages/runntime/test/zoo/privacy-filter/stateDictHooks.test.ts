@@ -3,7 +3,9 @@ import {
   renameExportedNormScales,
   transformHfPrivacyFilterStateDict,
 } from '../../../src/zoo/privacy-filter/stateDictHooks.ts';
+import { EagerModel, HIDDEN } from '../../../src/zoo/privacy-filter/model.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
+import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
 
 const ZERO = { values: [0, 0], shape: [2] };
 
@@ -130,5 +132,42 @@ describe('renameExportedNormScales', () => {
       'norm.weight',
     ]);
     expect(sd.tensors.get('norm.weight')).toBe(before.get('norm.scale'));
+  });
+
+  it('keeps every tensor at its place in the file', async () => {
+    const sd = await checkpoint('F32', {
+      'block.0.attn.norm.scale': ZERO,
+      'block.0.attn.qkv.weight': ZERO,
+      'norm.scale': ZERO,
+      'unembedding.weight': ZERO,
+    });
+    renameExportedNormScales(sd);
+    expect([...sd.tensors.keys()]).toEqual([
+      'block.0.attn.norm.weight',
+      'block.0.attn.qkv.weight',
+      'norm.weight',
+      'unembedding.weight',
+    ]);
+  });
+
+  // The norms sit all over an exported file. Each must bind where the file
+  // holds its scale, or the loader fetches an evicted chunk again.
+  it('lets the model fetch each chunk of an exported file once, in file order', async () => {
+    const model = () =>
+      new EagerModel({ blocks: 2, experts: 2, vocab: 8, logits: 4, weightFormat: 'f32' });
+    const norms = [...model().namedParameters()]
+      .map(([name]) => name)
+      .filter((name) => name.endsWith('norm.weight'));
+    const scales = norms.map((name) => `${name.slice(0, -'weight'.length)}scale`);
+    const file = zeroCheckpoint(
+      model(),
+      norms,
+      Object.fromEntries(scales.map((name) => [name, [HIDDEN]])),
+    );
+    // A block is about 30 MB, so the file spans far more chunks than the 4
+    // the source keeps.
+    const chunks = await chunksFetched(model(), file, 2 ** 20, renameExportedNormScales);
+    expect(chunks.length).toBeGreaterThan(12);
+    expect(chunks).toEqual(onceInFileOrder(chunks));
   });
 });

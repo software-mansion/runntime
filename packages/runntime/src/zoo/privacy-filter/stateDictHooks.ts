@@ -79,9 +79,13 @@ export function transformHfPrivacyFilterStateDict(sd: LazyStateDict): void {
 }
 
 /** Renames the RMSNorm scales of an exported file, written as `scale`, to
- *  the core layer's `weight`. */
+ *  the core layer's `weight`. Each keeps its place in `sd`: this runs before
+ *  loadStateDict, which takes the order it finds as the file's. */
 export function renameExportedNormScales(sd: LazyStateDict): void {
-  for (const name of [...sd.tensors.keys()]) {
-    if (name.endsWith('.scale')) move(sd, name, `${name.slice(0, -'scale'.length)}weight`);
+  const entries = [...sd.tensors];
+  sd.tensors.clear();
+  for (const [name, tensor] of entries) {
+    const renamed = name.endsWith('.scale') ? `${name.slice(0, -'scale'.length)}weight` : name;
+    sd.tensors.set(renamed, tensor);
   }
 }
