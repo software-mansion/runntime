@@ -17,7 +17,7 @@ export default defineConfig({
         // Kernels carry a 'use gpu' directive, compiled to WGSL by the plugin.
         plugins: [typegpu()],
         // Pre-bundled up front: a mid-run re-bundle reloads the page and drops the suite.
-        optimizeDeps: { include: ['typegpu'] },
+        optimizeDeps: { include: ['typegpu', '@huggingface/transformers'] },
         test: {
           name: 'gpu',
           include: ['test/**/*.gpu.test.ts'],
