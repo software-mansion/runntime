@@ -35,6 +35,8 @@ uv run runntime quantize model.safetensors model.int8.safetensors --bits 8
   model never reads.
 - It prints the max and mean absolute error of every quantized tensor and
   why each other tensor was skipped. Exclude the layers that lose too much.
+- Use `--bits 8` for models built on 2D convolutions: int4 breaks the outputs
+  of MobileNetV4, DepthART and YOLO26.
 
 ## Development
 
