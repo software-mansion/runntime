@@ -27,8 +27,9 @@ FLOAT_DTYPES = frozenset({"F32", "F16", "BF16"})
 DEFAULT_INCLUDE = ("*.weight",)
 
 DEFAULT_EXCLUDE = ("*embed*", "*pos_emb*", "lm_head.*")
-"""A quality choice, not a format rule: quantized embedding tables only rarely
-hold up, and lm_head often shares the embedding's weights."""
+"""Embedding tables, and lm_head, which often shares the embedding's weights.
+A cautious default, not a format rule: quantizing them is the user's call,
+after comparing the model's outputs."""
 
 F16_MAX = float(np.finfo(np.float16).max)
 """The largest finite f16. A tensor with a bigger value cannot be stored as F16."""
