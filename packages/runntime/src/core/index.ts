@@ -152,6 +152,7 @@ export { foldBnIntoConv } from './weights/foldBn.ts';
 export {
   concatRows,
   dequantize,
+  inTorchShape,
   permuteRows,
   reshapeWeight,
   scaleWeight,

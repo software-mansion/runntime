@@ -11,7 +11,8 @@
  *  A QuantTensor source gives a QuantTensor, except in `dequantize`: the
  *  helpers move its ints and scales together. Whatever would split a scale
  *  group (a column split off the group grid, a reshape of the last dim, a
- *  transpose) throws CHECKPOINT_MISMATCH. */
+ *  transpose) throws CHECKPOINT_MISMATCH; a hook that needs one calls
+ *  `inTorchShape` first. */
 import { RunntimeError } from '../error.ts';
 import { f16ToF32 } from './convert.ts';
 import {
@@ -396,4 +397,14 @@ export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): 
     const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
     return dequantizeInts(ints, scales, t.groupSize);
   });
+}
+
+/** `t` in torch's `shape`, for a hook that reshapes, transposes or splits it
+ *  past dim 0. A file stores a quantized tensor as rows, [shape[0], everything
+ *  else], with its scale groups along the row, so those steps would cut
+ *  through the groups: it comes back as its dequantized floats in `shape`.
+ *  Any other tensor comes back as it is. Throws CHECKPOINT_MISMATCH when a
+ *  quantized tensor's element count is not `shape`'s. */
+export function inTorchShape(t: LazyTensor, shape: readonly number[]): LazyTensor {
+  return t.kind === 'quant' ? dequantize(t, shape) : t;
 }
