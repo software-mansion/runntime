@@ -2,6 +2,7 @@
 CC BY 2.0 from the COCO site, saved once as PNG so the reference and the
 browser read the same pixels."""
 
+import functools
 import hashlib
 import io
 import json
@@ -17,7 +18,8 @@ from .common import references_dir
 # file is checked against its sha256.
 SITE = "http://images.cocodataset.org"
 ANNOTATIONS_ZIP = f"{SITE}/annotations/annotations_trainval2017.zip"
-# The smallest file in the zip that lists every val2017 image with its license.
+# The smallest file in the zip that lists every val2017 image with its
+# license. It holds the captions too.
 ANNOTATIONS = "annotations/captions_val2017.json"
 ANNOTATIONS_SHA256 = "afe3b30e403dd7f228e2373023abbd60042a6e10ec6874d3652df034d289ebb9"
 # The id of CC BY 2.0 in the annotations' license list.
@@ -102,14 +104,19 @@ def _checked(what: str, data: bytes, sha256: str) -> bytes:
     return data
 
 
-def coco_images() -> tuple[list[str], list[Image.Image], list[dict[str, object]]]:
-    """The first CC BY images by id: each one's path under the references
-    directory, its pixels, and where it comes from."""
+@functools.cache
+def _annotations() -> dict[str, list[dict[str, object]]]:
     with zipfile.ZipFile(io.BufferedReader(_HttpFile(ANNOTATIONS_ZIP), buffer_size=1 << 20)) as archive:
-        listed = json.loads(_checked(ANNOTATIONS, archive.read(ANNOTATIONS), ANNOTATIONS_SHA256))["images"]
+        return json.loads(_checked(ANNOTATIONS, archive.read(ANNOTATIONS), ANNOTATIONS_SHA256))
+
+
+def coco_images(count: int = len(IMAGES)) -> tuple[list[str], list[Image.Image], list[dict[str, object]]]:
+    """The first `count` CC BY images by id: each one's path under the
+    references directory, its pixels, and where it comes from."""
+    listed = _annotations()["images"]
     chosen = sorted((image for image in listed if image["license"] == CC_BY), key=lambda image: image["id"])
-    chosen = chosen[: len(IMAGES)]
-    if [image["id"] for image in chosen] != list(IMAGES):
+    chosen = chosen[:count]
+    if [image["id"] for image in chosen] != list(IMAGES)[:count]:
         raise RuntimeError("IMAGES is not the first CC BY images of the annotations")
     out = references_dir("coco")
     paths, images, sources = [], [], []
@@ -125,3 +132,11 @@ def coco_images() -> tuple[list[str], list[Image.Image], list[dict[str, object]]
         images.append(image)
         sources.append({"id": entry["id"], "url": entry["flickr_url"], "sha256": IMAGES[entry["id"]]})
     return paths, images, sources
+
+
+def coco_captions(ids: list[int]) -> list[str]:
+    """The first caption of each image in `ids`."""
+    captions: dict[object, str] = {}
+    for annotation in _annotations()["annotations"]:
+        captions.setdefault(annotation["image_id"], annotation["caption"])
+    return [captions[image] for image in ids]

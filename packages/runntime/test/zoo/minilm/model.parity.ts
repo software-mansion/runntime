@@ -12,14 +12,7 @@ import {
   transposedWeights,
   type Measured,
 } from '../../parity/harness.ts';
-import {
-  cosine,
-  maxAbsError,
-  missing,
-  rankMismatches,
-  summarize,
-  topK,
-} from '../../parity/metrics.ts';
+import { cosine, maxAbsError, rankingDifferences, summarize } from '../../parity/metrics.ts';
 import { MINILM_PARITY, TOP_K } from './parity.manifest.ts';
 
 await gpu();
@@ -33,12 +26,10 @@ const wantVectors = [
   ...rows(reference.get('passages')!, inputs.passages.length),
 ];
 const wantRanking = reference.get('ranking')!;
-
-const dot = (a: Float32Array, b: Float32Array) => a.reduce((sum, v, i) => sum + v * b[i]!, 0);
-/** The reference score of every passage, for each question. */
-const wantScores = wantVectors
-  .slice(0, inputs.queries.length)
-  .map((query) => wantVectors.slice(inputs.queries.length).map((passage) => dot(query, passage)));
+const split = (vectors: readonly Float32Array[]) => ({
+  asking: vectors.slice(0, inputs.queries.length),
+  ranked: vectors.slice(inputs.queries.length),
+});
 
 /** Embeds every text one at a time and compares with the reference. */
 async function measure(
@@ -50,31 +41,19 @@ async function measure(
   const cosineDistance = summarize(got.map((v, i) => 1 - cosine(v, wantVectors[i]!)));
   const error = summarize(got.map((v, i) => maxAbsError(v, wantVectors[i]!)));
 
-  const queries = got.slice(0, inputs.queries.length);
-  const passages = got.slice(inputs.queries.length);
-  let mismatches = 0;
-  let missed = 0;
-  let nearPositions = 0;
-  let nearItems = 0;
-  queries.forEach((query, q) => {
-    const ranking = topK(
-      passages.map((passage) => dot(query, passage)),
-      TOP_K,
-    );
-    const want = wantRanking.subarray(q * TOP_K, (q + 1) * TOP_K);
-    const positions = rankMismatches(ranking, want, wantScores[q]!, margins.score!);
-    const items = missing(ranking, want, wantScores[q]!, margins.score!);
-    mismatches += positions.count;
-    missed += items.count;
-    nearPositions += positions.nearTies;
-    nearItems += items.nearTies;
-  });
-  const ranked = queries.length * TOP_K;
+  const { positions, items } = rankingDifferences(
+    split(got),
+    split(wantVectors),
+    wantRanking,
+    TOP_K,
+    margins.score!,
+  );
+  const ranked = inputs.queries.length * TOP_K;
   const metrics = {
     cosineDistance: cosineDistance.max,
     error: error.max,
-    rankMismatches: mismatches / ranked,
-    topKMissed: missed / ranked,
+    rankMismatches: positions.count / ranked,
+    topKMissed: items.count / ranked,
   };
   return {
     cells: {
@@ -82,7 +61,7 @@ async function measure(
       'max error (mean / p99 / max)': summaryCell(error),
       'ranking positions differing': `${(100 * metrics.rankMismatches).toFixed(1)}%`,
       'top-k missed': `${(100 * metrics.topKMissed).toFixed(1)}%`,
-      'near-ties, not gated (ranking / top-k)': `${nearPositions} / ${nearItems}`,
+      'near-ties, not gated (ranking / top-k)': `${positions.nearTies} / ${items.nearTies}`,
     },
     metrics,
   };
