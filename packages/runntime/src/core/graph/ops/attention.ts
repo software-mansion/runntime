@@ -235,8 +235,8 @@ export function sdpaPacked(
 }
 
 /** Rotary position embedding over every head section of x [T, W] in one
- *  kernel. Rotation is interleaved-pair, and cos/sin are pair-duplicated tables
- *  with any scale pre-folded.
+ *  kernel. Rotation is interleaved-pair, and cos/sin are pair-duplicated
+ *  tables. The score scale is not in them: sdpa applies it.
  *
  *  srcStart and width optionally read a slice of a wider slab — the q or k
  *  section of a fused qkv, say — and rope it in the same dispatch. */
