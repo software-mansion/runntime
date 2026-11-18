@@ -51,7 +51,6 @@ export class EagerAttnBlock extends nn.Module<[Value, Value, Value], Value> {
       headDim: HEAD,
       windowLeft: WINDOW,
       windowRight: WINDOW,
-      scale: 1, // the rope tables carry it
       sinks: this.sinks.value,
     });
     return add(x, this.out.forward(attnOut));
