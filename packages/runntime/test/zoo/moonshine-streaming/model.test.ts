@@ -5,7 +5,7 @@ import { chunksFetched, onceInFileOrder } from '../chunkedLoad.ts';
 import { stackedParts } from '../stackedParts.ts';
 import { moonshineFile } from '../moonshine/hostedFile.ts';
 import { frontendFrames } from '../../../src/zoo/moonshine-streaming/frontend.ts';
-import { input } from '../../core/graph/values.ts';
+import { input, materializedInput } from '../../core/graph/values.ts';
 import { attentionScales, standInWeights } from '../attentionScales.ts';
 import { ropeLayouts } from '../ropeLayouts.ts';
 
@@ -94,6 +94,26 @@ describe('MoonshineStreamingModel attention', () => {
     const cross = decoder.precomputeCrossKV(decoder.adapt(encOut));
     const table = input([3, small.headDim]);
     const out = decoder.forward(input([3, small.hidden]), table, table, cross);
+    expect(ropeLayouts(out)).toEqual(
+      Array(2 * small.layers).fill({ layout: 'interleaved', ropesPerHead: 1 }),
+    );
+  });
+
+  // The transcriber decodes with forwardStep, which the streaming decoder
+  // takes from Moonshine's: one token against the KV caches.
+  it('ropes the decoder q and k of a decode step in the interleaved layout', () => {
+    const m = standInWeights(model());
+    const { encoder, decoder } = m.model;
+    const frames = frontendFrames(1600, m.cfg.frameLen).input;
+    const encOut = encoder.forward(input([frames, m.cfg.frameLen]));
+    const cross = decoder.precomputeCrossKV(decoder.adapt(encOut));
+    const qw = small.heads * small.headDim;
+    const caches = Array.from({ length: small.layers }, () => ({
+      k: materializedInput([4, qw]),
+      v: materializedInput([4, qw]),
+    }));
+    const row = input([1, small.headDim]);
+    const out = decoder.forwardStep(input([1, small.hidden]), row, row, cross, caches, 2);
     expect(ropeLayouts(out)).toEqual(
       Array(2 * small.layers).fill({ layout: 'interleaved', ropesPerHead: 1 }),
     );
