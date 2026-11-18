@@ -15,14 +15,19 @@ import type { MoonshineConfig } from './config.ts';
 import { K1, K2, K3, S1, S2, S3 } from './convStem.ts';
 
 class EncoderAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
-  /** q | k | v rows, fused at load. */
-  readonly qkv: nn.Linear;
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly o_proj: nn.Linear;
   constructor(private readonly cfg: MoonshineConfig) {
     super();
     const qw = cfg.heads * cfg.headDim;
-    this.qkv = new nn.Linear(cfg.dModel, 3 * qw, { bias: false });
+    this.q_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.k_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.v_proj = new nn.Linear(cfg.dModel, qw, { bias: false });
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: cfg.heads,
       kvHeads: cfg.heads,

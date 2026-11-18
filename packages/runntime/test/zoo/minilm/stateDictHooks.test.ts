@@ -38,14 +38,11 @@ const CHECKPOINT: Record<string, Entry> = {
 /** The checkpoint's tensors the model never reads. */
 const UNREAD = ['embeddings.position_ids', 'pooler.dense.weight', 'pooler.dense.bias'];
 
-/** The checkpoint's tensors the hook consumes into derived ones. */
-const CONSUMED = [
-  'embeddings.token_type_embeddings.weight',
-  ...['query', 'key', 'value'].flatMap((p) => [
-    `encoder.layer.0.attention.self.${p}.weight`,
-    `encoder.layer.0.attention.self.${p}.bias`,
-  ]),
-];
+/** The checkpoint's tensors the hook replaces with scaled ones. */
+const SCALED = ['query', 'key'].flatMap((p) => [
+  `encoder.layer.0.attention.self.${p}.weight`,
+  `encoder.layer.0.attention.self.${p}.bias`,
+]);
 
 describe('transformMinilmStateDict', () => {
   it.for([
@@ -58,36 +55,34 @@ describe('transformMinilmStateDict', () => {
     transformMinilmStateDict(sd, '', CFG);
     const get = (name: string) => sd.tensors.get(name)!;
 
-    // The unread tensors are gone. Every other tensor stays as it is.
+    // The unread tensors are gone and the token-type table is consumed.
+    // Every other tensor stays as it is, value too.
     const untouched = Object.keys(CHECKPOINT).filter(
       (name) =>
-        !CONSUMED.includes(name) &&
+        !SCALED.includes(name) &&
         !UNREAD.includes(name) &&
+        name !== 'embeddings.token_type_embeddings.weight' &&
         name !== 'embeddings.position_embeddings.weight',
     );
     expect([...sd.tensors.keys()].sort()).toEqual(
-      [
-        ...untouched,
-        'embeddings.position_embeddings.weight',
-        'encoder.layer.0.attention.self.qkv.weight',
-        'encoder.layer.0.attention.self.qkv.bias',
-      ].sort(),
+      [...untouched, ...SCALED, 'embeddings.position_embeddings.weight'].sort(),
     );
     for (const name of untouched) expect(get(name)).toBe(before.get(name));
 
-    // q|k|v rows in that order, q and k times 0.5, v as is. Derived
-    // tensors are f32 on every checkpoint.
-    const qkvWeight = get('encoder.layer.0.attention.self.qkv.weight');
-    expect(qkvWeight.shape).toEqual([6, 2]);
-    expect(qkvWeight.byteLength).toBe(12 * elemBytes);
-    expect(await contents(qkvWeight)).toEqual({
-      type: 'f32',
-      values: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 9, 10, 11, 12],
-    });
-    const qkvBias = get('encoder.layer.0.attention.self.qkv.bias');
-    expect(qkvBias.shape).toEqual([6]);
-    expect(qkvBias.byteLength).toBe(6 * elemBytes);
-    expect(await contents(qkvBias)).toEqual({ type: 'f32', values: [0.5, 1, 1.5, 2, 5, 6] });
+    // query and key times 0.5, under their own names. Scaled tensors are
+    // f32 on every checkpoint.
+    const scaled = {
+      'query.weight': { shape: [2, 2], values: [0.5, 1, 1.5, 2] },
+      'query.bias': { shape: [2], values: [0.5, 1] },
+      'key.weight': { shape: [2, 2], values: [2.5, 3, 3.5, 4] },
+      'key.bias': { shape: [2], values: [1.5, 2] },
+    };
+    for (const [name, { shape, values }] of Object.entries(scaled)) {
+      const t = get(`encoder.layer.0.attention.self.${name}`);
+      expect(t.shape).toEqual(shape);
+      expect(t.byteLength).toBe(values.length * elemBytes);
+      expect(await contents(t)).toEqual({ type: 'f32', values });
+    }
 
     // position + tokenType row 0: [1 + 10, 2 + 20, 3 + 10, 4 + 20].
     const position = get('embeddings.position_embeddings.weight');
