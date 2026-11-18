@@ -6,7 +6,8 @@
  *  all its rows use it. Each row is
  *  split across 4 or 8 lanes, which add up q·k with subgroup shuffles.
  *  Windows, segments, sinks, the key bias and the scale work as in the rows
- *  kernel.
+ *  kernel. The scale multiplies each summed score: scaling q as it is read
+ *  instead made heads of 128 and wider up to 70% slower.
  *
  *  Based on webgpu-kernels/com.microsoft.MultiHeadAttention (attn-flash-prefill-cluster). */
 
@@ -165,7 +166,7 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
     const l = d.arrayOf(d.f32, hp)();
     for (const j of tgpu.unroll(std.range(hp))) {
       for (const c of tgpu.unroll(std.range(slice))) {
-        qr[j * slice + c] = d.vec4f(L.$.q[qBase4 + j * hd4 + c]!) * D.scale;
+        qr[j * slice + c] = d.vec4f(L.$.q[qBase4 + j * hd4 + c]!);
       }
       m[j] = d.f32(NEG_SEED);
       if (hasSinks > 0) {
@@ -223,6 +224,7 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
           if (lpq > 4) {
             x += std.subgroupShuffleXor(x, 4);
           }
+          x *= D.scale;
           if (hasKeyBias > 0) {
             x += keyBiasAt(kj, D.biasStart, D.biasEnd, D.bias);
           }
