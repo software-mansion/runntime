@@ -16,10 +16,11 @@ import { type Elem, F32_ELEM } from '../elem.ts';
 /** Scaled-dot-product attention, one thread per (q row, q head).
  *
  *  Serial in the key count, so the executor prefers the row kernels below and
- *  falls back here past the dispatch limit. Scores are scale · q·k: the row
- *  kernels scale q as they read it into registers, and this kernel, which
- *  reads q again for every key, scales each score. The scale is a uniform,
- *  so a new value compiles nothing. */
+ *  falls back here past the dispatch limit. Scores are scale · q·k. The
+ *  split kernels scale q as they read it into registers; this kernel and the
+ *  rows kernel scale each score, which is fewer multiplies when a row sees
+ *  fewer keys than headDim and the same speed past that. The scale is a
+ *  uniform, so a new value compiles nothing. */
 
 const LN2 = Math.LN2;
 const MAX_HEAD_DIM = 128;
@@ -368,9 +369,9 @@ function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
     // Softmax state stays f32 whatever the storage dtype is.
     for (const z of std.range(hd)) {
       if (f16) {
-        qReg.$[z] = d.f32(L.$.q[qBase + z]!) * D.scale;
+        qReg.$[z] = d.f32(L.$.q[qBase + z]!);
       } else {
-        qReg.$[z] = L.$.q[qBase + z]! * D.scale;
+        qReg.$[z] = L.$.q[qBase + z]!;
       }
       acc.$[z] = d.f32(0);
     }
@@ -402,6 +403,7 @@ function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
           score += qReg.$[kk]! * L.$.k[kBase + kk]!;
         }
       }
+      score *= D.scale;
       if (hasKeyBias > 0) {
         score += keyBiasAt(j, D.biasStart, D.biasEnd, D.bias);
       }
