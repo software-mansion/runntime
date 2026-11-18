@@ -285,6 +285,16 @@ describe('rope', () => {
     expect(c.pending?.attrs).toEqual([HD, 0, 32, 1, 2]);
   });
 
+  // Interleaved pairs are neighbours however a head is split, so the node,
+  // and the pipeline key built from it, are those of one rope a head.
+  it('carries one rope a head for the interleaved layout, whatever ropesPerHead', () => {
+    const { cos, sin } = tables(5);
+    const opts = { headDim: HD, layout: 'interleaved' } as const;
+    const split = rope(input([5, 32]), cos, sin, { ...opts, ropesPerHead: 2 });
+    expect(split.pending?.attrs).toEqual([HD, 0, 32, 0, 1]);
+    expect(split.pending?.attrs).toEqual(rope(input([5, 32]), cos, sin, opts).pending?.attrs);
+  });
+
   // A head of 8 splits into 1, 2 or 4 ropes of an even number of columns.
   it.each([0, 1.5, 3, 8, -2, NaN])('rejects ropesPerHead %s with an INVALID_ARGUMENT', (n) => {
     const { cos, sin } = tables(5);
