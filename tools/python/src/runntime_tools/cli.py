@@ -1,8 +1,11 @@
 """`runntime quantize`: writes a safetensors checkpoint in runntime's int8/int4
-format v1 and prints the error of every quantized tensor."""
+format v1 and prints the error of every quantized tensor. It knows the file
+format only, not which layer reads a tensor: runntime fits each weight to its
+layer at load."""
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -24,18 +27,12 @@ FLOAT_DTYPES = frozenset({"F32", "F16", "BF16"})
 DEFAULT_INCLUDE = ("*.weight",)
 
 DEFAULT_EXCLUDE = ("*embed*", "*pos_emb*", "lm_head.*")
-"""runntime reads token and position embeddings as float lookup tables, and
-lm_head often shares the embedding's weights."""
-
-IN_FEATURES_MULTIPLE = 8
-"""runntime's quantized matmul reads 8 input rows per tile."""
+"""Embedding tables, and lm_head, which often shares the embedding's weights.
+A cautious default, not a format rule: quantizing them is the user's call,
+after comparing the model's outputs."""
 
 F16_MAX = float(np.finfo(np.float16).max)
 """The largest finite f16. A tensor with a bigger value cannot be stored as F16."""
-
-PACKED_WORD_BITS = 32
-"""runntime packs a weight 32 bits to a word, so out features must fill whole
-words: a multiple of 4 for int8, 8 for int4."""
 
 
 @dataclass(frozen=True)
@@ -58,16 +55,13 @@ def skip_reason(name: str, tensor: Tensor, options: Options) -> str | None:
         return f"excluded by {excluded_by}"
     if tensor.dtype not in FLOAT_DTYPES:
         return f"dtype {tensor.dtype}"
-    if len(tensor.shape) != 2:
-        return f"{len(tensor.shape)}D, needs [out, in]"
-    out_features, in_features = tensor.shape
-    if in_features % IN_FEATURES_MULTIPLE:
-        return f"in features {in_features} not a multiple of {IN_FEATURES_MULTIPLE}"
-    if in_features % options.group_size:
-        return f"in features {in_features} not a multiple of the group size {options.group_size}"
-    out_multiple = PACKED_WORD_BITS // options.bits
-    if out_features % out_multiple:
-        return f"out features {out_features} not a multiple of {out_multiple}"
+    if len(tensor.shape) < 2:
+        return f"{len(tensor.shape)}D, needs 2 or more dims"
+    row = math.prod(tensor.shape[1:])
+    if row % options.group_size:
+        return f"row of {row} values not a multiple of the group size {options.group_size}"
+    if options.bits == 4 and row % 2:
+        return f"row of {row} values is odd, int4 packs two to a byte"
     return None
 
 
@@ -102,7 +96,8 @@ def quantize_checkpoint(source: Path, destination: Path, options: Options) -> li
             tensors[name] = to_float16(name, tensor) if options.float16 else tensor
             report.append(f"skipped    {name} {shape}: {reason}")
             continue
-        weight = to_float32(tensor)
+        # The format stores a weight as rows: dim 0 by everything else.
+        weight = to_float32(tensor).reshape(tensor.shape[0], -1)
         quantized = quantize(weight, options.bits, options.group_size)
         if options.bits == 8:
             tensors[name] = from_array("I8", quantized.ints)
@@ -111,20 +106,23 @@ def quantize_checkpoint(source: Path, destination: Path, options: Options) -> li
         tensors[f"{name}_scale"] = from_array("F16", quantized.scales)
         quantized_count += 1
         error = np.abs(dequantize(quantized) - weight)
-        report.append(f"quantized  {name} {shape}: max error {error.max():.3g}, mean {error.mean():.3g}")
+        stored = "" if len(tensor.shape) == 2 else f" as [{weight.shape[0]}, {weight.shape[1]}]"
+        report.append(f"quantized  {name} {shape}{stored}: max error {error.max():.3g}, mean {error.mean():.3g}")
     if quantized_count == 0:
         raise ValueError("no tensor was quantized:\n" + "\n".join(report))
-    setting = {"version": FORMAT_VERSION, "bits": options.bits, "groupSize": options.group_size, "scheme": "symmetric"}
+    # No bits or groupSize: the reader takes them from each tensor's dtype and
+    # its scales' shape, which holds for any file, one setting or mixed.
+    setting = {"version": FORMAT_VERSION, "scheme": "symmetric"}
     metadata = checkpoint.metadata | {QUANT_METADATA_KEY: json.dumps(setting, separators=(",", ":"))}
     write_safetensors(destination, tensors, metadata)
     return report
 
 
 def group_size(value: str) -> int:
-    """argparse type: a positive multiple of 4."""
+    """argparse type: a positive integer."""
     size = int(value)
-    if size <= 0 or size % 4:
-        raise argparse.ArgumentTypeError(f"{value} is not a positive multiple of 4")
+    if size <= 0:
+        raise argparse.ArgumentTypeError(f"{value} is not a positive integer")
     return size
 
 
@@ -134,12 +132,14 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     command = commands.add_parser(
         "quantize",
         help="quantize a safetensors checkpoint to int8 or int4",
-        description="Quantizes the 2D weights of a safetensors checkpoint to runntime's int8/int4 format.",
+        description="Quantizes the weights of a safetensors checkpoint to runntime's int8/int4 format.",
     )
     command.add_argument("source", type=Path, help="a .safetensors file or a Hugging Face model folder")
     command.add_argument("destination", type=Path, help="the .safetensors file to write")
     command.add_argument("--bits", type=int, choices=(4, 8), required=True)
-    command.add_argument("--group-size", type=group_size, default=32, help="inputs that share one scale (default: 32)")
+    command.add_argument(
+        "--group-size", type=group_size, default=32, help="values of a row that share one scale (default: 32)"
+    )
     command.add_argument(
         "--include",
         action="append",

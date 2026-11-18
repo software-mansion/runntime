@@ -11,14 +11,15 @@
  *  A QuantTensor source gives a QuantTensor, except in `dequantize`: the
  *  helpers move its ints and scales together. Whatever would split a scale
  *  group (a column split off the group grid, a reshape of the last dim, a
- *  transpose) throws CHECKPOINT_MISMATCH. */
+ *  transpose) throws CHECKPOINT_MISMATCH; a hook that needs one calls
+ *  `inTorchShape` first. */
 import { RunntimeError } from '../error.ts';
 import { f16ToF32 } from './convert.ts';
 import {
+  dequantizeInts,
   deriveFromTensors,
   quantTensor,
   type DerivedTensor,
-  type FloatTensor,
   type LazyTensor,
   type QuantTensor,
 } from './safetensors.ts';
@@ -34,12 +35,13 @@ const numel = (shape: readonly number[]): number => shape.reduce((a, b) => a * b
 const mismatch = (helper: string, why: string) =>
   new RunntimeError('CHECKPOINT_MISMATCH', `${helper}: ${why}`);
 
-/** Reads `t` as f16 halfwords when it holds F16 and as f32 otherwise. Throws
+/** Reads `t` as f16 halfwords when it holds F16 and as f32 otherwise, a
+ *  QuantTensor as its dequantized values. Throws
  *  CHECKPOINT_MISMATCH, naming `helper`, on packed u32 words or on a derived
  *  tensor whose data does not fill its shape. A file tensor's length is
  *  checked by the header parser. */
 export async function readFloats(helper: string, t: LazyTensor): Promise<Floats> {
-  if (t.kind === 'quant') throw mismatch(helper, `${t.name} is quantized, not float`);
+  if (t.kind === 'quant') return t.f32();
   if (t.kind === 'file') return t.dtype === 'F16' ? t.u16() : t.f32();
   const data = await t.data();
   if (data instanceof Uint32Array) throw mismatch(helper, 'source holds packed u32 words');
@@ -47,13 +49,6 @@ export async function readFloats(helper: string, t: LazyTensor): Promise<Floats>
     throw mismatch(helper, `source holds ${data.length} values for shape [${t.shape.join(', ')}]`);
   }
   return data;
-}
-
-/** `t` as a tensor that has f32 values, for `derive`. Throws
- *  CHECKPOINT_MISMATCH, naming `what` reads it, on a QuantTensor. */
-export function floatTensor(what: string, t: LazyTensor): FloatTensor {
-  if (t.kind === 'quant') throw mismatch(what, `${t.name} is quantized, not float`);
-  return t;
 }
 
 const allocLike = (like: Floats, n: number): Floats =>
@@ -400,7 +395,16 @@ export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): 
   }
   return deriveFromTensors([...shape], [t], async ([t]) => {
     const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
-    const f32 = toF32(scales);
-    return Float32Array.from(ints, (q, i) => q * f32[Math.floor(i / t.groupSize)]!);
+    return dequantizeInts(ints, scales, t.groupSize);
   });
+}
+
+/** `t` in torch's `shape`, for a hook that reshapes, transposes or splits it
+ *  past dim 0. A file stores a quantized tensor as rows, [shape[0], everything
+ *  else], with its scale groups along the row, so those steps would cut
+ *  through the groups: it comes back as its dequantized floats in `shape`.
+ *  Any other tensor comes back as it is. Throws CHECKPOINT_MISMATCH when a
+ *  quantized tensor's element count is not `shape`'s. */
+export function inTorchShape(t: LazyTensor, shape: readonly number[]): LazyTensor {
+  return t.kind === 'quant' ? dequantize(t, shape) : t;
 }

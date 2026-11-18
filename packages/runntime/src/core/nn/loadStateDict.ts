@@ -8,11 +8,12 @@ import { defaultRoot } from '../gpu/context.ts';
 import { inGpuErrorScopes } from '../gpu/errorScopes.ts';
 import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
 import { bf16ToF16Bits, f32ArrayToF16Bits } from '../weights/convert.ts';
-import type {
-  DerivedTensor,
-  FileSource,
-  FileTensor,
-  LazyStateDict,
+import {
+  deriveFromTensors,
+  type DerivedTensor,
+  type FileSource,
+  type FileTensor,
+  type LazyStateDict,
 } from '../weights/safetensors.ts';
 import { CpuParameter, type AnyModule } from './module.ts';
 
@@ -130,6 +131,13 @@ async function bindStateDict(
     }
   };
   visit(model, '');
+  if (sd.quantizedAsFloat?.length) {
+    console.warn(
+      'loadStateDict: quantized weights loaded as float, the quantized kernel of their layer ' +
+        `cannot run their shape or group size: ${sd.quantizedAsFloat.join(', ')}`,
+    );
+    sd.quantizedAsFloat = undefined;
+  }
 
   const params = [...model.namedParameters()];
   const paramNames = new Set(params.map(([n]) => n));
@@ -182,15 +190,19 @@ async function bindStateDict(
   const total = params.reduce((sum, [name]) => sum + sd.tensors.get(name)!.byteLength, 0);
   let done = 0;
   for (const [name, p] of params) {
-    const t = sd.tensors.get(name)!;
+    let t = sd.tensors.get(name)!;
     // Linear's and the convs' hooks turn a quantized weight into quantW
-    // words, so a QuantTensor still here is bound to something else.
+    // words, so a QuantTensor still here is bound to something no quantized
+    // kernel reads: an embedding table, a norm, a plain parameter.
     if (t.kind === 'quant') {
-      throw new RunntimeError(
-        'CHECKPOINT_MISMATCH',
-        `loadStateDict: '${name}' is quantized (int${t.bits}), but only a Linear, Conv1d or ` +
-          `ConvTranspose1d weight loads quantized and this parameter holds ${p.shape.dtype}`,
-      );
+      if (p.shape.dtype === 'quantW') {
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `loadStateDict: '${name}' is quantized (int${t.bits}), but this quantW parameter ` +
+            'takes packed words, which only its layer makes',
+        );
+      }
+      t = deriveFromTensors(t.shape, [t], ([quant]) => quant.f32());
     }
     const numel = t.shape.reduce((a, b) => a * b, 1);
     // A quantW slot counts u32 words under logical dims. Privacy-filter's

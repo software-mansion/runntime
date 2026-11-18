@@ -13,7 +13,12 @@ import {
   transformEmbeddingGemma2StateDict,
   transformEmbeddingGemma2VisionStateDict,
 } from '../../../src/zoo/embeddinggemma2/stateDictHooks.ts';
-import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
+import {
+  checkpoint,
+  contents,
+  storeAsQuantizedRows,
+  type Entry,
+} from '../../core/weights/checkpoint.ts';
 
 const DTYPES = [
   { dtype: 'F32', type: 'f32', elemBytes: 4 },
@@ -272,6 +277,20 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
 
     expect(sd.totalBytes()).toBe(total);
   });
+
+  it('splits a position table quantized as rows [2, positions·hidden] into x and y', async () => {
+    const name = 'vision_tower.patch_embedder.position_embedding_table';
+    const sd = await checkpoint('F32', CHECKPOINT);
+    await storeAsQuantizedRows(sd, name, CHECKPOINT[name]!.values, 2);
+    transformEmbeddingGemma2VisionStateDict(sd, '', cfg);
+    for (const [table, values] of [
+      ['vision_tower.patch_embedder.pos_x.weight', [1, 2, 3, 4]],
+      ['vision_tower.patch_embedder.pos_y.weight', [5, 6, 7, 8]],
+    ] as const) {
+      expect(sd.tensors.get(table)!.shape).toEqual([2, 2]);
+      expect(await contents(sd.tensors.get(table)!)).toEqual({ type: 'f32', values });
+    }
+  });
 });
 
 describe('transformEmbeddingGemma2AudioStateDict', () => {
@@ -486,5 +505,26 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
         });
       }
     }
+  });
+
+  it('reorders the convs quantized as rows [out, everything else] by their values', async () => {
+    const conv1 = `${sub}layer1.conv.weight`;
+    const depthwise = `${T}.lconv1d.depthwise_conv1d.weight`;
+    const sd = await checkpoint('F32', CHECKPOINT);
+    await storeAsQuantizedRows(sd, conv1, CHECKPOINT[conv1]!.values, 1);
+    await storeAsQuantizedRows(sd, depthwise, CHECKPOINT[depthwise]!.values, 4);
+    transformEmbeddingGemma2AudioStateDict(sd, '', cfg);
+    // The same values as from the float checkpoint: tap k of channel c at
+    // k·2 + c, and tap 0 of every channel, then tap 1.
+    expect(sd.tensors.get(conv1)!.shape).toEqual([1, 18]);
+    expect(await contents(sd.tensors.get(conv1)!)).toEqual({
+      type: 'f32',
+      values: [1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 8, 17, 9, 18],
+    });
+    expect(sd.tensors.get(depthwise)!.shape).toEqual([2, 4]);
+    expect(await contents(sd.tensors.get(depthwise)!)).toEqual({
+      type: 'f32',
+      values: [1, 3, 5, 7, 2, 4, 6, 8],
+    });
   });
 });

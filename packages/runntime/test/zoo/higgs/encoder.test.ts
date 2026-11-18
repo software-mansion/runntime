@@ -10,6 +10,7 @@ import { HIGGS_ENCODER } from '../../../src/zoo/higgs/config.ts';
 import { HiggsEncoder } from '../../../src/zoo/higgs/encoder.ts';
 import { resample } from '../../../src/zoo/higgs/resample.ts';
 import { expectClose } from '../../gpu.ts';
+import { dequantizeWeight, quantizeWeight, quantSource } from '../../core/weights/checkpoint.ts';
 import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
 
 const POS = 'semantic_model.encoder.pos_conv_embed';
@@ -62,6 +63,31 @@ describe('HiggsEncoder', () => {
       raw[`${POS}.conv.bias`]!.data.subarray(width, 2 * width),
     );
     expect([...sd.tensors.keys()].filter((n) => n.startsWith(`${POS}.conv.`))).toEqual([]);
+  });
+
+  it('folds a position conv weight norm quantized as rows [out, in·kernel]', async () => {
+    const raw = checkpoint();
+    const sd = memoryStateDict(raw);
+    const { hidden, posGroups, posKernel: k } = CFG.hubert;
+    const width = hidden / posGroups;
+    const gName = `${POS}.conv.parametrizations.weight.original0`;
+    const vName = `${POS}.conv.parametrizations.weight.original1`;
+    // g [1, 1, k] as one row of k, v [hidden, width, k] as rows of width·k.
+    const gQuant = quantizeWeight(raw[gName]!.data, [1, k], 8, k);
+    const vQuant = quantizeWeight(raw[vName]!.data, [hidden, width * k], 8, width);
+    sd.tensors.set(gName, await quantSource(8, k, gName, gQuant));
+    sd.tensors.set(vName, await quantSource(8, width, vName, vQuant));
+    new HiggsEncoder(CFG).semantic_model.encoder.pos_conv_embed.transformStateDict(sd, POS);
+    const g = dequantizeWeight(gQuant);
+    const v = dequantizeWeight(vQuant);
+    const norm = Array.from({ length: k }, (_, j) =>
+      Math.sqrt(v.reduce((s, x, i) => (i % k === j ? s + x * x : s), 0)),
+    );
+    const want = Array.from(v.subarray(width * width * k, 2 * width * width * k), (x, i) => {
+      return (x * g[i % k]!) / norm[i % k]!;
+    });
+    expectClose(await read(sd, `${POS}.convs.1.weight`), want, { atol: 1e-6, rtol: 1e-6 });
+    expect(sd.tensors.get(`${POS}.convs.1.weight`)!.shape).toEqual([width, width, k]);
   });
 
   it("takes the checkpoint's folded position conv weight and splits it into groups", async () => {
