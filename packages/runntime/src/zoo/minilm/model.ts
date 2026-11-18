@@ -2,9 +2,8 @@
  *  LayerNorm runs after each residual add and every one carries a bias.
  *
  *  Attention is one fused qkv matmul sliced back into q/k/v, with an unbounded
- *  window both ways. The score scale is folded into the query and key
- *  projections at load, so the kernel applies none. Positions are a learned table with the
- *  constant token-type row folded in. Module fields are named like the
+ *  window both ways and the default 1/√headDim score scale. Positions are a
+ *  learned table with the constant token-type row folded in. Module fields are named like the
  *  checkpoint (BertModel), so `LayerNorm` is capitalized. */
 
 import {
@@ -57,7 +56,6 @@ class MinilmEmbeddings extends nn.Module<
 
 /** BertSelfAttention: q, k and v as one projection, scores through `mha`. */
 class SelfAttention extends nn.Module {
-  /** Carries half of the score scale, folded in at load, like `key`. */
   readonly query: nn.Linear;
   readonly key: nn.Linear;
   readonly value: nn.Linear;
@@ -76,7 +74,6 @@ class SelfAttention extends nn.Module {
       headDim: cfg.headDim,
       windowLeft: Infinity,
       windowRight: Infinity,
-      scale: 1, // folded into the weights at load
     });
   }
 }
