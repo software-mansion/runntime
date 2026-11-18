@@ -20,7 +20,7 @@ import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/modul
 import { f16ToF32, f32ArrayToF16Bits } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
-  derivedTensor,
+  derive,
   fromSafetensors,
   memoryStateDict,
   type LazyStateDict,
@@ -51,7 +51,7 @@ const f16Checkpoint = (bits: Uint16Array, shape: number[]): Promise<LazyStateDic
  *  hook hands one over: a Uint16Array means f16 halfwords, a Uint32Array
  *  packed words. */
 function derivedCheckpoint(data: Uint16Array | Uint32Array, shape: number[]): LazyStateDict {
-  const tensor = derivedTensor(shape, () => Promise.resolve(data), data.byteLength);
+  const tensor = derive(shape, [], () => Promise.resolve(data), data.byteLength);
   return {
     metadata: {},
     tensors: new Map([['weight', tensor]]),
@@ -333,7 +333,7 @@ describe('Linear with a quantized weight', () => {
 
   it('puts the scales right after the weight, so binding keeps file order', async () => {
     const sd = await quantCheckpoint(8, 4, { 'fc.weight': entry });
-    const float = derivedTensor([4], () => Promise.resolve(new Float32Array(4)));
+    const float = derive([4], [], () => Promise.resolve(new Float32Array(4)));
     sd.tensors = new Map([
       ['first', float],
       ['fc.weight', sd.tensors.get('fc.weight')!],
@@ -1019,8 +1019,8 @@ describe('normalization layers', () => {
     expect(() => new GroupNorm(3, 8)).toThrow(/numGroups 3 must divide the 8 channels/);
   });
 
-  it('RMSNorm has one scale per feature', () => {
-    expect(shapes(new RMSNorm(8))).toEqual({ scale: meta([8]) });
+  it('RMSNorm has one weight per feature', () => {
+    expect(shapes(new RMSNorm(8))).toEqual({ weight: meta([8]) });
   });
 
   it.each([

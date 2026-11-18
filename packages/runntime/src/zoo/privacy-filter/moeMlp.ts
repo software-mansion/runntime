@@ -73,7 +73,7 @@ export class EagerMoeMlp extends nn.Module {
   }
 
   private get actDtype(): 'f32' | 'f16' {
-    return this.norm.scale.shape.dtype === 'f16' ? 'f16' : 'f32';
+    return this.norm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
   }
 
   override forward(x: Value): Value {

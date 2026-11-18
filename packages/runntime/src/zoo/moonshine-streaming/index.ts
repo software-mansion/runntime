@@ -10,9 +10,10 @@ export {
   type StreamingEncoderConfig,
   type StreamingDecoderConfig,
 } from './config.ts';
-export { StreamingFrontend } from './frontend.ts';
-export { StreamingEncoder, StreamingAdapter, EncoderLayer } from './encoder.ts';
-export { MoonshineStreamingModel } from './model.ts';
+export { StreamingEmbedder } from './frontend.ts';
+export { StreamingEncoder, EncoderLayer } from './encoder.ts';
+export { StreamingDecoder } from './decoder.ts';
+export { MoonshineStreamingModel, StreamingEncoderDecoder } from './model.ts';
 export { createTranscriber, type TranscribeResult, type Transcriber } from './transcriber.ts';
 export type { BurstSample, TranscriberPerf } from '../moonshine/transcriber.ts';
 export { createMoonshineTokenizer, type MoonshineTokenizer } from '../moonshine/tokenizer.ts';

@@ -6,7 +6,7 @@
  *  `scaleWeight` and `dequantize`, which always give f32. BF16 decodes to
  *  f32, which is exact; a derived tensor's Uint16Array means f16, so bf16 bits
  *  have no derived form. Each output's byteLength is its share of the source
- *  bytes, so load progress still sums to the checkpoint size.
+ *  bytes, so load progress counts every byte the model reads.
  *
  *  A QuantTensor source gives a QuantTensor, except in `dequantize`: the
  *  helpers move its ints and scales together. Whatever would split a scale
@@ -14,7 +14,14 @@
  *  transpose) throws CHECKPOINT_MISMATCH. */
 import { RunntimeError } from '../error.ts';
 import { f16ToF32 } from './convert.ts';
-import { derivedTensor, quantTensor, type LazyTensor, type QuantTensor } from './safetensors.ts';
+import {
+  deriveFromTensors,
+  quantTensor,
+  type DerivedTensor,
+  type FloatTensor,
+  type LazyTensor,
+  type QuantTensor,
+} from './safetensors.ts';
 
 /** f32 values, or f16 halfwords. */
 type Floats = Float32Array | Uint16Array;
@@ -40,6 +47,13 @@ export async function readFloats(helper: string, t: LazyTensor): Promise<Floats>
     throw mismatch(helper, `source holds ${data.length} values for shape [${t.shape.join(', ')}]`);
   }
   return data;
+}
+
+/** `t` as a tensor that has f32 values, for `derive`. Throws
+ *  CHECKPOINT_MISMATCH, naming `what` reads it, on a QuantTensor. */
+export function floatTensor(what: string, t: LazyTensor): FloatTensor {
+  if (t.kind === 'quant') throw mismatch(what, `${t.name} is quantized, not float`);
+  return t;
 }
 
 const allocLike = (like: Floats, n: number): Floats =>
@@ -148,6 +162,7 @@ export function concatRows(parts: readonly LazyTensor[]): LazyTensor {
   if (quant) {
     return quantTensor({
       name: `concatRows(${[...new Set(quant.map((p) => p.name))].join(', ')})`,
+      sources: [...new Set(quant.flatMap((p) => p.sources))],
       shape,
       bits: quant[0]!.bits,
       groupSize: quant[0]!.groupSize,
@@ -164,10 +179,8 @@ export function concatRows(parts: readonly LazyTensor[]): LazyTensor {
       scales: async () => stackFloats(await readEachOnce(quant, (p) => p.scales())),
     });
   }
-  return derivedTensor(
-    shape,
-    async () => stackFloats(await readEachOnce(parts, (p) => readFloats('concatRows', p))),
-    byteLength,
+  return deriveFromTensors(shape, parts, async (parts) =>
+    stackFloats(await readEachOnce(parts, (p) => readFloats('concatRows', p))),
   );
 }
 
@@ -189,6 +202,7 @@ export function splitRows(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
       start += rows;
       return quantTensor({
         name: `splitRows(${t.name})`,
+        sources: t.sources,
         shape: [rows, ...rest],
         bits: t.bits,
         groupSize: t.groupSize,
@@ -204,8 +218,9 @@ export function splitRows(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
   return sizes.map((rows) => {
     const from = start * rowElems;
     start += rows;
-    return derivedTensor(
+    return deriveFromTensors(
       [rows, ...rest],
+      [t],
       async () => (await source()).slice(from, from + rows * rowElems),
       share(rows),
     );
@@ -238,6 +253,7 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
       start += cols;
       return quantTensor({
         name: `splitCols(${t.name})`,
+        sources: t.sources,
         shape: [...lead, cols],
         bits: t.bits,
         groupSize,
@@ -256,8 +272,9 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
   return sizes.map((cols) => {
     const from = start;
     start += cols;
-    return derivedTensor(
+    return deriveFromTensors(
       [...lead, cols],
+      [t],
       async () => {
         const data = await source();
         return copyCols(data, allocLike(data, rows * cols), width, from, cols);
@@ -295,14 +312,10 @@ export function permuteRows(t: LazyTensor, order: readonly number[]): LazyTensor
       },
     });
   }
-  return derivedTensor(
-    t.shape,
-    async () => {
-      const data = await readFloats('permuteRows', t);
-      return reorderRows(data, allocLike(data, data.length), order, rowElems);
-    },
-    t.byteLength,
-  );
+  return deriveFromTensors(t.shape, [t], async ([t]) => {
+    const data = await readFloats('permuteRows', t);
+    return reorderRows(data, allocLike(data, data.length), order, rowElems);
+  });
 }
 
 /** Multiplies `t` by `scale`: one number for every element, or one per row
@@ -330,10 +343,8 @@ export function scaleWeight(t: LazyTensor, scale: number | readonly number[]): L
       scales: async () => scaled(toF32(await t.scales()), rowElems / t.groupSize),
     });
   }
-  return derivedTensor(
-    t.shape,
-    async () => scaled(toF32(await readFloats('scaleWeight', t)), rowElems),
-    t.byteLength,
+  return deriveFromTensors(t.shape, [t], async ([t]) =>
+    scaled(toF32(await readFloats('scaleWeight', t)), rowElems),
   );
 }
 
@@ -348,18 +359,14 @@ export function transposeWeight(t: LazyTensor): LazyTensor {
   }
   const rows = t.shape[0]!;
   const cols = t.shape[1]!;
-  return derivedTensor(
-    [cols, rows],
-    async () => {
-      const data = await readFloats('transposeWeight', t);
-      const out = allocLike(data, data.length);
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) out[c * rows + r] = data[r * cols + c]!;
-      }
-      return out;
-    },
-    t.byteLength,
-  );
+  return deriveFromTensors([cols, rows], [t], async ([t]) => {
+    const data = await readFloats('transposeWeight', t);
+    const out = allocLike(data, data.length);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) out[c * rows + r] = data[r * cols + c]!;
+    }
+    return out;
+  });
 }
 
 /** Gives `t` a new shape with the same element count, like torch `reshape`.
@@ -387,17 +394,13 @@ export function reshapeWeight(t: LazyTensor, shape: readonly number[]): LazyTens
 
 /** The values of `t` as f32 in `shape`, each int times the scale of its group.
  *  Throws CHECKPOINT_MISMATCH when the element counts differ. */
-export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): LazyTensor {
+export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): DerivedTensor {
   if (numel(shape) !== numel(t.shape)) {
     throw mismatch('dequantize', `cannot give [${t.shape.join(', ')}] shape [${shape.join(', ')}]`);
   }
-  return derivedTensor(
-    [...shape],
-    async () => {
-      const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
-      const f32 = toF32(scales);
-      return Float32Array.from(ints, (q, i) => q * f32[Math.floor(i / t.groupSize)]!);
-    },
-    t.byteLength,
-  );
+  return deriveFromTensors([...shape], [t], async ([t]) => {
+    const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
+    const f32 = toF32(scales);
+    return Float32Array.from(ints, (q, i) => q * f32[Math.floor(i / t.groupSize)]!);
+  });
 }
