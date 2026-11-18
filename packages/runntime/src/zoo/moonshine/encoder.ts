@@ -13,7 +13,7 @@
 import { gelu, nn, rope, slice, type Value } from '../../core/index.ts';
 import type { MoonshineConfig } from './config.ts';
 import { K1, K2, K3, S1, S2, S3 } from './convStem.ts';
-import { MOONSHINE_ROPE_LAYOUT } from './rope.ts';
+import { ROPE_LAYOUT } from './rope.ts';
 
 class EncoderAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
   readonly q_proj: nn.Linear;
@@ -42,18 +42,8 @@ class EncoderAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
     const { heads, headDim } = this.cfg;
     const qw = heads * headDim;
     const qkv = this.qkv.forward(x); // [T, 3·qw], columns q|k|v
-    const q = rope(qkv, cos, sin, {
-      headDim,
-      layout: MOONSHINE_ROPE_LAYOUT,
-      srcStart: 0,
-      width: qw,
-    });
-    const k = rope(qkv, cos, sin, {
-      headDim,
-      layout: MOONSHINE_ROPE_LAYOUT,
-      srcStart: qw,
-      width: qw,
-    });
+    const q = rope(qkv, cos, sin, { headDim, layout: ROPE_LAYOUT, srcStart: 0, width: qw });
+    const k = rope(qkv, cos, sin, { headDim, layout: ROPE_LAYOUT, srcStart: qw, width: qw });
     const v = slice(qkv, 1, 2 * qw, 3 * qw);
     return this.o_proj.forward(this.mha.forward(q, k, v), { addend: residual });
   }
