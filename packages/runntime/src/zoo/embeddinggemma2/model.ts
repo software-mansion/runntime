@@ -53,7 +53,6 @@ const MATMUL_ATTENTION_MAX_SLIDING_ROWS = 1024;
 
 /** The attention projections and per-head norms, fused at load. */
 class Attention extends nn.Module {
-  /** Its rows are permuted for the interleaved rope at load, like k_proj's. */
   readonly q_proj: nn.Linear;
   readonly k_proj: nn.Linear;
   readonly v_proj: nn.Linear;
@@ -148,7 +147,7 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
     const qkv = self_attn.qkv.forward(this.input_layernorm.forward(x));
     const n = rmsNorm(qkv, self_attn.qkv_norm.value, eps, { group: d });
     const roped = (start: number, width: number) =>
-      rope(n, cos, sin, { headDim: d, layout: 'interleaved', srcStart: start, width });
+      rope(n, cos, sin, { headDim: d, layout: 'half', srcStart: start, width });
     const vStart = (heads + kvHeads) * d;
     const rows = x.shape.dims![0]!;
     const perHead =

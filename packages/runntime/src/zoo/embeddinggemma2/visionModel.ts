@@ -68,7 +68,6 @@ class WrappedLinear extends nn.Module {
 
 /** The attention projections and per-head norms, fused at load. */
 class Attention extends nn.Module {
-  /** Its rows are permuted for the interleaved rope at load, like k_proj's. */
   readonly q_proj: WrappedLinear;
   readonly k_proj: WrappedLinear;
   readonly v_proj: WrappedLinear;
@@ -130,10 +129,16 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
       rmsNorm(y, norm.weight.value, norm.eps, { residual });
 
     // One grouped norm for every head, then q and k roped in one dispatch.
+    // The x half and the y half of a head are each a rope of their own.
     const { self_attn } = this;
     const qkv = self_attn.qkv.forward(this.input_layernorm.forward(x));
     const n = rmsNorm(qkv, self_attn.qkv_norm.value, eps, { group: d });
-    const qk = rope(n, inp.cos, inp.sin, { headDim: d, layout: 'interleaved', width: 2 * w });
+    const qk = rope(n, inp.cos, inp.sin, {
+      headDim: d,
+      layout: 'half',
+      ropesPerHead: 2,
+      width: 2 * w,
+    });
     const head = (v: Value, start: number) => slice(v, 1, start, start + d);
     const p = x.shape.elems / hidden;
     let a: Value;

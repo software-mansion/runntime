@@ -32,8 +32,8 @@ describe('ropeTables', () => {
     for (const t of [1, 4]) {
       for (let p = 0; p < headDim / 2; p++) {
         const angle = t / theta ** ((2 * p) / headDim);
-        // Entries 2p and 2p + 1 hold the same angle.
-        for (const i of [2 * p, 2 * p + 1]) {
+        // HF's cat(freqs, freqs): entries p and p + headDim/2 hold the angle.
+        for (const i of [p, p + headDim / 2]) {
           expect(cos[t * headDim + i]).toEqual(close(Math.cos(angle)));
           expect(sin[t * headDim + i]).toEqual(close(Math.sin(angle)));
         }
@@ -48,7 +48,7 @@ describe('visionRopeTables', () => {
   const cols = 3;
   const rows = 2;
   const { cos, sin } = visionRopeTables(cols, rows, headDim, theta);
-  // A 1D rope of half a head, for every column and row index.
+  // A 1D half-split rope of half a head, for every column and row index.
   const half = ropeTables(Math.max(cols, rows), headDim / 2, theta);
 
   it('is [cols · rows, headDim]', () => {
