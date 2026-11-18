@@ -246,13 +246,23 @@ export function sdpaPacked(
  *  `ropesPerHead` (default 1) is for a head that holds several ropes side by
  *  side, each over its own headDim / ropesPerHead columns, like the x and y
  *  halves of a 2D rope: 'half' then pairs (p, p + headDim / ropesPerHead / 2)
- *  within each rope's columns. It changes nothing for 'interleaved'.
+ *  within each rope's columns. 'interleaved' pairs neighbours however a head
+ *  is split, so its node carries 1.
  *
  *  cos and sin are f32 [T, headDim], one entry per column of a head, both
  *  columns of a pair holding the pair's value: `cat(freqs, freqs)` for
- *  'half', each frequency twice in a row for 'interleaved'. A pair with cos 1
- *  and sin 0 passes through, which is how a partial rotary is written. The
- *  score scale is not in the tables: sdpa applies it.
+ *  'half', each frequency twice in a row for 'interleaved'. The score scale
+ *  is not in the tables: sdpa applies it.
+ *
+ *  A pair with cos 1 and sin 0 passes through. The pairs are fixed by the
+ *  layout, so what that expresses differs:
+ *  - 'interleaved': identity on pairs k … headDim/2 − 1 leaves columns
+ *    [2k, headDim) as they are. That is a partial rotary over the first 2k
+ *    columns (Moonshine).
+ *  - 'half': identity on those pairs leaves columns [k, headDim/2) and
+ *    [headDim/2 + k, headDim). A checkpoint that applies rotate_half within
+ *    its first rotaryDim columns pairs (p, p + rotaryDim/2), which these
+ *    tables cannot express.
  *
  *  srcStart and width optionally read a slice of a wider slab — the q or k
  *  section of a fused qkv, say — and rope it in the same dispatch.
@@ -312,7 +322,7 @@ export function rope(
     srcStart,
     w,
     layout,
-    ropesPerHead,
+    opts.layout === 'half' ? ropesPerHead : 1,
   ]);
 }
 
