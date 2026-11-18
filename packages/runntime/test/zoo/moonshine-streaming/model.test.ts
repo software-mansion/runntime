@@ -6,6 +6,7 @@ import { moonshineFile } from '../moonshine/hostedFile.ts';
 import { frontendFrames } from '../../../src/zoo/moonshine-streaming/frontend.ts';
 import { input } from '../../core/graph/values.ts';
 import { attentionScales, standInWeights } from '../attentionScales.ts';
+import { ropeLayouts } from '../ropeLayouts.ts';
 
 const tiny = MOONSHINE_STREAMING_TINY;
 const small = { hidden: 16, ffn: 32, layers: 2, heads: 2, headDim: 8 };
@@ -65,5 +66,20 @@ describe('MoonshineStreamingModel attention', () => {
     const out = decoder.forward(input([3, small.hidden]), table, table, cross);
     const attentions = 3 * small.layers;
     expect(attentionScales(out)).toEqual(Array(attentions).fill(1 / Math.sqrt(small.headDim)));
+  });
+
+  // HF's Moonshine Streaming rotate_half takes x[..., 0::2] and x[..., 1::2]:
+  // pairs (2p, 2p + 1). Only the decoder self-attention has a rope.
+  it('ropes the decoder q and k in the interleaved layout', () => {
+    const m = standInWeights(model());
+    const { encoder, decoder } = m.model;
+    const frames = frontendFrames(1600, m.cfg.frameLen).input;
+    const encOut = encoder.forward(input([frames, m.cfg.frameLen]));
+    const cross = decoder.precomputeCrossKV(decoder.adapt(encOut));
+    const table = input([3, small.headDim]);
+    const out = decoder.forward(input([3, small.hidden]), table, table, cross);
+    expect(ropeLayouts(out)).toEqual(
+      Array(2 * small.layers).fill({ layout: 'interleaved', ropesPerHead: 1 }),
+    );
   });
 });
