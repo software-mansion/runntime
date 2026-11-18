@@ -17,12 +17,24 @@ that breaks it.
 2. **Test your assumptions.** If a finding depends on a caller, a route
    threshold or a feature check, read that code or run it, and say which
    you did. If you can't check it, label it `question`.
-3. **Hold the author to the house rules.** Anything that breaks `AGENTS.md`,
+3. **Reproduce a bug before you report it, when that is cheap.** If a unit
+   test, a `node` one-liner or a small edit plus a test run can show the
+   bug in a few minutes, do it, and put the command and its output in the
+   finding. If it doesn't reproduce, drop the finding. A `bug` you could
+   have run and didn't is not a finding. If reproducing needs a GPU you
+   don't have, a model download or a long run, say so and why.
+4. **Say how likely the input is.** Every `bug` gets one of: `common` (real
+   use hits it), `rare` (a real but unusual input: an odd shape, a slow
+   network, a device without a feature), `practically never` (only a typo,
+   a malformed file nobody ships, a buffer past what any model uses). Put
+   it on the finding's first line, so a `practically never` can be skipped
+   at a glance.
+5. **Hold the author to the house rules.** Anything that breaks `AGENTS.md`,
    `code-style` or `testing` is a finding. Quote the rule. "It matches the
    file around it" doesn't excuse breaking one.
-4. **Three nits at most.** They go after the real findings and are labelled
+6. **Three nits at most.** They go after the real findings and are labelled
    `nit`. Skip anything Prettier, ESLint or tsc already catch.
-5. **Run what CI runs:** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`,
+7. **Run what CI runs:** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`,
    `pnpm --filter runntime test:unit`. For changes in `src/core/kernels` or
    `src/core/gpu`, also run `test:gpu`. CI has no GPU, so nobody else will.
 
@@ -105,11 +117,12 @@ or a command you ran.
 
 First the walkthrough, then one block per finding, most severe first:
 
-- `bug` / `rule` / `question` / `nit`
+- `bug` / `rule` / `question` / `nit`, and for a `bug` how likely it is
 - `file:line`
 - what goes wrong, and on which input
 - the rule broken, if any
-- how you checked it: read `x.ts:40`, or ran `test:gpu`
+- how you checked it: read `x.ts:40`, or ran a command, with its output
+  for a reproduced `bug`
 
 Findings go to whoever asked. Nothing is posted to GitHub.
 
