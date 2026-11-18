@@ -5,6 +5,8 @@ import {
 } from '../../../src/zoo/embeddinggemma2/config.ts';
 import { EmbeddingGemma2Model } from '../../../src/zoo/embeddinggemma2/model.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
+import { input } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 
 describe('EmbeddingGemma2Model', () => {
   // Each layer stacks q_proj, k_proj and v_proj, and the hook builds its
@@ -45,5 +47,36 @@ describe('EmbeddingGemma2Model', () => {
     const chunks = await chunksFetched(new EmbeddingGemma2Model(cfg), file, 8192);
     expect(chunks.length).toBeGreaterThan(12);
     expect(chunks).toEqual(onceInFileOrder(chunks));
+  });
+});
+
+// HF's Gemma attention scales by 1: q and k are RMS-normed per head.
+describe('EmbeddingGemma2Model attention', () => {
+  it('runs every layer at scale 1', () => {
+    const cfg: EmbeddingGemma2Config = {
+      ...EMBEDDINGGEMMA2_TEXT,
+      vocab: 64,
+      hidden: 32,
+      ffn: 64,
+      layers: 2,
+      heads: 2,
+      pleDim: 16,
+      layerTypes: ['sliding', 'full'],
+      attention: {
+        sliding: { headDim: 8, kvHeads: 1, theta: 10000 },
+        full: { headDim: 16, kvHeads: 1, theta: 1000000 },
+      },
+    };
+    const model = standInWeights(new EmbeddingGemma2Model(cfg));
+    const t = 6;
+    const rope = (headDim: number) => ({ cos: input([t, headDim]), sin: input([t, headDim]) });
+    const out = model.forward({
+      x0: input([t, cfg.hidden]),
+      rope: { sliding: rope(8), full: rope(16) },
+      selector: input([1, t]),
+      segments: input([t, 2]),
+      maxSegment: t,
+    });
+    expect(attentionScales(out)).toEqual([1, 1]);
   });
 });

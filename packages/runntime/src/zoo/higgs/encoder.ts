@@ -24,7 +24,6 @@ import {
   nn,
   reshape,
   RunntimeError,
-  scaleWeight,
   slice,
   splitRows,
   sub,
@@ -238,8 +237,7 @@ function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   });
 }
 
-/** Self-attention with q, k and v in one projection. The load folds the
- *  score scale into q. */
+/** Self-attention with q, k and v in one projection. */
 class HubertAttention extends nn.Module {
   readonly q_proj: nn.Linear;
   readonly k_proj: nn.Linear;
@@ -247,10 +245,7 @@ class HubertAttention extends nn.Module {
   readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly out_proj: nn.Linear;
-  constructor(
-    readonly hidden: number,
-    readonly heads: number,
-  ) {
+  constructor(hidden: number, heads: number) {
     super();
     this.q_proj = new nn.Linear(hidden, hidden);
     this.k_proj = new nn.Linear(hidden, hidden);
@@ -264,12 +259,6 @@ class HubertAttention extends nn.Module {
       windowRight: Infinity,
     });
     this.out_proj = new nn.Linear(hidden, hidden);
-  }
-  override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    const scale = 1 / Math.sqrt(this.hidden / this.heads);
-    for (const name of ['q_proj.weight', 'q_proj.bias']) {
-      sd.tensors.set(at(prefix, name), scaleWeight(take(sd, prefix, name), scale));
-    }
   }
   override forward(x: Value): Value {
     return this.out_proj.forward(this.mha.forwardPacked(this.qkv.forward(x)), { addend: x });

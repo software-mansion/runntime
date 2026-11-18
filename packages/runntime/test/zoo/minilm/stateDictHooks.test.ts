@@ -3,9 +3,8 @@ import { MINILM_L6 } from '../../../src/zoo/minilm/config.ts';
 import { transformMinilmStateDict } from '../../../src/zoo/minilm/stateDictHooks.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
-// The hook reads only hidden, headDim and layers. headDim 16 makes the q/k
-// scale 16^-0.25 = 0.5, exact in f16.
-const CFG = { ...MINILM_L6, hidden: 2, layers: 1, headDim: 16 };
+// The hook reads only hidden.
+const CFG = { ...MINILM_L6, hidden: 2, layers: 1 };
 
 /** A one-layer BertModel checkpoint with HF names. Every value is exact in f16. */
 const CHECKPOINT: Record<string, Entry> = {
@@ -38,12 +37,6 @@ const CHECKPOINT: Record<string, Entry> = {
 /** The checkpoint's tensors the model never reads. */
 const UNREAD = ['embeddings.position_ids', 'pooler.dense.weight', 'pooler.dense.bias'];
 
-/** The checkpoint's tensors the hook replaces with scaled ones. */
-const SCALED = ['query', 'key'].flatMap((p) => [
-  `encoder.layer.0.attention.self.${p}.weight`,
-  `encoder.layer.0.attention.self.${p}.bias`,
-]);
-
 describe('transformMinilmStateDict', () => {
   it.for([
     { dtype: 'F32', elemBytes: 4 },
@@ -56,33 +49,18 @@ describe('transformMinilmStateDict', () => {
     const get = (name: string) => sd.tensors.get(name)!;
 
     // The unread tensors are gone and the token-type table is consumed.
-    // Every other tensor stays as it is, value too.
+    // Every other tensor stays as it is, value too: query and key load as
+    // the checkpoint stores them.
     const untouched = Object.keys(CHECKPOINT).filter(
       (name) =>
-        !SCALED.includes(name) &&
         !UNREAD.includes(name) &&
         name !== 'embeddings.token_type_embeddings.weight' &&
         name !== 'embeddings.position_embeddings.weight',
     );
     expect([...sd.tensors.keys()].sort()).toEqual(
-      [...untouched, ...SCALED, 'embeddings.position_embeddings.weight'].sort(),
+      [...untouched, 'embeddings.position_embeddings.weight'].sort(),
     );
     for (const name of untouched) expect(get(name)).toBe(before.get(name));
-
-    // query and key times 0.5, under their own names. Scaled tensors are
-    // f32 on every checkpoint.
-    const scaled = {
-      'query.weight': { shape: [2, 2], values: [0.5, 1, 1.5, 2] },
-      'query.bias': { shape: [2], values: [0.5, 1] },
-      'key.weight': { shape: [2, 2], values: [2.5, 3, 3.5, 4] },
-      'key.bias': { shape: [2], values: [1.5, 2] },
-    };
-    for (const [name, { shape, values }] of Object.entries(scaled)) {
-      const t = get(`encoder.layer.0.attention.self.${name}`);
-      expect(t.shape).toEqual(shape);
-      expect(t.byteLength).toBe(values.length * elemBytes);
-      expect(await contents(t)).toEqual({ type: 'f32', values });
-    }
 
     // position + tokenType row 0: [1 + 10, 2 + 20, 3 + 10, 4 + 20].
     const position = get('embeddings.position_embeddings.weight');

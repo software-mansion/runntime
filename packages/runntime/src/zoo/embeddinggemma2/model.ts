@@ -179,6 +179,7 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
           headDim: d,
           windowLeft: window,
           windowRight: window,
+          scale: 1, // q and k are RMS-normed per head
           segments: inp.segments,
           maxSegment: inp.maxSegment,
         },

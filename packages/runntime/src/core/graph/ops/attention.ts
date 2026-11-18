@@ -23,8 +23,12 @@ const MAX_DECODE_HEAD_DIM = 128;
  *  `maxSegment` lets the evaluator size its key split from the longest segment
  *  rather than the whole pack.
  *
+ *  `scale` multiplies q·k before the softmax: 1/√headDim by default, as in
+ *  PyTorch's `scaled_dot_product_attention`. Pass the model's own scale (1
+ *  for q and k that are already normed or scaled). Sinks are not scaled.
+ *
  *  Optional `keyBias` adds `value` to the scores of keys [start, end) in every
- *  row and head. */
+ *  row and head, after the scale. */
 export function sdpa(
   q: Value,
   k: Value,
@@ -36,6 +40,7 @@ export function sdpa(
     windowLeft: number;
     windowRight: number;
     qPosOffset?: number;
+    scale?: number;
     sinks?: Value;
     segments?: Value;
     maxSegment?: number;
@@ -44,6 +49,7 @@ export function sdpa(
 ): Value {
   const { qHeads, kvHeads, headDim, sinks, segments, keyBias } = opts;
   const qPosOffset = opts.qPosOffset ?? 0;
+  const scale = opts.scale ?? 1 / Math.sqrt(headDim);
   const [qLen, qw, dtype] = want2d('sdpa', q, FLOAT_DTYPES);
   if (qw !== qHeads * headDim)
     throw new Error(`sdpa: q cols ${qw} != qHeads*headDim ${qHeads * headDim}`);
@@ -68,6 +74,7 @@ export function sdpa(
   if (!Number.isInteger(qPosOffset) || qPosOffset < 0) {
     throw new Error(`sdpa: qPosOffset ${qPosOffset} must be a non-negative integer`);
   }
+  if (!Number.isFinite(scale)) throw new Error(`sdpa: scale ${scale} must be finite`);
   const kvw = kvHeads * headDim;
   const [kvLen, kw, kDtype] = want2d('sdpa.k', k, FLOAT_DTYPES);
   if (kw !== kvw) throw new Error(`sdpa: k cols ${kw} != kvHeads*headDim ${kvw}`);
@@ -135,6 +142,7 @@ export function sdpa(
       segments ? 1 : 0,
       maxSegment,
       0, // q, k and v are separate tensors
+      scale,
       ...(keyBias ? [1, keyBias.start, keyBias.end, keyBias.value] : []),
     ],
   );
@@ -142,7 +150,7 @@ export function sdpa(
 
 /** sdpa over one fused qkv tensor read in place, with q, k and v as column
  *  blocks, so the three slice copies never run. Self-attention only, and no
- *  qLen = 1 route. */
+ *  qLen = 1 route. `scale` is sdpa's: 1/√headDim by default. */
 export function sdpaPacked(
   qkv: Value,
   opts: {
@@ -152,6 +160,7 @@ export function sdpaPacked(
     windowLeft: number;
     windowRight: number;
     qPosOffset?: number;
+    scale?: number;
     sinks?: Value;
     segments?: Value;
     maxSegment?: number;
@@ -159,6 +168,7 @@ export function sdpaPacked(
 ): Value {
   const { qHeads, kvHeads, headDim, sinks, segments } = opts;
   const qPosOffset = opts.qPosOffset ?? 0;
+  const scale = opts.scale ?? 1 / Math.sqrt(headDim);
   const [t, w, dtype] = want2d('sdpaPacked', qkv, FLOAT_DTYPES);
   const qw = qHeads * headDim;
   const packedW = (qHeads + 2 * kvHeads) * headDim;
@@ -184,6 +194,7 @@ export function sdpaPacked(
   if (!Number.isInteger(qPosOffset) || qPosOffset < 0) {
     throw new Error(`sdpaPacked: qPosOffset ${qPosOffset} must be a non-negative integer`);
   }
+  if (!Number.isFinite(scale)) throw new Error(`sdpaPacked: scale ${scale} must be finite`);
   if (wr !== WINDOW_INF && qPosOffset + t > t) {
     throw new Error(`sdpaPacked: qPosOffset+qLen ${qPosOffset + t} exceeds key rows kvLen ${t}`);
   }
@@ -207,13 +218,25 @@ export function sdpaPacked(
     'attn',
     [qkv, ...(sinks ? [sinks] : []), ...(segments ? [segments] : [])],
     undefined,
-    [qHeads, kvHeads, headDim, wl, wr, qPosOffset, sinks ? 1 : 0, segments ? 1 : 0, maxSegment, 1],
+    [
+      qHeads,
+      kvHeads,
+      headDim,
+      wl,
+      wr,
+      qPosOffset,
+      sinks ? 1 : 0,
+      segments ? 1 : 0,
+      maxSegment,
+      1, // q, k and v are column blocks of qkv
+      scale,
+    ],
   );
 }
 
 /** Rotary position embedding over every head section of x [T, W] in one
- *  kernel. Rotation is interleaved-pair, and cos/sin are pair-duplicated tables
- *  with any scale pre-folded.
+ *  kernel. Rotation is interleaved-pair, and cos/sin are pair-duplicated
+ *  tables. The score scale is not in them: sdpa applies it.
  *
  *  srcStart and width optionally read a slice of a wider slab — the q or k
  *  section of a fused qkv, say — and rope it in the same dispatch. */

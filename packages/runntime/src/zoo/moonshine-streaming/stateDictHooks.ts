@@ -3,17 +3,14 @@
  *  tensor binds under its own name, since the modules are named like the
  *  checkpoint.
  *
- *  The encoder norm gammas gain back their −1 offset, `log_k` becomes k, and
- *  the score scale folds into q on the encoder, which has no rope, and on the
- *  cross attention. The decoder's rope tables carry its self-attention scale.
+ *  The encoder norm gammas gain back their −1 offset and `log_k` becomes k.
  *
- *  Weights stay in torch layout for the core Linear hook to transpose. The
- *  scaled q, the norm gammas and k stay f32 even from an F16 checkpoint.
+ *  The norm gammas and k stay f32 even from an F16 checkpoint.
  *  Derived byteLengths carry the source file bytes, so load progress counts
  *  every byte the model reads. */
 
 import { derive, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
-import { qualify, scaleQuery, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
+import { qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
 import type { MoonshineStreamingConfig } from './config.ts';
 
 /** Stays f32 for any checkpoint: rounding gamma + 1 to f16 would drop the low
@@ -46,11 +43,9 @@ export function transformStreamingStateDict(
   for (let i = 0; i < cfg.enc.layers; i++) {
     const L = q(`model.encoder.layers.${i}`);
     gammaNorm(`${L}.input_layernorm`);
-    // No rope, so the full score scale folds into the q rows.
-    scaleQuery(sd, `${L}.self_attn`, cfg.enc.headDim);
     gammaNorm(`${L}.post_attention_layernorm`);
   }
   gammaNorm(q('model.encoder.final_norm'));
 
-  transformDecoder(sd, prefix, { layers: cfg.dec.layers, headDim: cfg.dec.headDim });
+  transformDecoder(sd, prefix);
 }

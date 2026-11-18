@@ -3,6 +3,9 @@ import { MOONSHINE_TINY } from '../../../src/zoo/moonshine/config.ts';
 import { MoonshineModel } from '../../../src/zoo/moonshine/model.ts';
 import { chunksFetched, onceInFileOrder } from '../chunkedLoad.ts';
 import { moonshineFile } from './hostedFile.ts';
+import { stemFrames } from '../../../src/zoo/moonshine/convStem.ts';
+import { input } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 
 const cfg = {
   ...MOONSHINE_TINY,
@@ -36,5 +39,20 @@ describe('MoonshineModel', () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       'loadStateDict: state dict has tensors the model does not read: proj_out.bias.',
     );
+  });
+});
+
+describe('MoonshineModel attention', () => {
+  // HF's MoonshineAttention scales by headDim^-½: the encoder and decoder
+  // self-attention and the cross-attention alike.
+  it('scales the encoder, decoder and cross-attention scores by 1/√headDim', () => {
+    const { encoder, decoder } = standInWeights(model()).model;
+    const frames = stemFrames(1000).conv3;
+    const table = (rows: number) => input([rows, cfg.headDim]);
+    const encOut = encoder.forward(input([1000, 1]), table(frames), table(frames));
+    const cross = decoder.precomputeCrossKV(encOut);
+    const out = decoder.forward(input([3, cfg.dModel]), table(3), table(3), cross);
+    const attentions = cfg.encLayers + 2 * cfg.decLayers;
+    expect(attentionScales(out)).toEqual(Array(attentions).fill(1 / Math.sqrt(cfg.headDim)));
   });
 });

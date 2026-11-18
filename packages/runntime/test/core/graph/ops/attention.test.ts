@@ -64,7 +64,16 @@ describe('sdpa', () => {
     const { q, k, v } = qkv(5, 7);
     const c = sdpa(q, k, v, { ...causal, keyBias: { start: 2, end: 7, value: -1.5 } });
     expect(c.pending?.inputs).toEqual([q, k, v]);
-    expect(c.pending?.attrs?.slice(10)).toEqual([1, 2, 7, -1.5]);
+    expect(c.pending?.attrs?.slice(11)).toEqual([1, 2, 7, -1.5]);
+  });
+
+  it.each([
+    { name: '1/√headDim by default', scale: undefined, want: 1 / Math.sqrt(HD) },
+    { name: 'the scale it is given', scale: 0.5, want: 0.5 },
+    { name: 'a scale of 0', scale: 0, want: 0 },
+  ])('carries $name as attrs[10]', ({ scale, want }) => {
+    const { q, k, v } = qkv(5, 7);
+    expect(sdpa(q, k, v, { ...causal, scale }).pending?.attrs?.[10]).toBe(want);
   });
 
   it.each([
@@ -161,6 +170,12 @@ describe('sdpa', () => {
       opts: { ...causal, keyBias: { start: 0, end: 2, value: NaN } },
       error: /keyBias value NaN must be finite/,
     },
+    { name: 'a NaN scale', opts: { ...causal, scale: NaN }, error: /scale NaN must be finite/ },
+    {
+      name: 'an infinite scale',
+      opts: { ...causal, scale: Infinity },
+      error: /scale Infinity must be finite/,
+    },
   ])('rejects $name', ({ opts, error }) => {
     const { q, k, v } = qkv(5, 7);
     expect(() => sdpa(q, k, v, opts)).toThrow(error);
@@ -204,7 +219,14 @@ describe('sdpaPacked', () => {
   it('reads q, k and v from one tensor and gives the q-shaped output', () => {
     const c = sdpaPacked(packed(5), causal);
     expect(c.shape).toEqual(meta([5, QH * HD]));
-    expect(c.pending?.attrs?.at(-1)).toBe(1); // the packed flag
+    expect(c.pending?.attrs?.[9]).toBe(1); // the packed flag
+  });
+
+  it.each([
+    { name: '1/√headDim by default', scale: undefined, want: 1 / Math.sqrt(HD) },
+    { name: 'the scale it is given', scale: 0.5, want: 0.5 },
+  ])('carries $name as attrs[10]', ({ scale, want }) => {
+    expect(sdpaPacked(packed(5), { ...causal, scale }).pending?.attrs?.[10]).toBe(want);
   });
 
   it.each([
@@ -220,6 +242,12 @@ describe('sdpaPacked', () => {
       x: packed(5),
       opts: { ...causal, qPosOffset: 1 },
       error: /exceeds key rows/,
+    },
+    {
+      name: 'a scale that is not finite',
+      x: packed(5),
+      opts: { ...causal, scale: NaN },
+      error: /sdpaPacked: scale NaN must be finite/,
     },
   ])('rejects $name', ({ x, opts, error }) => {
     expect(() => sdpaPacked(x, opts)).toThrow(error);
