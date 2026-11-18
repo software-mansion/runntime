@@ -14,7 +14,7 @@ import type { MoonshineConfig } from './config.ts';
 
 /** The columns of a head that HF's Moonshine rotates together, for the rope
  *  op. */
-export const MOONSHINE_ROPE_LAYOUT = 'interleaved';
+export const ROPE_LAYOUT = 'interleaved';
 
 export interface MoonshineRopeTables {
   cos: Float32Array;
