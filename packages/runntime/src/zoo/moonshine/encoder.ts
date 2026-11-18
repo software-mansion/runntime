@@ -7,8 +7,8 @@
  *  throughout. Each stage's bias and activation ride the conv epilogue.
  *
  *  Attention is one fused qkv matmul with q and k roped in one dispatch each,
- *  then a fully unbounded window. The rope tables carry the score scale, so the
- *  kernel needs none. Module fields are named like the checkpoint. */
+ *  then a fully unbounded window. Module fields are named like the
+ *  checkpoint. */
 
 import { gelu, nn, rope, slice, type Value } from '../../core/index.ts';
 import type { MoonshineConfig } from './config.ts';
@@ -34,7 +34,6 @@ class EncoderAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
       headDim: cfg.headDim,
       windowLeft: Infinity,
       windowRight: Infinity,
-      scale: 1, // the rope tables carry it
     });
     this.o_proj = new nn.Linear(qw, cfg.dModel, { bias: false });
   }

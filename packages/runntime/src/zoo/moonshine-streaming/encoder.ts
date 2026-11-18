@@ -3,8 +3,7 @@
  *  per-layer asymmetric sliding-window attention, with windows converted from
  *  HF's strict bounds to the kernel's inclusive form.
  *
- *  There is no rope, so the score scale folds into the q columns at load. The
- *  loader also adds 1 back to the checkpoint's offset norm gamma, so plain
+ *  The loader adds 1 back to the checkpoint's offset norm gamma, so plain
  *  weight-only LayerNorms serve here. Module fields are named like the
  *  checkpoint. */
 
@@ -13,7 +12,6 @@ import type { MoonshineStreamingConfig } from './config.ts';
 import { StreamingEmbedder } from './frontend.ts';
 
 class EncoderAttn extends nn.Module {
-  /** Carries the 1/√headDim score scale, folded in at load. */
   readonly q_proj: nn.Linear;
   readonly k_proj: nn.Linear;
   readonly v_proj: nn.Linear;
@@ -37,7 +35,6 @@ class EncoderAttn extends nn.Module {
       headDim,
       windowLeft: window[0] - 1,
       windowRight: Math.max(0, window[1] - 1),
-      scale: 1, // folded into the weights at load
     });
     this.o_proj = new nn.Linear(qw, hidden, { bias: false });
   }

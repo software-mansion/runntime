@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { MOONSHINE_TINY } from '../../../src/zoo/moonshine/config.ts';
 import { transformMoonshineStateDict } from '../../../src/zoo/moonshine/stateDictHooks.ts';
-import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
-
-// The hook reads only decLayers and headDim. headDim 4 makes the
-// cross-attention q scale 1/√4 = 0.5, exact in f16.
-const CFG = { ...MOONSHINE_TINY, dModel: 2, encLayers: 1, decLayers: 1, headDim: 4 };
+import { checkpoint, type Entry } from '../../core/weights/checkpoint.ts';
 
 const square = (values: number[]): Entry => ({ values, shape: [2, 2] });
 const ZERO = square([0, 0, 0, 0]);
@@ -41,8 +36,7 @@ const UNTOUCHED = [
   ...['encoder.layers.0.self_attn', 'decoder.layers.0.self_attn'].flatMap((attn) =>
     ['q', 'k', 'v'].map((p) => `model.${attn}.${p}_proj.weight`),
   ),
-  'model.decoder.layers.0.encoder_attn.k_proj.weight',
-  'model.decoder.layers.0.encoder_attn.v_proj.weight',
+  ...['q', 'k', 'v'].map((p) => `model.decoder.layers.0.encoder_attn.${p}_proj.weight`),
 ];
 
 /** A one-layer Moonshine checkpoint with HF names. Every value is exact in f16. */
@@ -69,23 +63,15 @@ describe('transformMoonshineStateDict', () => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
     const before = new Map(sd.tensors);
-    transformMoonshineStateDict(sd, '', CFG);
-    const get = (name: string) => sd.tensors.get(name)!;
+    transformMoonshineStateDict(sd, '');
 
-    // The self-attention projections stay as they are: rope carries their
-    // scale, and the model's FusedLinear stacks them.
-    const crossQName = 'model.decoder.layers.0.encoder_attn.q_proj.weight';
-    expect([...sd.tensors.keys()].sort()).toEqual([...UNTOUCHED, crossQName].sort());
-    for (const name of UNTOUCHED) expect(get(name)).toBe(before.get(name));
+    // Every attention projection stays as the checkpoint stores it: the
+    // attention applies the score scale, and the model's FusedLinear stacks
+    // the projections.
+    expect([...sd.tensors.keys()].sort()).toEqual([...UNTOUCHED].sort());
+    for (const name of UNTOUCHED) expect(sd.tensors.get(name)).toBe(before.get(name));
 
-    // Cross-attention q times 1/√headDim = 0.5, f32 on every checkpoint.
-    const crossQ = get(crossQName);
-    expect(crossQ.shape).toEqual([2, 2]);
-    expect(crossQ.byteLength).toBe(4 * elemBytes);
-    expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5] });
-
-    // The derived tensors carry their sources' bytes, so the unread
-    // proj_out.weight is the only loss.
+    // The unread proj_out.weight is the only loss.
     expect(sd.totalBytes()).toBe(total - ZERO.values.length * elemBytes);
   });
 });
