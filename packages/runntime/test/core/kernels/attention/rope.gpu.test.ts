@@ -10,10 +10,20 @@ const { root, ex } = await gpu();
 type Layout = 'half' | 'interleaved';
 
 /** The two columns of pair `i` within a head, written from each layout's
- *  definition: HF's rotate_half pairs (i, i + headDim/2), the interleaved
- *  form pairs (2i, 2i + 1). */
-function pairColumns(layout: Layout, i: number, headDim: number): [number, number] {
-  return layout === 'half' ? [i, i + headDim / 2] : [2 * i, 2 * i + 1];
+ *  definition: the interleaved form pairs (2i, 2i + 1). HF's rotate_half
+ *  pairs (j, j + ropeDim/2) within each rope of ropeDim = headDim /
+ *  ropesPerHead columns, pair i being pair j = i mod ropeDim/2 of rope
+ *  ⌊i / (ropeDim/2)⌋. */
+function pairColumns(
+  layout: Layout,
+  i: number,
+  headDim: number,
+  ropesPerHead: number,
+): [number, number] {
+  if (layout === 'interleaved') return [2 * i, 2 * i + 1];
+  const ropeDim = headDim / ropesPerHead;
+  const first = Math.floor(i / (ropeDim / 2)) * ropeDim + (i % (ropeDim / 2));
+  return [first, first + ropeDim / 2];
 }
 
 /** The cos and sin tables a model passes: angle t · 10000^(−2i / rotaryDim)
@@ -24,13 +34,14 @@ function ropeTables(
   rows: number,
   headDim: number,
   rotaryDim: number,
+  ropesPerHead: number,
 ): { cos: Float32Array; sin: Float32Array } {
   const cos = new Float32Array(rows * headDim);
   const sin = new Float32Array(rows * headDim);
   for (let t = 0; t < rows; t++) {
     for (let i = 0; i < headDim / 2; i++) {
       const angle = i < rotaryDim / 2 ? t * 10000 ** ((-2 * i) / rotaryDim) : 0;
-      for (const col of pairColumns(layout, i, headDim)) {
+      for (const col of pairColumns(layout, i, headDim, ropesPerHead)) {
         cos[t * headDim + col] = Math.cos(angle);
         sin[t * headDim + col] = Math.sin(angle);
       }
@@ -51,12 +62,13 @@ function ropeRef(
   headDim: number,
   srcStart: number,
   width: number,
+  ropesPerHead: number,
 ): Float64Array {
   const out = new Float64Array(rows * width);
   for (let t = 0; t < rows; t++) {
     for (let head = 0; head < width / headDim; head++) {
       for (let i = 0; i < headDim / 2; i++) {
-        const [a, b] = pairColumns(layout, i, headDim);
+        const [a, b] = pairColumns(layout, i, headDim, ropesPerHead);
         const c = cos[t * headDim + a]!;
         const s = sin[t * headDim + a]!;
         const xa = x[t * cols + srcStart + head * headDim + a]!;
@@ -75,27 +87,40 @@ interface Case {
   headDim: number;
   /** Columns of a head that turn; the rest pass through. Default headDim. */
   rotaryDim?: number;
+  /** Ropes a head holds side by side. Default 1. */
+  ropesPerHead?: number;
   srcStart?: number;
   width?: number;
 }
 
 async function checkRope(
   layout: Layout,
-  { rows, cols, headDim, rotaryDim = headDim, srcStart, width }: Case,
+  { rows, cols, headDim, rotaryDim = headDim, ropesPerHead, srcStart, width }: Case,
   dtype: 'f32' | 'f16' = 'f32',
 ): Promise<void> {
   const x = dtype === 'f16' ? roundF16(randomF32(rows * cols, 1)) : randomF32(rows * cols, 1);
-  const { cos, sin } = ropeTables(layout, rows, headDim, rotaryDim);
+  const { cos, sin } = ropeTables(layout, rows, headDim, rotaryDim, ropesPerHead ?? 1);
   const got = await toArray(
     rope(
       upload(root, x, { ...matrix(rows, cols), dtype }),
       upload(root, cos, [rows, headDim]),
       upload(root, sin, [rows, headDim]),
-      { headDim, layout, srcStart, width },
+      { headDim, layout, ropesPerHead, srcStart, width },
     ),
     ex,
   );
-  const want = ropeRef(layout, x, cos, sin, rows, cols, headDim, srcStart ?? 0, width ?? cols);
+  const want = ropeRef(
+    layout,
+    x,
+    cos,
+    sin,
+    rows,
+    cols,
+    headDim,
+    srcStart ?? 0,
+    width ?? cols,
+    ropesPerHead ?? 1,
+  );
   // f32: two products and a sum. f16 output adds 2^-11 relative.
   const tol = dtype === 'f16' ? { atol: 1e-3, rtol: 1e-3 } : { atol: 1e-6, rtol: 1e-6 };
   expectClose(got, want, tol);
@@ -135,6 +160,17 @@ describe('rope kernel', () => {
             name: 'a partial rotary on a slice of a wider slab',
             c: { rows: 4, cols: 5 * 12, headDim: 12, rotaryDim: 8, srcStart: 12, width: 3 * 12 },
           },
+          // EmbeddingGemma 2 vision: q and k of 3 heads, each head an x rope
+          // and a y rope of 8 columns
+          {
+            name: 'two ropes a head on a slice of a wider slab',
+            c: { rows: 5, cols: 9 * 16, headDim: 16, ropesPerHead: 2, width: 6 * 16 },
+          },
+          // 3 ropes of 6 columns: an odd rope count, an odd pair count a rope
+          {
+            name: 'three ropes a head',
+            c: { rows: 3, cols: 5 * 18, headDim: 18, ropesPerHead: 3 },
+          },
         ].map((c) => ({ layout, dtype, ...c })),
       ),
     ),
@@ -158,15 +194,21 @@ describe('rope kernel', () => {
   // column lands on its partner: (a, b) → (−b, a). The partner of column 0
   // is column 1 interleaved and column 2 in the half layout.
   it.each([
-    { layout: 'interleaved' as const, want: [-2, 1, -4, 3] },
-    { layout: 'half' as const, want: [-3, -4, 1, 2] },
-  ])('$layout pairs the columns of a head, worked out by hand', async ({ layout, want }) => {
-    const x = upload(root, new Float32Array([1, 2, 3, 4]), [1, 4]);
-    const cos = upload(root, new Float32Array(4), [1, 4]);
-    const sin = upload(root, new Float32Array(4).fill(1), [1, 4]);
-    const got = await toArray(rope(x, cos, sin, { headDim: 4, layout }), ex);
-    expect(Array.from(got)).toEqual(want);
-  });
+    { layout: 'interleaved' as const, ropesPerHead: 1, want: [-2, 1, -4, 3] },
+    { layout: 'half' as const, ropesPerHead: 1, want: [-3, -4, 1, 2] },
+    // Two ropes of 2 columns: each rope's half split is its two neighbours.
+    { layout: 'half' as const, ropesPerHead: 2, want: [-2, 1, -4, 3] },
+    { layout: 'interleaved' as const, ropesPerHead: 2, want: [-2, 1, -4, 3] },
+  ])(
+    '$layout, $ropesPerHead ropes a head, pairs the columns of a head, worked out by hand',
+    async ({ layout, ropesPerHead, want }) => {
+      const x = upload(root, new Float32Array([1, 2, 3, 4]), [1, 4]);
+      const cos = upload(root, new Float32Array(4), [1, 4]);
+      const sin = upload(root, new Float32Array(4).fill(1), [1, 4]);
+      const got = await toArray(rope(x, cos, sin, { headDim: 4, layout, ropesPerHead }), ex);
+      expect(Array.from(got)).toEqual(want);
+    },
+  );
 
   // Past GRID_Y_STRIDE pairs the threads take the second grid dimension.
   it.each(LAYOUTS)('%s runs past 2^24 elements', async (layout) => {
