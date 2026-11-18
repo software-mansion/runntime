@@ -30,7 +30,7 @@ import {
   createAttnFlashPipeline,
 } from '../../kernels/attention/attnFlash.ts';
 import { attnLocalHandle, createAttnLocalPipeline } from '../../kernels/attention/attnLocal.ts';
-import { createRopePipeline, ropeHandle } from '../../kernels/attention/rope.ts';
+import { createRopePipeline, ROPE_LAYOUTS, ropeHandle } from '../../kernels/attention/rope.ts';
 import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
 type AttnRoute =
@@ -242,12 +242,13 @@ export const localAttentionSpec = defineSpec({
 
 export const ropeSpec = defineSpec({
   attrs: (p) => {
-    const [headDim, srcStart] = p.attrs as [number, number, number];
-    return { headDim, srcStart };
+    const [headDim, srcStart, , layout] = p.attrs as [number, number, number, number];
+    return { headDim, srcStart, layout: ROPE_LAYOUTS[layout]! };
   },
   cfg: (node, attrs) => ({
     cols: node.shape.dims![1]!,
     headDim: attrs.headDim,
+    layout: attrs.layout,
     srcStart: attrs.srcStart,
     srcCols: node.pending!.inputs[0]!.shape.dims![1]!,
   }),

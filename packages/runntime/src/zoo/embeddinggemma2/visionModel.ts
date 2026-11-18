@@ -133,7 +133,7 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
     const { self_attn } = this;
     const qkv = self_attn.qkv.forward(this.input_layernorm.forward(x));
     const n = rmsNorm(qkv, self_attn.qkv_norm.value, eps, { group: d });
-    const qk = rope(n, inp.cos, inp.sin, { headDim: d, width: 2 * w });
+    const qk = rope(n, inp.cos, inp.sin, { headDim: d, layout: 'interleaved', width: 2 * w });
     const head = (v: Value, start: number) => slice(v, 1, start, start + d);
     const p = x.shape.elems / hidden;
     let a: Value;
