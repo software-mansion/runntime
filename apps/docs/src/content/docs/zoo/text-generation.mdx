@@ -1,0 +1,307 @@
+---
+title: Text generation
+description: Chat with a small language model on the user's GPU.
+---
+
+Text generation runs a chat language model in the browser. Messages go in,
+the model's reply comes out, token by token. It powers assistants, smart
+replies, summaries and tool calling, with nothing sent to a server.
+
+`createTextGenerator` runs
+[Gemma 3](https://huggingface.co/google/gemma-3-1b-it) (1B and 270M,
+instruction-tuned) and [Qwen 3](https://huggingface.co/Qwen/Qwen3-0.6B)
+(0.6B, with thinking and tool calling).
+
+## Quick start
+
+```ts twoslash
+import { createTextGenerator, models } from 'runntime/zoo';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const llm = await createTextGenerator(models.textGeneration.GEMMA3_1B_IT);
+
+// 2. Ask. The reply is the model's answer, without the chat markup.
+const reply = await llm.generate([
+  { role: 'system', content: 'Answer in one sentence.' },
+  { role: 'user', content: 'What is the capital of France?' },
+]);
+console.log(reply); // "The capital of France is **Paris**."
+
+// 3. Free the GPU memory when done.
+llm.dispose();
+```
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+
+## Streaming
+
+`onToken` is called with each new piece of text as soon as it is decoded.
+The pieces add up to the returned string.
+
+```ts twoslash
+import type { TextGenerator } from 'runntime/zoo';
+declare const llm: TextGenerator;
+declare const output: HTMLElement;
+// ---cut---
+const reply = await llm.generate('Write a haiku about the sea.', {
+  maxNewTokens: 64,
+  onToken: (text) => {
+    output.textContent += text;
+  },
+});
+```
+
+A string is sent as one user message. Pass `raw: true` to skip the chat
+template and continue the text as it is.
+
+## Conversations
+
+Keep the messages in an array and append each reply. The model runs only
+on what is new: the start of the conversation it has already read is kept
+on the GPU from the previous call.
+
+```ts twoslash
+import type { ChatMessage, TextGenerator } from 'runntime/zoo';
+declare const llm: TextGenerator;
+// ---cut---
+const chat: ChatMessage[] = [{ role: 'user', content: 'Name a fruit.' }];
+chat.push({ role: 'assistant', content: await llm.generate(chat) });
+
+chat.push({ role: 'user', content: 'What color is it?' });
+chat.push({ role: 'assistant', content: await llm.generate(chat) });
+```
+
+`llm.lastStats` tells how much was reused, in `reusedTokens`, and how fast
+the call ran. `resetCache()` forgets the conversation, so the next call reads
+everything again.
+
+## Sampling
+
+By default the model picks the most likely token at every step, so the same
+messages give the same reply. Set a `temperature` above 0 for varied
+replies:
+
+```ts twoslash
+import type { TextGenerator } from 'runntime/zoo';
+declare const llm: TextGenerator;
+// ---cut---
+const idea = await llm.generate('Suggest a name for a cat.', {
+  temperature: 0.8,
+  topK: 64,
+  topP: 0.95,
+  seed: 42, // The same seed gives the same reply.
+});
+```
+
+## Stopping early
+
+A reply ends when the model closes its turn, at `maxNewTokens`, or when one
+of these happens:
+
+- **stop** - the text contains one of these strings. The reply is cut just
+  before it, and `onToken` never sees it.
+- **onToken returns false** - the reply ends after that piece.
+- **signal** - an `AbortSignal` fired. `generate()` rejects with the signal's
+  reason, like `fetch()` does.
+
+```ts twoslash
+import type { TextGenerator } from 'runntime/zoo';
+declare const llm: TextGenerator;
+declare const stopButton: HTMLButtonElement;
+// ---cut---
+const controller = new AbortController();
+stopButton.onclick = () => controller.abort();
+
+try {
+  await llm.generate('List ten animals, one per line.', {
+    stop: ['\n6.'],
+    signal: controller.signal,
+  });
+} catch (err) {
+  if (!controller.signal.aborted) throw err;
+}
+```
+
+`lastStats.finishReason` says which one ended the last call.
+
+## Constrained output
+
+`allowedTokenIds` limits the next token to a set of ids, at every step or
+from a function that sees the text so far. `logitsProcessor` edits the
+scores directly: set one to `-Infinity` to forbid that token. Use them to
+force a yes or no, a choice from a list, or valid JSON.
+
+```ts twoslash
+import type { TextGenerator } from 'runntime/zoo';
+declare const llm: TextGenerator;
+// ---cut---
+const yes = llm.tokenizer.encode('Yes');
+const no = llm.tokenizer.encode('No');
+
+const answer = await llm.generate('Is the sky blue? Answer Yes or No.', {
+  maxNewTokens: 1,
+  allowedTokenIds: [yes[0]!, no[0]!],
+});
+```
+
+With either one set, each step's scores are read back to the CPU, so
+generation is slower than without.
+
+## Thinking and tools (Qwen 3)
+
+Qwen 3 can think before it answers. Thinking is off by default. Turn it on
+with `chatTemplate: { enableThinking: true }`, and the reply starts with the
+reasoning, between `<think>` and `</think>`.
+
+`chatTemplate: { tools }` lists functions the model may call, in the
+format it was trained on. A call comes back as JSON in a `<tool_call>`
+block. Run the function and send its result as a `tool` message:
+
+```ts twoslash
+import { createTextGenerator, models, type ChatMessage } from 'runntime/zoo';
+declare function muteUser(user: string): string;
+// ---cut---
+const qwen = await createTextGenerator(models.textGeneration.QWEN3_0_6B);
+const tools = [
+  {
+    type: 'function',
+    function: {
+      name: 'mute_user',
+      description: 'Mute a user in the channel',
+      parameters: { type: 'object', properties: { user: { type: 'string' } } },
+    },
+  },
+];
+
+const chat: ChatMessage[] = [{ role: 'user', content: 'Mute Bob.' }];
+const reply = await qwen.generate(chat, { chatTemplate: { tools } });
+// e.g. '<tool_call>\n{"name": "mute_user", "arguments": {"user": "Bob"}}\n</tool_call>'
+
+const call = JSON.parse(reply.split('<tool_call>')[1]!.split('</tool_call>')[0]!);
+chat.push({ role: 'assistant', content: reply });
+chat.push({ role: 'tool', content: muteUser(call.arguments.user) });
+const done = await qwen.generate(chat, { chatTemplate: { tools } });
+```
+
+Gemma ignores both options.
+
+## Methods
+
+```ts
+function createTextGenerator(
+  model?: TextGeneratorModel,
+  options?: TextGeneratorOptions,
+): Promise<TextGenerator>;
+
+interface TextGenerator {
+  generate(input: string | readonly ChatMessage[], options?: GenerateOptions): Promise<string>;
+  logits(input: string | readonly ChatMessage[]): Promise<Float32Array>;
+  readonly tokenizer: TextTokenizer;
+  readonly lastStats: GenerationStats | undefined;
+  readonly maxContext: number;
+  resetCache(): void;
+  dispose(): void;
+}
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+}
+```
+
+- `generate(input, options)` returns the reply. Calls run one after another,
+  in the order they were made.
+- `logits(input)` returns the scores of every possible next token, for
+  inspection and testing.
+- `tokenizer` turns text into token ids and back, and applies the chat
+  template: `encode`, `decode`, `applyChatTemplate`.
+- `lastStats` describes the last finished `generate()`: prompt and reply
+  length, tokens per second, and why it ended.
+- `maxContext` is the longest prompt and reply together, in tokens.
+- `resetCache()` forgets the conversation kept on the GPU.
+- `dispose()` frees the GPU memory, once the running call ends.
+
+## Generate options
+
+Every field is optional.
+
+```ts
+interface GenerateOptions {
+  maxNewTokens?: number;
+  temperature?: number;
+  topK?: number;
+  topP?: number;
+  seed?: number;
+  stop?: readonly string[];
+  signal?: AbortSignal;
+  onToken?: (text: string, tokenId: number) => void | boolean;
+  allowedTokenIds?: Iterable<number> | ((ctx: LogitsContext) => Iterable<number> | undefined);
+  logitsProcessor?: (logits: Float32Array, ctx: LogitsContext) => void;
+  raw?: boolean;
+  chatTemplate?: { enableThinking?: boolean; tools?: readonly unknown[] };
+  reuseCache?: boolean;
+  decodeBurst?: number;
+}
+```
+
+- **maxNewTokens** - the longest reply, in tokens. Default 256.
+- **temperature** - 0 (default) always picks the most likely token. Higher
+  values give more varied text.
+- **topK**, **topP** - with a temperature, sample only from the `topK` most
+  likely tokens (default 64) that together reach probability `topP`
+  (default 0.95).
+- **seed** - makes sampling repeatable.
+- **stop**, **signal**, **onToken** - see [Stopping early](#stopping-early).
+- **allowedTokenIds**, **logitsProcessor** - see
+  [Constrained output](#constrained-output).
+- **raw** - a string input is used as is, without the chat template.
+- **chatTemplate** - see [Thinking and tools](#thinking-and-tools-qwen-3).
+- **reuseCache** - reuse the conversation kept on the GPU. Default true.
+- **decodeBurst** - without a temperature or constraints, the model runs
+  this many steps (1 to 32) before the browser reads the tokens back. More
+  is faster in browsers where a read-back is slow. Default: 1 in Chrome,
+  16 where a read-back takes long, like Firefox.
+
+## Options
+
+The first argument is the model config. `models.textGeneration` holds one
+for each supported model. Pass one as is, or point at your own files:
+
+```ts
+interface TextGeneratorModel {
+  readonly modelPath: ModelPath;
+  readonly tokenizerPath: string;
+  readonly config: DecoderConfig | string;
+  readonly cacheId?: string;
+}
+```
+
+- **modelPath** - the weights, a `model.safetensors` file. The original
+  bf16, f16 or f32 file from the Hub works as is.
+- **tokenizerPath** - the `tokenizer.json` file next to it.
+- **config** - the `config.json` file next to it, or the parsed config.
+- **cacheId** - names the files in the cache. Change it when they change.
+
+The second argument takes the [loading options](/zoo/speech-to-text/#loading-options)
+every model has (`cache`, `onProgress`, `signal`, ...), and two of its own:
+
+- **maxContext** - the longest prompt and reply together, in tokens.
+  Default 4096. GPU memory grows with it, see below.
+- **prefillChunk** - prompt tokens read per GPU step. Default 128.
+
+## Supported models
+
+| Model                                                            | Config                                 | Parameters | Download | GPU memory |
+| ---------------------------------------------------------------- | -------------------------------------- | ---------- | -------- | ---------- |
+| [Gemma 3 1B-it](https://huggingface.co/google/gemma-3-1b-it)     | `models.textGeneration.GEMMA3_1B_IT`   | 1B         | 2.0 GB   | 2.0 GB     |
+| [Gemma 3 270M-it](https://huggingface.co/google/gemma-3-270m-it) | `models.textGeneration.GEMMA3_270M_IT` | 270M       | 536 MB   | 0.6 GB     |
+| [Qwen3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B)             | `models.textGeneration.QWEN3_0_6B`     | 0.6B       | 1.5 GB   | 2.0 GB     |
+
+The weights are bf16, and the model computes in f32, so no `shader-f16` is
+needed. GPU memory is measured at the default `maxContext` of 4096. Most of
+Qwen 3's is the memory of the conversation: a `maxContext` of 1024 brings it
+down to about 1.3 GB.
+
+The Gemma models are under the
+[Gemma terms of use](https://ai.google.dev/gemma/terms), Qwen 3 under
+Apache 2.0.
