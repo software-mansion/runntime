@@ -56,8 +56,6 @@ export function computeRopeTables(p: RopeParams): RopeTables {
 
 import { rope, type Value } from '../../core/index.ts';
 
-export const QK_SCALE = 0.3535533905932738; // 64^(-1/4), applied to q and k
-
 const HEAD_DIM = 64;
 const HALF = HEAD_DIM / 2;
 
@@ -82,8 +80,8 @@ export function ropeConstants(tokens: number): RopeConstants {
   const sinE = new Float32Array(tokens * HEAD_DIM);
   for (let t = 0; t < tokens; t++) {
     for (let p = 0; p < HALF; p++) {
-      const c = cos[t * HALF + p]! * QK_SCALE;
-      const s = sin[t * HALF + p]! * QK_SCALE;
+      const c = cos[t * HALF + p]!;
+      const s = sin[t * HALF + p]!;
       cosE[t * HEAD_DIM + 2 * p] = c;
       cosE[t * HEAD_DIM + 2 * p + 1] = c;
       sinE[t * HEAD_DIM + 2 * p] = s;
