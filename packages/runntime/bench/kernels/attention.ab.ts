@@ -85,7 +85,15 @@ function packed(name: string, t: number, heads: number, headDim: number, dtype: 
   };
 }
 
-function rope(name: string, t: number, width: number, headDim: number, dtype: Float): AbCase {
+/** A base without the layout option ignores it and pairs interleaved. */
+function rope(
+  name: string,
+  t: number,
+  width: number,
+  headDim: number,
+  dtype: Float,
+  layout: 'half' | 'interleaved' = 'interleaved',
+): AbCase {
   return {
     name,
     needs: dtype === 'f16' ? ['shader-f16'] : [],
@@ -93,7 +101,7 @@ function rope(name: string, t: number, width: number, headDim: number, dtype: Fl
       const x = randMat(version, t, width, dtype);
       const cos = randMat(version, t, headDim);
       const sin = randMat(version, t, headDim);
-      return () => version.lib.rope(x, cos, sin, { headDim });
+      return () => version.lib.rope(x, cos, sin, { headDim, layout });
     },
   };
 }
@@ -311,4 +319,5 @@ abSuite('attention', [
 
   rope('rope, privacy-filter q [512,896] hd 64', 512, 896, 64, 'f32'),
   rope('rope f16, Moonshine-tiny [200,288] hd 36', 200, 288, 36, 'f16'),
+  rope('rope half f16, EmbeddingGemma 2 q [512,1024] hd 256', 512, 1024, 256, 'f16', 'half'),
 ]);

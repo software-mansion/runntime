@@ -2,7 +2,9 @@
  *  attention with a distance bias, and the fused rotary embedding. */
 
 import type { KeyBias } from '../../kernels/attention/attn.ts';
+import { RunntimeError } from '../../error.ts';
 import { ATTN_LOCAL_MAX_WINDOW } from '../../kernels/attention/attnLocal.ts';
+import { ROPE_LAYOUTS, type RopeLayout } from '../../kernels/attention/rope.ts';
 import { pending, Value } from '../value.ts';
 import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
 
@@ -235,18 +237,37 @@ export function sdpaPacked(
 }
 
 /** Rotary position embedding over every head section of x [T, W] in one
- *  kernel. Rotation is interleaved-pair, and cos/sin are pair-duplicated
- *  tables. The score scale is not in them: sdpa applies it.
+ *  kernel. `layout` names the columns of a head that rotate together, as the
+ *  checkpoint's q and k have them, and has no default: the wrong one gives
+ *  wrong output without an error.
+ *  - 'half': columns (p, p + headDim/2), HF's `rotate_half`.
+ *  - 'interleaved': columns (2p, 2p + 1).
+ *
+ *  cos and sin are f32 [T, headDim], one entry per column of a head, both
+ *  columns of a pair holding the pair's value: `cat(freqs, freqs)` for
+ *  'half', each frequency twice in a row for 'interleaved'. A pair with cos 1
+ *  and sin 0 passes through, which is how a partial rotary is written. The
+ *  score scale is not in the tables: sdpa applies it.
  *
  *  srcStart and width optionally read a slice of a wider slab — the q or k
- *  section of a fused qkv, say — and rope it in the same dispatch. */
+ *  section of a fused qkv, say — and rope it in the same dispatch.
+ *
+ *  Throws an INVALID_ARGUMENT RunntimeError when layout is missing or not
+ *  one of the two. */
 export function rope(
   x: Value,
   cos: Value,
   sin: Value,
-  opts: { headDim: number; srcStart?: number; width?: number },
+  opts: { headDim: number; layout: RopeLayout; srcStart?: number; width?: number },
 ): Value {
   const { headDim } = opts;
+  const layout = ROPE_LAYOUTS.indexOf(opts.layout);
+  if (layout < 0) {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `rope: layout must be 'half' or 'interleaved', got ${String(opts.layout)}`,
+    );
+  }
   const [t, xw, dtype] = want2d('rope', x, FLOAT_DTYPES);
   const srcStart = opts.srcStart ?? 0;
   const w = opts.width ?? xw;
@@ -272,6 +293,7 @@ export function rope(
     headDim,
     srcStart,
     w,
+    layout,
   ]);
 }
 

@@ -148,7 +148,7 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
     const qkv = self_attn.qkv.forward(this.input_layernorm.forward(x));
     const n = rmsNorm(qkv, self_attn.qkv_norm.value, eps, { group: d });
     const roped = (start: number, width: number) =>
-      rope(n, cos, sin, { headDim: d, srcStart: start, width });
+      rope(n, cos, sin, { headDim: d, layout: 'interleaved', srcStart: start, width });
     const vStart = (heads + kvHeads) * d;
     const rows = x.shape.dims![0]!;
     const perHead =

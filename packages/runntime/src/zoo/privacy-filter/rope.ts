@@ -92,5 +92,5 @@ export function ropeConstants(tokens: number): RopeConstants {
 }
 
 export function applyRope(x: Value, cosE: Value, sinE: Value): Value {
-  return rope(x, cosE, sinE, { headDim: HEAD_DIM });
+  return rope(x, cosE, sinE, { headDim: HEAD_DIM, layout: 'interleaved' });
 }
