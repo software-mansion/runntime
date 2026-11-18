@@ -10,6 +10,7 @@ import {
 import {
   concatRows,
   dequantize,
+  floatTensor,
   permuteRows,
   readFloats,
   reshapeWeight,
@@ -466,6 +467,11 @@ describe.each([8, 4] as const)('int%i quantized sources', (bits) => {
   it('transposeWeight throws CHECKPOINT_MISMATCH', async () => {
     const t = await quantSource(bits, 2, 'w.weight', w);
     expect(() => transposeWeight(t)).toThrow(mismatch(/w\.weight is quantized/));
+  });
+
+  it('floatTensor throws CHECKPOINT_MISMATCH naming the reader', async () => {
+    const t = await quantSource(bits, 2, 'w.weight', w);
+    expect(() => floatTensor('test', t)).toThrow(mismatch(/^test: w\.weight is quantized/));
   });
 
   it('readFloats and the float accessors of an output reject it', async () => {
