@@ -12,17 +12,29 @@ import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
 
 /** Rotary position embedding over every head section of a [T, W] slab in one
- *  dispatch, one thread per pair:
+ *  dispatch, one thread per pair of columns (a, b):
  *
- *      out[2p]   = x[2p]·cos[t,d] − x[2p+1]·sin[t,d]
- *      out[2p+1] = x[2p+1]·cos[t,d] + x[2p]·sin[t,d]
+ *      out[a] = x[a]·cos[t,a] − x[b]·sin[t,a]
+ *      out[b] = x[b]·cos[t,a] + x[a]·sin[t,a]
  *
- *  cos and sin are pair-duplicated [T, headDim] tables. A scale that is part
- *  of the rope (YaRN's concentration) is in the tables; the score scale is
- *  sdpa's.
+ *  The layout picks the pairs of a head: 'interleaved' is (2p, 2p + 1),
+ *  'half' is (p, p + headDim/2), HF's rotate_half. A head that holds several
+ *  ropes side by side (a 2D rope's x and y halves) pairs within each rope's
+ *  own columns: (p, p + ropeDim/2), ropeDim = headDim / ropesPerHead.
+ *
+ *  cos and sin are [T, headDim] tables with one entry per column of a head,
+ *  both columns of a pair holding the pair's value; the kernel reads the
+ *  first column's. A scale that is part of the rope (YaRN's concentration) is
+ *  in the tables; the score scale is sdpa's.
  *
  *  srcStart and srcCols optionally read a column window of a wider slab, so
  *  roping a fused qkv slice is one dispatch rather than a slice then a rope. */
+
+/** The pair layouts, in the order a rope node's layout attr indexes. */
+export const ROPE_LAYOUTS = ['interleaved', 'half'] as const;
+
+/** Which columns of a head make a rotation pair. */
+export type RopeLayout = (typeof ROPE_LAYOUTS)[number];
 
 const Dims = d.struct({ rows: d.u32 }); // T — the only runtime-dynamic dim
 
@@ -31,8 +43,19 @@ const Config = d.struct({
   headDim: d.u32,
   srcStart: d.u32, // first input column of the window
   srcCols: d.u32, // input row stride (== cols when not slicing)
+  ropeDim: d.u32, // columns of a head that one rope pairs among themselves
+  pairStep: d.u32, // columns between the first columns of two pairs of a rope
+  pairGap: d.u32, // columns from a pair's first column to its second
 });
-const config = tgpu.accessor(Config, { cols: 0, headDim: 2, srcStart: 0, srcCols: 0 });
+const config = tgpu.accessor(Config, {
+  cols: 0,
+  headDim: 2,
+  srcStart: 0,
+  srcCols: 0,
+  ropeDim: 2,
+  pairStep: 2,
+  pairGap: 1,
+});
 
 function makeRopeVariant(elem: Elem) {
   const layout = tgpu.bindGroupLayout({
@@ -56,16 +79,21 @@ function makeRopeVariant(elem: Elem) {
       return;
     }
     const row = d.u32(idx / pairs);
-    const col0 = (idx % pairs) * 2;
-    const dcol = col0 % C.headDim; // table column (pair-duplicated: d == d+1)
+    const pair = idx % pairs;
+    const headPairs = d.u32(C.headDim / 2);
+    const ropePairs = d.u32(C.ropeDim / 2);
+    const headPair = pair % headPairs;
+    // The pair's first column within its head, which is also its table column.
+    const dcol = d.u32(headPair / ropePairs) * C.ropeDim + (headPair % ropePairs) * C.pairStep;
+    const col0 = d.u32(pair / headPairs) * C.headDim + dcol;
     const c = layout.$.cos[row * C.headDim + dcol]!;
     const s = layout.$.sin[row * C.headDim + dcol]!;
     const srcBase = row * C.srcCols + C.srcStart + col0;
     const x0 = d.f32(layout.$.x[srcBase]!);
-    const x1 = d.f32(layout.$.x[srcBase + 1]!);
+    const x1 = d.f32(layout.$.x[srcBase + C.pairGap]!);
     const oBase = row * C.cols + col0;
     layout.$.out[oBase] = storeScalar(x0 * c - x1 * s);
-    layout.$.out[oBase + 1] = storeScalar(x1 * c + x0 * s);
+    layout.$.out[oBase + C.pairGap] = storeScalar(x1 * c + x0 * s);
   });
   return { layout, kernel };
 }
@@ -82,15 +110,28 @@ export function ropeVariant(elem: Elem): ReturnType<typeof makeRopeVariant> {
 
 export function createRopePipeline(
   root: TgpuRoot,
-  cfg: { cols: number; headDim: number; srcStart?: number; srcCols?: number },
+  cfg: {
+    cols: number;
+    headDim: number;
+    layout: RopeLayout;
+    ropesPerHead?: number;
+    srcStart?: number;
+    srcCols?: number;
+  },
   elem: Elem = F32_ELEM,
 ) {
+  const half = cfg.layout === 'half';
+  // Interleaved pairs are neighbours however a head is split into ropes.
+  const ropeDim = half ? cfg.headDim / (cfg.ropesPerHead ?? 1) : cfg.headDim;
   return root
     .with(config, {
       cols: cfg.cols,
       headDim: cfg.headDim,
       srcStart: cfg.srcStart ?? 0,
       srcCols: cfg.srcCols ?? cfg.cols,
+      ropeDim,
+      pairStep: half ? 1 : 2,
+      pairGap: half ? ropeDim / 2 : 1,
     })
     .createComputePipeline({ compute: ropeVariant(elem).kernel });
 }

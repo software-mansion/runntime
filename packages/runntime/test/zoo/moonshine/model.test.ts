@@ -4,8 +4,9 @@ import { MoonshineModel } from '../../../src/zoo/moonshine/model.ts';
 import { chunksFetched, onceInFileOrder } from '../chunkedLoad.ts';
 import { moonshineFile } from './hostedFile.ts';
 import { stemFrames } from '../../../src/zoo/moonshine/convStem.ts';
-import { input } from '../../core/graph/values.ts';
+import { input, materializedInput } from '../../core/graph/values.ts';
 import { attentionScales, standInWeights } from '../attentionScales.ts';
+import { ropeLayouts } from '../ropeLayouts.ts';
 
 const cfg = {
   ...MOONSHINE_TINY,
@@ -54,5 +55,38 @@ describe('MoonshineModel attention', () => {
     const out = decoder.forward(input([3, cfg.dModel]), table(3), table(3), cross);
     const attentions = cfg.encLayers + 2 * cfg.decLayers;
     expect(attentionScales(out)).toEqual(Array(attentions).fill(1 / Math.sqrt(cfg.headDim)));
+  });
+
+  // HF's Moonshine rotate_half takes x[..., 0::2] and x[..., 1::2]: pairs
+  // (2p, 2p + 1). q and k of every encoder and decoder self-attention.
+  it('ropes q and k in the interleaved layout', () => {
+    const { encoder, decoder } = standInWeights(model()).model;
+    const frames = stemFrames(1000).conv3;
+    const table = (rows: number) => input([rows, cfg.headDim]);
+    const encOut = encoder.forward(input([1000, 1]), table(frames), table(frames));
+    const cross = decoder.precomputeCrossKV(encOut);
+    const out = decoder.forward(input([3, cfg.dModel]), table(3), table(3), cross);
+    const ropes = 2 * (cfg.encLayers + cfg.decLayers);
+    expect(ropeLayouts(out)).toEqual(Array(ropes).fill({ layout: 'interleaved', ropesPerHead: 1 }));
+  });
+
+  // The transcriber decodes with forwardStep: one token against the KV
+  // caches, q and the new k row roped in every decoder layer.
+  it('ropes q and k of a decode step in the interleaved layout', () => {
+    const { encoder, decoder } = standInWeights(model()).model;
+    const frames = stemFrames(1000).conv3;
+    const table = (rows: number) => input([rows, cfg.headDim]);
+    const cross = decoder.precomputeCrossKV(
+      encoder.forward(input([1000, 1]), table(frames), table(frames)),
+    );
+    const qw = cfg.heads * cfg.headDim;
+    const caches = Array.from({ length: cfg.decLayers }, () => ({
+      k: materializedInput([4, qw]),
+      v: materializedInput([4, qw]),
+    }));
+    const out = decoder.forwardStep(input([1, cfg.dModel]), table(1), table(1), cross, caches, 2);
+    // The cross K/V hang off the encoder, so its ropes are under `out` too.
+    const ropes = 2 * (cfg.encLayers + cfg.decLayers);
+    expect(ropeLayouts(out)).toEqual(Array(ropes).fill({ layout: 'interleaved', ropesPerHead: 1 }));
   });
 });

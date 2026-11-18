@@ -39,42 +39,17 @@ function take(sd: LazyStateDict, what: string, name: string): LazyTensor {
   return t;
 }
 
-/** Row order for permuteRows that takes each `block` rows from the
- *  checkpoint's half-split rope layout to the kernel's interleaved pairs:
- *  rows (p, p + block/2) become (2p, 2p + 1). */
-function ropeOrder(rows: number, block: number): number[] {
-  return Array.from({ length: rows }, (_, r) => {
-    const i = r % block;
-    return r - i + (i % 2 ? (i - 1) / 2 + block / 2 : i / 2);
-  });
-}
-
 /** A weightless norm's ones, as f16 halfwords: exact, and stacked with an F16
  *  checkpoint's norms they keep the result f16. */
 const ones = (n: number) =>
   derive([n], [], () => f32ArrayToF16Bits(new Float32Array(n).fill(1)).data);
 
-/** A q or k projection with its rows moved from the checkpoint's half-split
- *  rope layout to the kernel's interleaved pairs, per `block` rows. */
-const interleaved = (w: LazyTensor, block: number): LazyTensor =>
-  permuteRows(w, ropeOrder(w.shape[0]!, block));
-
-/** q_norm and k_norm tiled over their heads and interleaved like the q and
- *  k projections, ones for v. */
-function fusedQkvNorm(
-  nq: LazyTensor,
-  nk: LazyTensor,
-  heads: number,
-  kvHeads: number,
-  block: number,
-): LazyTensor {
+/** q_norm and k_norm tiled over their heads, ones for v. */
+function fusedQkvNorm(nq: LazyTensor, nk: LazyTensor, heads: number, kvHeads: number): LazyTensor {
   const d = nq.shape[0]!;
-  const order = ropeOrder(d, block);
-  const qn = permuteRows(nq, order);
-  const kn = permuteRows(nk, order);
   const tiled = concatRows([
-    ...Array<LazyTensor>(heads).fill(qn),
-    ...Array<LazyTensor>(kvHeads).fill(kn),
+    ...Array<LazyTensor>(heads).fill(nq),
+    ...Array<LazyTensor>(kvHeads).fill(nk),
     ones(kvHeads * d),
   ]);
   // concatRows reads a part listed several times once, so each norm is
@@ -94,14 +69,11 @@ export function transformEmbeddingGemma2StateDict(
 
   for (const [i, type] of cfg.layerTypes.entries()) {
     const L = `layers.${i}`;
-    const { headDim: d, kvHeads } = cfg.attention[type];
+    const { kvHeads } = cfg.attention[type];
     const attn = (n: string) => take(sd, what, q(`${L}.self_attn.${n}.weight`));
-    for (const n of ['q_proj', 'k_proj']) {
-      put(`${L}.self_attn.${n}.weight`, interleaved(attn(n), d));
-    }
     put(
       `${L}.self_attn.qkv_norm`,
-      fusedQkvNorm(attn('q_norm'), attn('k_norm'), cfg.heads, kvHeads, d),
+      fusedQkvNorm(attn('q_norm'), attn('k_norm'), cfg.heads, kvHeads),
     );
     const s = take(sd, what, q(`${L}.layer_scalar`));
     // Derived, so the CPU parameter binds f32 rather than raw bf16 bits.
@@ -114,9 +86,7 @@ export function transformEmbeddingGemma2StateDict(
   put(ple, scaleWeight(take(sd, what, q(ple)), cfg.hidden ** -0.5));
 }
 
-/** The vision tower's mapping. Its 2D rope turns each half head on its
- *  own, so q and k interleave per half head. The position table splits
- *  into x and y. */
+/** The vision tower's mapping. The position table splits into x and y. */
 export function transformEmbeddingGemma2VisionStateDict(
   sd: LazyStateDict,
   prefix: string,
@@ -125,7 +95,7 @@ export function transformEmbeddingGemma2VisionStateDict(
   const what = 'embeddinggemma2 vision state dict';
   const q = (name: string) => qualify(prefix, `vision_tower.${name}`);
   const put = (name: string, t: LazyTensor) => sd.tensors.set(q(name), t);
-  const { hidden, heads, headDim: d, positions } = cfg;
+  const { hidden, heads, positions } = cfg;
 
   // [2, positions, hidden]: the x table, then the y table.
   const table = take(sd, what, q('patch_embedder.position_embedding_table'));
@@ -136,11 +106,7 @@ export function transformEmbeddingGemma2VisionStateDict(
   for (let i = 0; i < cfg.layers; i++) {
     const A = `encoder.layers.${i}.self_attn`;
     const attn = (n: string) => take(sd, what, q(`${A}.${n}.weight`));
-    for (const n of ['q_proj', 'k_proj']) {
-      const name = `${A}.${n}.linear.weight`;
-      put(name, interleaved(take(sd, what, q(name)), d / 2));
-    }
-    put(`${A}.qkv_norm`, fusedQkvNorm(attn('q_norm'), attn('k_norm'), heads, heads, d / 2));
+    put(`${A}.qkv_norm`, fusedQkvNorm(attn('q_norm'), attn('k_norm'), heads, heads));
   }
 }
 

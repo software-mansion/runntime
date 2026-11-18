@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { localAttention, rope, sdpa, sdpaPacked } from '../../../../src/core/graph/ops.ts';
+import { ROPE_LAYOUTS } from '../../../../src/core/kernels/attention/rope.ts';
 import { input, meta } from '../values.ts';
 
 // 4 query heads sharing 2 kv heads (GQA), 8 values per head
@@ -266,16 +267,74 @@ describe('rope', () => {
 
   it('rotates every head of x', () => {
     const { cos, sin } = tables(5);
-    const c = rope(input([5, 32], 'f16'), cos, sin, { headDim: HD });
+    const c = rope(input([5, 32], 'f16'), cos, sin, { headDim: HD, layout: 'interleaved' });
     expect(c.shape).toEqual(meta([5, 32], 'f16'));
-    expect(c.pending?.attrs).toEqual([HD, 0, 32]); // headDim, srcStart, width
+    // headDim, srcStart, width, the layout's index in ROPE_LAYOUTS, ropesPerHead
+    expect(c.pending?.attrs).toEqual([HD, 0, 32, 0, 1]);
+  });
+
+  it.each(['interleaved', 'half'] as const)('carries the %s layout', (layout) => {
+    const { cos, sin } = tables(5);
+    const c = rope(input([5, 32]), cos, sin, { headDim: HD, layout });
+    expect(ROPE_LAYOUTS[c.pending!.attrs![3]!]).toBe(layout);
+  });
+
+  it('carries the ropes a head holds', () => {
+    const { cos, sin } = tables(5);
+    const c = rope(input([5, 32]), cos, sin, { headDim: HD, layout: 'half', ropesPerHead: 2 });
+    expect(c.pending?.attrs).toEqual([HD, 0, 32, 1, 2]);
+  });
+
+  // Interleaved pairs are neighbours however a head is split, so the node,
+  // and the pipeline key built from it, are those of one rope a head.
+  it('carries one rope a head for the interleaved layout, whatever ropesPerHead', () => {
+    const { cos, sin } = tables(5);
+    const opts = { headDim: HD, layout: 'interleaved' } as const;
+    const split = rope(input([5, 32]), cos, sin, { ...opts, ropesPerHead: 2 });
+    expect(split.pending?.attrs).toEqual([HD, 0, 32, 0, 1]);
+    expect(split.pending?.attrs).toEqual(rope(input([5, 32]), cos, sin, opts).pending?.attrs);
+  });
+
+  // A head of 8 splits into 1, 2 or 4 ropes of an even number of columns.
+  it.each([0, 1.5, 3, 8, -2, NaN])('rejects ropesPerHead %s with an INVALID_ARGUMENT', (n) => {
+    const { cos, sin } = tables(5);
+    expect(() =>
+      rope(input([5, 32]), cos, sin, { headDim: HD, layout: 'half', ropesPerHead: n }),
+    ).toThrow(
+      expect.objectContaining({
+        name: 'RunntimeError',
+        code: 'INVALID_ARGUMENT',
+        message: expect.stringMatching(/ropesPerHead .* must split headDim 8/),
+      }),
+    );
+  });
+
+  it.each([
+    { name: 'no layout', opts: { headDim: HD } },
+    { name: 'an unknown layout', opts: { headDim: HD, layout: 'rotate_half' } },
+    { name: 'a layout in another case', opts: { headDim: HD, layout: 'Half' } },
+  ])('rejects $name with an INVALID_ARGUMENT', ({ opts }) => {
+    const { cos, sin } = tables(5);
+    // @ts-expect-error the type requires layout to be 'half' or 'interleaved'
+    expect(() => rope(input([5, 32]), cos, sin, opts)).toThrow(
+      expect.objectContaining({
+        name: 'RunntimeError',
+        code: 'INVALID_ARGUMENT',
+        message: expect.stringMatching(/layout must be 'half' or 'interleaved'/),
+      }),
+    );
   });
 
   it('rotates one section of a wider slab, like the k part of a fused qkv', () => {
     const { cos, sin } = tables(5);
-    const c = rope(input([5, 64]), cos, sin, { headDim: HD, srcStart: 32, width: 16 });
+    const c = rope(input([5, 64]), cos, sin, {
+      headDim: HD,
+      layout: 'half',
+      srcStart: 32,
+      width: 16,
+    });
     expect(c.shape).toEqual(meta([5, 16]));
-    expect(c.pending?.attrs).toEqual([HD, 32, 16]);
+    expect(c.pending?.attrs).toEqual([HD, 32, 16, 1, 1]);
   });
 
   it.each([
@@ -301,7 +360,7 @@ describe('rope', () => {
     },
   ])('rejects $name', ({ opts, error }) => {
     const { cos, sin } = tables(5);
-    expect(() => rope(input([5, 32]), cos, sin, opts)).toThrow(error);
+    expect(() => rope(input([5, 32]), cos, sin, { layout: 'half', ...opts })).toThrow(error);
   });
 
   it.each([
@@ -312,7 +371,9 @@ describe('rope', () => {
     },
     { name: 'f16 tables', cos: input([5, HD], 'f16'), error: /cos must be f32/ },
   ])('rejects $name', ({ cos, error }) => {
-    expect(() => rope(input([5, 32]), cos, input([5, HD]), { headDim: HD })).toThrow(error);
+    expect(() =>
+      rope(input([5, 32]), cos, input([5, HD]), { headDim: HD, layout: 'half' }),
+    ).toThrow(error);
   });
 });
 
