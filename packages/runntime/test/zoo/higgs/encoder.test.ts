@@ -12,6 +12,8 @@ import { resample } from '../../../src/zoo/higgs/resample.ts';
 import { expectClose } from '../../gpu.ts';
 import { dequantizeWeight, quantizeWeight, quantSource } from '../../core/weights/checkpoint.ts';
 import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
+import { input } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 
 const POS = 'semantic_model.encoder.pos_conv_embed';
 const ATTN = 'semantic_model.encoder.layers.0.attention';
@@ -246,5 +248,14 @@ describe('HiggsEncoder', () => {
 
   it('refuses an unbounded buffer size', () => {
     expect(() => new HiggsEncoder(CFG).maxFrames(Infinity)).toThrow(/must be finite/);
+  });
+});
+
+describe('HiggsEncoder attention', () => {
+  it("scales HuBERT's scores by 1/√headDim, as HubertAttention does", () => {
+    const { hidden, heads, layers } = CFG.hubert;
+    const enc = standInWeights(new HiggsEncoder(CFG));
+    const out = enc.semantic_model.encoder.forward(input([7, hidden]));
+    expect(attentionScales(out)).toEqual(Array(layers).fill(1 / Math.sqrt(hidden / heads)));
   });
 });
