@@ -242,13 +242,20 @@ export const localAttentionSpec = defineSpec({
 
 export const ropeSpec = defineSpec({
   attrs: (p) => {
-    const [headDim, srcStart, , layout] = p.attrs as [number, number, number, number];
-    return { headDim, srcStart, layout: ROPE_LAYOUTS[layout]! };
+    const [headDim, srcStart, , layout, ropesPerHead] = p.attrs as [
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    return { headDim, srcStart, layout: ROPE_LAYOUTS[layout]!, ropesPerHead };
   },
   cfg: (node, attrs) => ({
     cols: node.shape.dims![1]!,
     headDim: attrs.headDim,
     layout: attrs.layout,
+    ropesPerHead: attrs.ropesPerHead,
     srcStart: attrs.srcStart,
     srcCols: node.pending!.inputs[0]!.shape.dims![1]!,
   }),

@@ -243,6 +243,11 @@ export function sdpaPacked(
  *  - 'half': columns (p, p + headDim/2), HF's `rotate_half`.
  *  - 'interleaved': columns (2p, 2p + 1).
  *
+ *  `ropesPerHead` (default 1) is for a head that holds several ropes side by
+ *  side, each over its own headDim / ropesPerHead columns, like the x and y
+ *  halves of a 2D rope: 'half' then pairs (p, p + headDim / ropesPerHead / 2)
+ *  within each rope's columns. It changes nothing for 'interleaved'.
+ *
  *  cos and sin are f32 [T, headDim], one entry per column of a head, both
  *  columns of a pair holding the pair's value: `cat(freqs, freqs)` for
  *  'half', each frequency twice in a row for 'interleaved'. A pair with cos 1
@@ -253,14 +258,21 @@ export function sdpaPacked(
  *  section of a fused qkv, say — and rope it in the same dispatch.
  *
  *  Throws an INVALID_ARGUMENT RunntimeError when layout is missing or not
- *  one of the two. */
+ *  one of the two, or when ropesPerHead does not split a head into ropes of
+ *  an even number of columns. */
 export function rope(
   x: Value,
   cos: Value,
   sin: Value,
-  opts: { headDim: number; layout: RopeLayout; srcStart?: number; width?: number },
+  opts: {
+    headDim: number;
+    layout: RopeLayout;
+    ropesPerHead?: number;
+    srcStart?: number;
+    width?: number;
+  },
 ): Value {
-  const { headDim } = opts;
+  const { headDim, ropesPerHead = 1 } = opts;
   const layout = ROPE_LAYOUTS.indexOf(opts.layout);
   if (layout < 0) {
     throw new RunntimeError(
@@ -273,6 +285,12 @@ export function rope(
   const w = opts.width ?? xw;
   if (!Number.isInteger(headDim) || headDim <= 0 || headDim % 2 !== 0) {
     throw new Error(`rope: headDim ${headDim} must be a positive even integer`);
+  }
+  if (!Number.isInteger(ropesPerHead) || ropesPerHead < 1 || headDim % (2 * ropesPerHead) !== 0) {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `rope: ropesPerHead ${ropesPerHead} must split headDim ${headDim} into ropes of an even number of columns`,
+    );
   }
   if (!Number.isInteger(srcStart) || srcStart < 0 || srcStart % 2 !== 0) {
     throw new Error(`rope: srcStart ${srcStart} must be a non-negative even integer`);
@@ -294,6 +312,7 @@ export function rope(
     srcStart,
     w,
     layout,
+    ropesPerHead,
   ]);
 }
 

@@ -269,14 +269,34 @@ describe('rope', () => {
     const { cos, sin } = tables(5);
     const c = rope(input([5, 32], 'f16'), cos, sin, { headDim: HD, layout: 'interleaved' });
     expect(c.shape).toEqual(meta([5, 32], 'f16'));
-    // headDim, srcStart, width, the layout's index in ROPE_LAYOUTS
-    expect(c.pending?.attrs).toEqual([HD, 0, 32, 0]);
+    // headDim, srcStart, width, the layout's index in ROPE_LAYOUTS, ropesPerHead
+    expect(c.pending?.attrs).toEqual([HD, 0, 32, 0, 1]);
   });
 
   it.each(['interleaved', 'half'] as const)('carries the %s layout', (layout) => {
     const { cos, sin } = tables(5);
     const c = rope(input([5, 32]), cos, sin, { headDim: HD, layout });
     expect(ROPE_LAYOUTS[c.pending!.attrs![3]!]).toBe(layout);
+  });
+
+  it('carries the ropes a head holds', () => {
+    const { cos, sin } = tables(5);
+    const c = rope(input([5, 32]), cos, sin, { headDim: HD, layout: 'half', ropesPerHead: 2 });
+    expect(c.pending?.attrs).toEqual([HD, 0, 32, 1, 2]);
+  });
+
+  // A head of 8 splits into 1, 2 or 4 ropes of an even number of columns.
+  it.each([0, 1.5, 3, 8, -2, NaN])('rejects ropesPerHead %s with an INVALID_ARGUMENT', (n) => {
+    const { cos, sin } = tables(5);
+    expect(() =>
+      rope(input([5, 32]), cos, sin, { headDim: HD, layout: 'half', ropesPerHead: n }),
+    ).toThrow(
+      expect.objectContaining({
+        name: 'RunntimeError',
+        code: 'INVALID_ARGUMENT',
+        message: expect.stringMatching(/ropesPerHead .* must split headDim 8/),
+      }),
+    );
   });
 
   it.each([
@@ -304,7 +324,7 @@ describe('rope', () => {
       width: 16,
     });
     expect(c.shape).toEqual(meta([5, 16]));
-    expect(c.pending?.attrs).toEqual([HD, 32, 16, 1]);
+    expect(c.pending?.attrs).toEqual([HD, 32, 16, 1, 1]);
   });
 
   it.each([
