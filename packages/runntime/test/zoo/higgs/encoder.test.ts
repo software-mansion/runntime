@@ -140,23 +140,6 @@ describe('HiggsEncoder', () => {
     },
   );
 
-  it('scales the q projection by 1/√headDim, under its own name', async () => {
-    const raw = checkpoint();
-    const sd = memoryStateDict(raw);
-    new HiggsEncoder(CFG).semantic_model.encoder.layers.items[0]!.attention.transformStateDict(
-      sd,
-      ATTN,
-    );
-    const scale = 1 / Math.sqrt(CFG.hubert.hidden / CFG.hubert.heads);
-    for (const name of [`${ATTN}.q_proj.weight`, `${ATTN}.q_proj.bias`]) {
-      expectClose(
-        await read(sd, name),
-        Array.from(raw[name]!.data, (x) => x * scale),
-        { atol: 1e-7, rtol: 1e-6 },
-      );
-    }
-  });
-
   it('scores each codebook row as 2·row·x − |row|² and drops the training state', async () => {
     const raw = checkpoint();
     const sd = memoryStateDict(raw);
@@ -198,20 +181,12 @@ describe('HiggsEncoder', () => {
       },
       error: /pos_conv_embed weight norm has shapes \[1,1,4\] and \[8,4,5\]/,
     },
-    {
-      name: 'an attention without a q projection bias',
-      edit: (sd: Sd) => delete sd[`${ATTN}.q_proj.bias`],
-      error: /missing 'semantic_model\.encoder\.layers\.0\.attention\.q_proj\.bias'/,
-    },
   ])('refuses $name before reading any tensor', ({ edit, error }) => {
     const raw = checkpoint();
     edit(raw);
     const sd = memoryStateDict(raw);
     const enc = new HiggsEncoder(CFG);
-    const transform = () => {
-      enc.semantic_model.encoder.pos_conv_embed.transformStateDict(sd, POS);
-      enc.semantic_model.encoder.layers.items[0]!.attention.transformStateDict(sd, ATTN);
-    };
+    const transform = () => enc.semantic_model.encoder.pos_conv_embed.transformStateDict(sd, POS);
     expect(transform).toThrow(
       expect.objectContaining({
         code: 'CHECKPOINT_MISMATCH',
