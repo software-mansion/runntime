@@ -4,6 +4,9 @@ import { MoonshineStreamingModel } from '../../../src/zoo/moonshine-streaming/mo
 import { chunksFetched, onceInFileOrder } from '../chunkedLoad.ts';
 import { stackedParts } from '../stackedParts.ts';
 import { moonshineFile } from '../moonshine/hostedFile.ts';
+import { frontendFrames } from '../../../src/zoo/moonshine-streaming/frontend.ts';
+import { input } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 
 const tiny = MOONSHINE_STREAMING_TINY;
 const small = { hidden: 16, ffn: 32, layers: 2, heads: 2, headDim: 8 };
@@ -64,5 +67,19 @@ describe('MoonshineStreamingModel', () => {
         ]),
       ]),
     );
+  });
+});
+
+describe('MoonshineStreamingModel attention', () => {
+  it('scales the encoder, decoder and cross-attention scores by 1/√headDim', () => {
+    const m = standInWeights(model());
+    const { encoder, decoder } = m.model;
+    const frames = frontendFrames(1600, m.cfg.frameLen).input;
+    const encOut = encoder.forward(input([frames, m.cfg.frameLen]));
+    const cross = decoder.precomputeCrossKV(decoder.adapt(encOut));
+    const table = input([3, small.headDim]);
+    const out = decoder.forward(input([3, small.hidden]), table, table, cross);
+    const attentions = 3 * small.layers;
+    expect(attentionScales(out)).toEqual(Array(attentions).fill(1 / Math.sqrt(small.headDim)));
   });
 });

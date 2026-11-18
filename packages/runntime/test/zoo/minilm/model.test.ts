@@ -3,6 +3,8 @@ import { MINILM_L6 } from '../../../src/zoo/minilm/config.ts';
 import { MinilmModel } from '../../../src/zoo/minilm/model.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
 import { stackedParts } from '../stackedParts.ts';
+import { input } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 
 const cfg = { ...MINILM_L6, hidden: 32, heads: 4, headDim: 8, ffn: 64, layers: 4, vocab: 40 };
 
@@ -53,5 +55,18 @@ describe('MinilmModel', () => {
         Array.from({ length: cfg.layers }, (_, i) => [`${self(i)}.qkv`, ['query', 'key', 'value']]),
       ),
     );
+  });
+});
+
+describe('MinilmModel attention', () => {
+  it("scales every layer's scores by 1/√headDim, as BertSelfAttention does", () => {
+    const model = standInWeights(new MinilmModel(cfg));
+    const t = 6;
+    const out = model.forward(input([t, 1]), {
+      positions: input([t, 1]),
+      segments: input([t, 2]),
+      maxSegment: t,
+    });
+    expect(attentionScales(out)).toEqual(Array(cfg.layers).fill(1 / Math.sqrt(cfg.headDim)));
   });
 });
