@@ -159,6 +159,7 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
         headDim: d,
         windowLeft: Infinity,
         windowRight: Infinity,
+        scale: 1, // q and k are RMS-normed per head
       });
     }
     x = postNorm(this.post_attention_layernorm, self_attn.o_proj.forward(a), x);

@@ -37,6 +37,7 @@ class EncoderAttn extends nn.Module {
       headDim,
       windowLeft: window[0] - 1,
       windowRight: Math.max(0, window[1] - 1),
+      scale: 1, // folded into the weights at load
     });
     this.o_proj = new nn.Linear(qw, hidden, { bias: false });
   }

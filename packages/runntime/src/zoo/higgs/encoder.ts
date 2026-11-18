@@ -262,6 +262,7 @@ class HubertAttention extends nn.Module {
       headDim: hidden / heads,
       windowLeft: Infinity,
       windowRight: Infinity,
+      scale: 1, // folded into the weights at load
     });
     this.out_proj = new nn.Linear(hidden, hidden);
   }

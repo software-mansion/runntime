@@ -1,6 +1,7 @@
 /** Every route gpu/dispatch/attention.ts can pick, plus local attention and
  *  rope. Windows are (left, right): causal is (Infinity, 0), full is
- *  (Infinity, Infinity). */
+ *  (Infinity, Infinity). sdpa runs at scale 1, which a base without the
+ *  scale option ignores and computes alike. */
 import { abSuite, type AbCase } from '../ab.ts';
 import { mat, randMat } from './inputs.ts';
 
@@ -43,11 +44,14 @@ function sdpa(name: string, o: Attn): AbCase {
           windowLeft,
           windowRight,
           qPosOffset,
+          scale: 1,
           sinks,
           keyBias: o.keyBias,
         });
-      // A base without keyBias ignores it, so the case skips there.
-      if (o.keyBias && call().pending?.attrs?.[10] !== 1) throw new Error('sdpa takes no keyBias');
+      // A base without keyBias ignores it, so the case skips there. The key
+      // bias is the last four attrs.
+      if (o.keyBias && call().pending?.attrs?.at(-4) !== 1)
+        throw new Error('sdpa takes no keyBias');
       return call;
     },
   };
@@ -73,6 +77,7 @@ function packed(name: string, t: number, heads: number, headDim: number, dtype: 
           headDim,
           windowLeft: Infinity,
           windowRight: Infinity,
+          scale: 1,
           segments,
           maxSegment: half,
         });

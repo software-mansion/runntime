@@ -5,7 +5,8 @@
  *  head. It loads a block of keys and values into workgroup memory once, and
  *  all its rows use it. Each row is
  *  split across 4 or 8 lanes, which add up q·k with subgroup shuffles.
- *  Windows, segments, sinks and the key bias work as in the rows kernel.
+ *  Windows, segments, sinks, the key bias and the scale work as in the rows
+ *  kernel.
  *
  *  Based on webgpu-kernels/com.microsoft.MultiHeadAttention (attn-flash-prefill-cluster). */
 
@@ -37,6 +38,7 @@ const Dims = d.struct({
   biasStart: d.u32,
   biasEnd: d.u32,
   bias: d.f32,
+  scale: d.f32,
 });
 
 const makeLayout = (elem: Elem) =>
@@ -163,7 +165,7 @@ function makeAttnFlashKernel(cfg: AttnGeoCfg, elem: Elem) {
     const l = d.arrayOf(d.f32, hp)();
     for (const j of tgpu.unroll(std.range(hp))) {
       for (const c of tgpu.unroll(std.range(slice))) {
-        qr[j * slice + c] = d.vec4f(L.$.q[qBase4 + j * hd4 + c]!);
+        qr[j * slice + c] = d.vec4f(L.$.q[qBase4 + j * hd4 + c]!) * D.scale;
       }
       m[j] = d.f32(NEG_SEED);
       if (hasSinks > 0) {
@@ -291,6 +293,7 @@ export function attnFlashHandle(
     qHeads: number;
     kvHeads: number;
     headDim: number;
+    scale: number;
     keyBias?: KeyBias;
   },
   buffers: {
@@ -309,6 +312,7 @@ export function attnFlashHandle(
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
     ...keyBiasFields(args.keyBias),
+    scale: args.scale,
   });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;

@@ -1056,6 +1056,9 @@ export interface MultiHeadAttentionOpts {
    *  qPos − windowLeft ≤ j ≤ qPos + windowRight. Infinity is unbounded. */
   windowLeft: number;
   windowRight: number;
+  /** Multiplies q·k before the softmax. Default 1/√headDim, as in PyTorch's
+   *  `scaled_dot_product_attention`. */
+  scale?: number;
   /** Registers a per-q-head sink-logit Parameter named `sinks`. */
   sinks?: boolean;
 }
@@ -1063,8 +1066,8 @@ export interface MultiHeadAttentionOpts {
 /** Banded, causal or cross multi-head attention over packed
  *  [T, heads·headDim] slabs.
  *
- *  Takes already-projected q/k/v — models own the projections — and applies
- *  sm_scale = 1, so fold any score scale upstream. */
+ *  Takes already-projected q/k/v — models own the projections — and scales
+ *  the scores by `scale`, 1/√headDim unless the options say otherwise. */
 export class MultiHeadAttention extends Module<
   [Value, Value, Value, { qPosOffset?: number; segments?: Value; maxSegment?: number }?],
   Value
@@ -1086,7 +1089,7 @@ export class MultiHeadAttention extends Module<
     v: Value,
     call: { qPosOffset?: number; segments?: Value; maxSegment?: number } = {},
   ): Value {
-    const { qHeads, kvHeads, headDim, windowLeft, windowRight } = this.opts;
+    const { qHeads, kvHeads, headDim, windowLeft, windowRight, scale } = this.opts;
     return sdpa(q, k, v, {
       qHeads,
       kvHeads,
@@ -1094,6 +1097,7 @@ export class MultiHeadAttention extends Module<
       windowLeft,
       windowRight,
       qPosOffset: call.qPosOffset,
+      scale,
       sinks: this.sinks?.value,
       segments: call.segments,
       maxSegment: call.maxSegment,
@@ -1105,7 +1109,7 @@ export class MultiHeadAttention extends Module<
     qkv: Value,
     call: { qPosOffset?: number; segments?: Value; maxSegment?: number } = {},
   ): Value {
-    const { qHeads, kvHeads, headDim, windowLeft, windowRight } = this.opts;
+    const { qHeads, kvHeads, headDim, windowLeft, windowRight, scale } = this.opts;
     return sdpaPacked(qkv, {
       qHeads,
       kvHeads,
@@ -1113,6 +1117,7 @@ export class MultiHeadAttention extends Module<
       windowLeft,
       windowRight,
       qPosOffset: call.qPosOffset,
+      scale,
       sinks: this.sinks?.value,
       segments: call.segments,
       maxSegment: call.maxSegment,

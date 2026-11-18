@@ -16,7 +16,10 @@ import { type Elem, F32_ELEM } from '../elem.ts';
 /** Scaled-dot-product attention, one thread per (q row, q head).
  *
  *  Serial in the key count, so the executor prefers the row kernels below and
- *  falls back here past the dispatch limit. q and k arrive pre-scaled. */
+ *  falls back here past the dispatch limit. Scores are scale · q·k: the row
+ *  kernels scale q as they read it into registers, and this kernel, which
+ *  reads q again for every key, scales each score. The scale is a uniform,
+ *  so a new value compiles nothing. */
 
 const LN2 = Math.LN2;
 const MAX_HEAD_DIM = 128;
@@ -49,6 +52,7 @@ const Dims = d.struct({
   biasStart: d.u32,
   biasEnd: d.u32,
   bias: d.f32,
+  scale: d.f32,
 });
 
 const Config = d.struct({
@@ -165,6 +169,7 @@ function makeAttnKernel(elem: Elem = F32_ELEM) {
           score += A.$.q[qBase + kk]! * A.$.k[kBase + kk]!;
         }
       }
+      score *= D.scale;
       if (C.hasKeyBias > 0) {
         score += keyBiasAt(j, D.biasStart, D.biasEnd, D.bias);
       }
@@ -231,7 +236,14 @@ export function createAttnPipeline(
 export function attnHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnPipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; keyBias?: KeyBias },
+  args: {
+    qLen: number;
+    kvLen: number;
+    qPosOffset: number;
+    qHeads: number;
+    scale: number;
+    keyBias?: KeyBias;
+  },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -248,6 +260,7 @@ export function attnHandle(
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
     ...keyBiasFields(args.keyBias),
+    scale: args.scale,
   });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;
@@ -286,6 +299,7 @@ const SplitDims = d.struct({
   biasStart: d.u32,
   biasEnd: d.u32,
   bias: d.f32,
+  scale: d.f32,
 });
 
 const makeAttnSplitLayout = (elem: Elem) =>
@@ -354,9 +368,9 @@ function makeAttnRowsKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
     // Softmax state stays f32 whatever the storage dtype is.
     for (const z of std.range(hd)) {
       if (f16) {
-        qReg.$[z] = d.f32(L.$.q[qBase + z]!);
+        qReg.$[z] = d.f32(L.$.q[qBase + z]!) * D.scale;
       } else {
-        qReg.$[z] = L.$.q[qBase + z]!;
+        qReg.$[z] = L.$.q[qBase + z]! * D.scale;
       }
       acc.$[z] = d.f32(0);
     }
@@ -448,9 +462,9 @@ function makeAttnRowsSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM) {
 
     for (const z of std.range(hd)) {
       if (f16) {
-        qReg.$[z] = d.f32(S.$.q[qBase + z]!);
+        qReg.$[z] = d.f32(S.$.q[qBase + z]!) * D.scale;
       } else {
-        qReg.$[z] = S.$.q[qBase + z]!;
+        qReg.$[z] = S.$.q[qBase + z]! * D.scale;
       }
       acc.$[z] = d.f32(0);
     }
@@ -557,9 +571,9 @@ function makeAttnRowsSubgroupSplitKernel(cfg: AttnGeoCfg, elem: Elem = F32_ELEM)
       const kk = lane + c * LANES;
       const idx = std.min(kk, d.u32(hd - 1));
       if (f16) {
-        qv.$[c] = std.select(d.f32(0), d.f32(S.$.q[qBase + idx]!), kk < hd);
+        qv.$[c] = std.select(d.f32(0), d.f32(S.$.q[qBase + idx]!) * D.scale, kk < hd);
       } else {
-        qv.$[c] = std.select(d.f32(0), S.$.q[qBase + idx]!, kk < hd);
+        qv.$[c] = std.select(d.f32(0), S.$.q[qBase + idx]! * D.scale, kk < hd);
       }
       acc.$[c] = d.f32(0);
     }
@@ -746,7 +760,14 @@ export function createAttnRowsMergePipeline(
 export function attnRowsHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnRowsPipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; keyBias?: KeyBias },
+  args: {
+    qLen: number;
+    kvLen: number;
+    qPosOffset: number;
+    qHeads: number;
+    scale: number;
+    keyBias?: KeyBias;
+  },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -763,6 +784,7 @@ export function attnRowsHandle(
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
     ...keyBiasFields(args.keyBias),
+    scale: args.scale,
   });
   const filler = f32Filler(buffers, elem);
   const { dummyF32: _dummy, ...bound } = buffers;
@@ -794,6 +816,7 @@ export function attnRowsSplitHandles(
     qHeads: number;
     chunks: number;
     subgroup?: boolean;
+    scale: number;
     keyBias?: KeyBias;
   },
   buffers: {
@@ -814,6 +837,7 @@ export function attnRowsSplitHandles(
     qPosOffset: args.qPosOffset,
     chunks: args.chunks,
     ...keyBiasFields(args.keyBias),
+    scale: args.scale,
   });
   const splitBind = cachedBindGroup(root, attnSplitLayoutFor(elem), {
     q: buffers.q,
