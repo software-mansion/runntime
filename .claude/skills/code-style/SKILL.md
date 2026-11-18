@@ -50,7 +50,9 @@ Short bad/good pairs are in [examples.md](examples.md).
   needs no renames. A state-dict hook only builds derived tensors (a
   table computed on the CPU, a norm offset added back), under the
   checkpoint-named parent. Weights load as the checkpoint stores them: an
-  attention score scale goes to `sdpa`'s `scale`, never into q or k. Linears that read the same input and run as one matmul stay
+  attention score scale goes to `sdpa`'s `scale`, never into q or k, and the
+  pairs a rope rotates go to `rope`'s `layout`, never into the order of
+  the q and k rows. Linears that read the same input and run as one matmul stay
   the checkpoint's fields, with an `nn.FusedLinear` over them as one more
   field: no hook stacks them. Moonshine, MiniLM and EmbeddingGemma 2 are
   the examples.
