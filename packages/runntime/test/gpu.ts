@@ -58,6 +58,19 @@ export function gpu(): Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> {
   return device;
 }
 
+/** Makes a device of its own the default one until the test ends, so a
+ *  model loaded in the test finds no pipeline compiled yet. Returns its root. */
+export async function freshDefaultRoot(): Promise<TgpuRoot> {
+  const { root: shared } = await gpu();
+  const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
+  initRunntime(root);
+  onTestFinished(() => {
+    initRunntime(shared);
+    root.destroy();
+  });
+  return root;
+}
+
 let deviceWithoutSubgroups: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
 
 /** A second device with the same features minus `subgroups`, for the routes

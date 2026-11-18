@@ -1,8 +1,12 @@
 /** gpuExecutor's buffer lifetimes: intermediates go back to its pool, a warm
  *  graph allocates nothing, dispose() frees every buffer it made, and trim()
- *  drops what the last call did not use. */
-import { describe, expect, it, onTestFinished } from 'vitest';
-import { writeF32 } from '../../../src/core/gpu/buffers.ts';
+ *  drops what the last call did not use. And its submits in a warm-up, which
+ *  wait for an async pipeline compile and keep their order. */
+import tgpu from 'typegpu';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { setAsyncCompile, withAsyncCompile } from '../../../src/core/gpu/asyncCompile.ts';
+import { tensor, writeF32 } from '../../../src/core/gpu/buffers.ts';
+import { warmUp } from '../../../src/core/gpu/errorScopes.ts';
 import {
   evalValues,
   gpuExecutor,
@@ -321,5 +325,114 @@ describe('gpuExecutor trim', () => {
     replay();
     expect(await root.device.popErrorScope()).toBeNull();
     expectClose(await got, ref(next, rows));
+  });
+});
+
+describe('gpuExecutor in a warm-up', () => {
+  afterEach(() => setAsyncCompile(true));
+
+  /** [[1, 2], [3, 4]] times [[5, 6], [7, 8]]. */
+  const PRODUCT = [19, 22, 43, 50];
+
+  /** A device of its own, so no pipeline is compiled yet, with the two
+   *  inputs of PRODUCT and a spy on each way a pipeline can compile. */
+  async function freshDevice() {
+    const root = await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } });
+    onTestFinished(() => root.destroy());
+    return {
+      root,
+      device: root.device,
+      ex: gpuExecutor(root),
+      a: tensor(root, new Float32Array([1, 2, 3, 4]), [2, 2]),
+      b: tensor(root, new Float32Array([5, 6, 7, 8]), [2, 2]),
+      blocking: vi.spyOn(root.device, 'createComputePipeline'),
+      async: vi.spyOn(root.device, 'createComputePipelineAsync'),
+    };
+  }
+
+  it('compiles without blocking in warmUp()', async () => {
+    const { device, ex, a, b, blocking, async } = await freshDevice();
+    const got = await warmUp(device, () => toArray(matmul(a, b), ex));
+    expectClose(got, PRODUCT);
+    expect(async).toHaveBeenCalledTimes(1);
+    expect(blocking).not.toHaveBeenCalled();
+  });
+
+  it('compiles on first use outside a warm-up', async () => {
+    const { ex, a, b, blocking, async } = await freshDevice();
+    expectClose(await toArray(matmul(a, b), ex), PRODUCT);
+    expect(blocking).toHaveBeenCalledTimes(1);
+    expect(async).not.toHaveBeenCalled();
+  });
+
+  it('compiles on first use in a warm-up after setAsyncCompile(false)', async () => {
+    setAsyncCompile(false);
+    const { device, ex, a, b, blocking, async } = await freshDevice();
+    expectClose(await warmUp(device, () => toArray(matmul(a, b), ex)), PRODUCT);
+    expect(blocking).toHaveBeenCalledTimes(1);
+    expect(async).not.toHaveBeenCalled();
+  });
+
+  it('runs two submits in order, the second reading the first', async () => {
+    const { device, ex, a, b, blocking } = await freshDevice();
+    await withAsyncCompile(device, async () => {
+      const y = matmul(a, b);
+      evalValues([y], ex);
+      // mul is a pipeline the first submit did not compile.
+      const squares = mul(y, y);
+      evalValues([squares], ex);
+      expectClose(
+        await ex.readback(squares.buffer, squares.shape),
+        PRODUCT.map((v) => v * v),
+      );
+      expectClose(await ex.readback(y.buffer, y.shape), PRODUCT);
+    });
+    expect(blocking).not.toHaveBeenCalled();
+  });
+
+  it('replays a frame captured in a warm-up once its pipelines compiled', async () => {
+    const { device, ex, a, b, blocking } = await freshDevice();
+    const { targets: y, replay } = withAsyncCompile(device, () =>
+      ex.captureFrame(() => {
+        const y = matmul(a, b);
+        evalValues([y], ex);
+        return y;
+      }),
+    );
+    // Outside the warm-up, and the capture's pipeline is still compiling.
+    const got = ex.readbackOnSubmit(y);
+    replay();
+    expectClose(await got, PRODUCT);
+    expect(blocking).not.toHaveBeenCalled();
+  });
+
+  it('encodes a replay once ready, captured while another warm-up compiles its pipeline', async () => {
+    const { root, device, ex, a, b, blocking } = await freshDevice();
+    const other = gpuExecutor(root);
+    const warming = warmUp(device, () => toArray(matmul(a, b), other));
+    const cap = ex.captureFrame(() => {
+      const y = matmul(a, b);
+      evalValues([y], ex);
+      return y;
+    });
+    // Before this, encodeReplay() throws: matmul is still compiling.
+    await cap.ready;
+    const encoder = device.createCommandEncoder();
+    cap.encodeReplay(encoder);
+    device.queue.submit([encoder.finish()]);
+    expectClose(await ex.readback(cap.targets.buffer, cap.targets.shape), PRODUCT);
+    expectClose(await warming, PRODUCT);
+    expect(blocking).not.toHaveBeenCalled();
+  });
+
+  it('rejects with EXECUTION_FAILED when a pipeline does not compile, then runs again', async () => {
+    const { device, ex, a, b, async } = await freshDevice();
+    async.mockRejectedValueOnce(new Error('bad shader'));
+    await expect(warmUp(device, () => toArray(matmul(a, b), ex))).rejects.toMatchObject({
+      name: 'RunntimeError',
+      code: 'EXECUTION_FAILED',
+      message: 'GPU error during pipeline compile: bad shader',
+    });
+    expectClose(await toArray(matmul(a, b), ex), PRODUCT);
   });
 });

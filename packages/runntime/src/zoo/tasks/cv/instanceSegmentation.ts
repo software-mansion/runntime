@@ -154,6 +154,7 @@ export async function createInstanceSegmenter(
         maskSize: GPU_MASK_SIZE,
       }),
     );
+    if (opts.warmUp !== false) await encoder.compile();
     const schemas = { input: detector.schemas.input, output: encoder.schema };
 
     let disposed = false;

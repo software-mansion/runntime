@@ -4,6 +4,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
+import { compilePipelines } from '../../gpu/asyncCompile.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** One entry of the list: the index and its softmax probability. */
@@ -94,6 +95,8 @@ const kernel = tgpu.computeFn({
 export function createSoftmaxTopK(root: TgpuRoot) {
   const pipeline = root.createComputePipeline({ compute: kernel });
   return {
+    /** Compiles the pipeline without blocking, for the load-time warm-up. */
+    compile: (): Promise<void> => compilePipelines([pipeline]),
     /** Writes the `k` best of the `n` logits into `out`, a classScoreList. */
     encode(
       encoder: GPUCommandEncoder,

@@ -56,6 +56,11 @@ export function createDetectionEncoder<T extends d.AnyWgslData>(
   const headerBytes = d.sizeOf(d.u32);
   const { mode, cropFraction } = preprocessor.gpuArgs;
   return {
+    /** Compiles the pipelines encode() adds to the detector's, without
+     *  blocking, for the load-time warm-up. */
+    async compile(): Promise<void> {
+      await Promise.all([imageToChw.compile(), decode.compile()]);
+    },
     /** The list layout with room for `maxDetections`. */
     schema: (maxDetections: number): DetectionList<T> => detectionList(detection, maxDetections),
     encode(options: EncodeDetectionsOptions<DetectionList<T>>): void {

@@ -6,9 +6,6 @@ import { describe, expect, it } from 'vitest';
 import { matrix, tensor3d, toArray } from '../../src/core/index.ts';
 import { tensor } from '../../src/core/gpu/buffers.ts';
 import { gpuExecutor } from '../../src/core/gpu/eval.ts';
-import { CpuParameter, type AnyModule } from '../../src/core/nn/module.ts';
-import { gpuUpload } from '../../src/core/nn/loadStateDict.ts';
-import { f32ArrayToF16Bits } from '../../src/core/weights/convert.ts';
 import { HIGGS_DECODER } from '../../src/zoo/higgs/config.ts';
 import { HiggsDecoder } from '../../src/zoo/higgs/decoder.ts';
 import { MINILM_L6 } from '../../src/zoo/minilm/config.ts';
@@ -16,31 +13,13 @@ import { createMinilmEmbedCore } from '../../src/zoo/minilm/embedCore.ts';
 import { MinilmModel } from '../../src/zoo/minilm/model.ts';
 import { MobileNetV4Model } from '../../src/zoo/mobilenetv4/model.ts';
 import { buffersSince, gpu, liveBuffers, randomF32, repeated, requireFeature } from '../gpu.ts';
+import { loadRandomWeights } from './randomWeights.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
  *  call per shape records replays and fills the pool. */
 const WARM_CALLS = 3;
 /** Calls after warm-up that must not allocate a single buffer. */
 const STEADY_CALLS = 20;
-
-/** Binds every parameter and buffer the way loadStateDict does, with random
- *  values. Skips the checkpoint transforms: the names and layouts they adapt
- *  are the checkpoint's, and the model's own shapes are what runs. */
-function loadRandomWeights(model: AnyModule, root: TgpuRoot): void {
-  const upload = gpuUpload(root);
-  let seed = 1;
-  for (const [, p] of model.namedParameters()) {
-    const f32 = randomF32(p.shape.elems, seed++);
-    if (p instanceof CpuParameter) {
-      p.bindData(f32);
-      continue;
-    }
-    // f16 slots get their bits before preprocess, as from a checkpoint.
-    const data = p.shape.dtype === 'f16' ? f32ArrayToF16Bits(f32).data : f32;
-    p.bind(upload(p.preprocess ? p.preprocess(data) : data, p.shape));
-  }
-  for (const [, b] of model.namedBuffers()) b.bind(upload(b.data, b.shape));
-}
 
 /** A model as its runner holds it: one call, and the dispose that frees it. */
 interface Runner {
