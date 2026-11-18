@@ -1801,4 +1801,15 @@ describe('MultiHeadAttention', () => {
     expect(attn.forward(input([5, 32]), kv, kv).shape).toEqual(meta([5, 32]));
     expect(attn.forwardPacked(input([5, 64])).shape).toEqual(meta([5, 32]));
   });
+
+  // attrs[10] is the score scale.
+  it.each([
+    { name: '1/√headDim by default', scale: undefined, want: 1 / Math.sqrt(8) },
+    { name: 'the scale it was built with', scale: 1, want: 1 },
+  ])('scales the scores by $name', ({ scale, want }) => {
+    const attn = new MultiHeadAttention({ ...opts, scale });
+    const kv = input([5, 16]);
+    expect(attn.forward(input([5, 32]), kv, kv).pending?.attrs?.[10]).toBe(want);
+    expect(attn.forwardPacked(input([5, 64])).pending?.attrs?.[10]).toBe(want);
+  });
 });

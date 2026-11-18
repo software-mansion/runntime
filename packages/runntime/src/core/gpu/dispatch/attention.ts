@@ -56,7 +56,8 @@ export const attnSpec = defineSpec({
       hasSegs: a[7] ?? 0,
       maxSegment: a[8] ?? 0,
       qkvPacked: a[9] ?? 0,
-      keyBias: a[10] === 1 ? { start: a[11]!, end: a[12]!, value: a[13]! } : undefined,
+      scale: a[10]!,
+      keyBias: a[11] === 1 ? { start: a[12]!, end: a[13]!, value: a[14]! } : undefined,
     };
   },
   cfg: (node, attrs, ctx) => {
@@ -89,7 +90,8 @@ export const attnSpec = defineSpec({
     } else {
       route = 'rows';
     }
-    // qPosOffset and kvLen ride the uniform; only the route depends on them.
+    // qPosOffset, kvLen and the scale ride the uniform; only the route depends
+    // on the first two.
     return {
       qHeads: attrs.qHeads,
       kvHeads: attrs.kvHeads,
@@ -155,6 +157,7 @@ export const attnSpec = defineSpec({
       qHeads: attrs.qHeads,
       kvHeads: attrs.kvHeads,
       headDim: attrs.headDim,
+      scale: attrs.scale,
       keyBias: attrs.keyBias,
     };
     const bufs = { q, k, v, out: narrowFloat(out, dtype), sinks, segs, dummyF32: ctx.dummy('f32') };
@@ -168,7 +171,7 @@ export const attnSpec = defineSpec({
           ctx.root,
           pipeline.partial,
           pipeline.merge,
-          { kvLen, qPosOffset: attrs.qPosOffset, qHeads: attrs.qHeads, chunks },
+          { kvLen, qPosOffset: attrs.qPosOffset, qHeads: attrs.qHeads, scale: attrs.scale, chunks },
           { ...bufs, partials },
           elem,
         );

@@ -48,6 +48,7 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
       headDim: cfg.headDim,
       windowLeft: Infinity,
       windowRight: 0, // causal
+      scale: 1, // the rope tables carry it
     });
     this.o_proj = new nn.Linear(qw, cfg.dModel, { bias: false });
   }
@@ -102,6 +103,7 @@ class DecoderCrossAttn extends nn.Module<[Value, CrossKV, Value?], Value> {
       headDim: cfg.headDim,
       windowLeft: Infinity,
       windowRight: Infinity,
+      scale: 1, // folded into the weights at load
     });
     this.o_proj = new nn.Linear(qw, cfg.dModel, { bias: false });
   }

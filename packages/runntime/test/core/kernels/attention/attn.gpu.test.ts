@@ -246,6 +246,7 @@ describe('attn kernels', () => {
         sinks: true,
         segments: true,
         keyBias: true,
+        scale: 0.4,
       },
     },
   ];

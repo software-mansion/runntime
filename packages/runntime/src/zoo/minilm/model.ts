@@ -76,6 +76,7 @@ class SelfAttention extends nn.Module {
       headDim: cfg.headDim,
       windowLeft: Infinity,
       windowRight: Infinity,
+      scale: 1, // folded into the weights at load
     });
   }
 }
