@@ -3,6 +3,8 @@ title: Text to speech
 description: Turn text into spoken audio.
 ---
 
+import { Speak } from '../../../demos/Speak.tsx';
+
 Text to speech turns written text into spoken audio. It powers voice
 replies, read-aloud, narration and dubbing.
 
@@ -38,6 +40,13 @@ tts.dispose();
 ```
 
 The engine must be set up first, see [Getting started](/zoo/getting-started/).
+
+## Try it yourself
+
+Pick one of Reverb's preset voices and edit the text. Each click fetches
+the voice, a few KB of codec codes, and speaks the text in it, on your GPU.
+
+<Speak client:only="react" />
 
 ## Methods
 
