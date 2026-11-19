@@ -29,29 +29,31 @@ ATTRIBUTION = {
 }
 
 
-def librispeech_clips(count: int) -> tuple[list[str], list[NDArray[np.float32]], list[str]]:
+def librispeech_clips(
+    count: int, max_seconds: float | None = None
+) -> tuple[list[str], list[NDArray[np.float32]], list[str]]:
     """The first clip of each of the first `count` speakers, in file order:
-    its id, its mono samples at 16 kHz, and its transcript."""
+    its id, its mono samples at 16 kHz, and its transcript. With
+    `max_seconds`, a speaker's first clip that is no longer than that."""
     path = Path(hf_hub_download(REPO, FILE, repo_type="dataset", revision=REVISION))
     with path.open("rb") as file:
         digest = hashlib.file_digest(file, "sha256").hexdigest()
     if digest != SHA256:
         raise RuntimeError(f"{FILE} has sha256 {digest}, expected {SHA256}")
-    first: dict[int, dict] = {}
+    first: dict[int, tuple[str, NDArray[np.float32], str]] = {}
     for batch in pq.ParquetFile(path).iter_batches(batch_size=64):
         for row in batch.to_pylist():
-            first.setdefault(row["speaker_id"], row)
+            if row["speaker_id"] in first:
+                continue
+            samples, rate = soundfile.read(io.BytesIO(row["audio"]["bytes"]), dtype="float32")
+            if rate != SAMPLE_RATE or samples.ndim != 1:
+                raise RuntimeError(f"{row['id']} is not mono at {SAMPLE_RATE} Hz")
+            if max_seconds is None or len(samples) <= max_seconds * SAMPLE_RATE:
+                first[row["speaker_id"]] = (row["id"], samples, row["text"])
         if len(first) >= count:
             break
-    rows = list(first.values())[:count]
-    if len(rows) != count:
-        raise RuntimeError(f"{FILE} has {len(rows)} speakers, expected at least {count}")
-    ids, clips, transcripts = [], [], []
-    for row in rows:
-        samples, rate = soundfile.read(io.BytesIO(row["audio"]["bytes"]), dtype="float32")
-        if rate != SAMPLE_RATE or samples.ndim != 1:
-            raise RuntimeError(f"{row['id']} is not mono at {SAMPLE_RATE} Hz")
-        ids.append(row["id"])
-        clips.append(samples)
-        transcripts.append(row["text"])
-    return ids, clips, transcripts
+    chosen = list(first.values())[:count]
+    if len(chosen) != count:
+        raise RuntimeError(f"{FILE} has {len(chosen)} speakers, expected at least {count}")
+    ids, clips, transcripts = zip(*chosen, strict=True)
+    return list(ids), list(clips), list(transcripts)
