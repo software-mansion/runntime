@@ -52,6 +52,17 @@ export {
   type SpeechToTextModel,
 } from './tasks/audio/speechToText.ts';
 export { decodeAudio, resampleAudio, SPEECH_SAMPLE_RATE } from './tasks/audio/audioInput.ts';
+export {
+  createTextToSpeech,
+  createVoiceMaker,
+  type FromRecordingOptions,
+  type ReverbLanguage,
+  type SynthesizeOptions,
+  type TextToSpeech,
+  type TextToSpeechModel,
+  type Voice,
+  type VoiceMaker,
+} from './tasks/audio/textToSpeech.ts';
 
 export {
   createObjectDetector,

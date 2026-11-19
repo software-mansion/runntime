@@ -110,7 +110,7 @@ abSuite('shape', [
     true,
   ),
   {
-    name: 'gatherRowsFrom f16, groups of 8, Echo frame embedding, 335 of [8200,1024]',
+    name: 'gatherRowsFrom f16, groups of 8, Reverb frame embedding, 335 of [8200,1024]',
     needs: ['shader-f16'],
     build: (version) => {
       const x = randMat(version, 8200, 1024, 'f16');

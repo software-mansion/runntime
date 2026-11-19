@@ -146,6 +146,7 @@ export default defineConfig({
                   items: [
                     { label: 'Embedding', slug: 'zoo/embedding' },
                     { label: 'Speech to text', slug: 'zoo/speech-to-text' },
+                    { label: 'Text to speech', slug: 'zoo/text-to-speech' },
                     { label: 'Privacy filter', slug: 'zoo/privacy-filter' },
                     { label: 'Object detection', slug: 'zoo/object-detection' },
                     { label: 'Instance segmentation', slug: 'zoo/instance-segmentation' },

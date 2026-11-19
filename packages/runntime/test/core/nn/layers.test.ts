@@ -1085,6 +1085,28 @@ describe('Embedding', () => {
   it('gather() refuses a GPU table', () => {
     expect(() => new Embedding(3, 2).gather([0])).toThrow(/cpu-resident tables only/);
   });
+
+  describe('with a quantized table', () => {
+    it('uploads an int8 table as int · scale, one scale per row', async () => {
+      const sd = await quantCheckpoint(8, 4, {
+        weight: { ints: [1, -2, 3, -4, 5, 6, -7, 8], scales: [0.5, 2], shape: [2, 4] },
+      });
+      expect(await uploadedWeight(new Embedding(2, 4), sd)).toEqual(
+        new Float32Array([0.5, -1, 1.5, -2, 10, 12, -14, 16]),
+      );
+    });
+
+    it('gathers rows of an int4 table in groups of 2 on the CPU', async () => {
+      const sd = await quantCheckpoint(4, 2, {
+        weight: { ints: [1, -2, 3, -4, 5, 6, -7, 7], scales: [0.5, 1, 2, 0.25], shape: [2, 4] },
+      });
+      const e = new Embedding(2, 4, { device: 'cpu' });
+      const upload = vi.fn();
+      await loadLazyStateDict(e, sd, { upload });
+      expect(upload).not.toHaveBeenCalled();
+      expect(e.gather([1, 0])).toEqual(new Float32Array([10, 12, -1.75, 1.75, 0.5, -1, 3, -4]));
+    });
+  });
 });
 
 describe('MultiHeadAttention', () => {

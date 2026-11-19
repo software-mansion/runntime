@@ -6,9 +6,10 @@
  *  and one entry per hosted precision or size. The files live in the
  *  software-mansion `runntime-*` repos, one per model, laid out as
  *  `<size>/<precision>/model.safetensors` with `tokenizer.json` at the
- *  root where the model has one. */
+ *  root where the model has one. Reverb loads from its own repo. */
 
 import type { SpeechToTextModel } from './tasks/audio/speechToText.ts';
+import type { TextToSpeechModel } from './tasks/audio/textToSpeech.ts';
 import type { ImageClassifierModel } from './tasks/cv/imageClassification.ts';
 import type { DepthEstimatorModel } from './tasks/cv/depthEstimation.ts';
 import type { InstanceSegmenterModel } from './tasks/cv/instanceSegmentation.ts';
@@ -99,6 +100,17 @@ const YOLO26_POSE_M = {
   modelPath: weights('yolo26-pose', 'm', 'f16'),
 } satisfies KeypointDetectorModel;
 
+const REVERB_REPO = `${HUB}/Reverb-TTS/resolve/main/model`;
+/** Reverb weights in int4 or int8 under runntime/, or f16 or f32 under
+ *  safetensors/. Its codec is the Higgs Audio v2 tokenizer in int8. */
+const reverb = (dir: 'runntime/int4' | 'runntime/int8' | 'safetensors/fp16' | 'safetensors/fp32') =>
+  ({
+    modelPath: `${REVERB_REPO}/${dir}/model.safetensors`,
+    codecPath: weights('higgs-audio-v2-tokenizer', 'base', 'int8'),
+    tokenizerPath: `${REVERB_REPO}/tokenizer.json`,
+  }) satisfies TextToSpeechModel;
+const REVERB_INT4 = reverb('runntime/int4');
+
 const DEPTHART_S = { modelPath: weights('depthart', 's', 'f16') } satisfies DepthEstimatorModel;
 const DEPTHART_B = { modelPath: weights('depthart', 'b', 'f16') } satisfies DepthEstimatorModel;
 
@@ -128,6 +140,21 @@ export const models = {
     MOONSHINE_STREAMING: {
       /** 34M parameters. */
       TINY: MOONSHINE_STREAMING_TINY,
+    },
+  },
+  textToSpeech: {
+    /** Reverb: voice cloning from a reference clip in 7 languages, 297M
+     *  parameters. */
+    REVERB: {
+      DEFAULT: REVERB_INT4,
+      /** int4 weights. */
+      INT4: REVERB_INT4,
+      /** int8 weights. */
+      INT8: reverb('runntime/int8'),
+      /** f16 weights and f16 math, on a device with shader-f16. */
+      F16: { ...reverb('safetensors/fp16'), dtype: 'f16' as const },
+      /** f32 weights and f32 math. */
+      F32: { ...reverb('safetensors/fp32'), dtype: 'f32' as const },
     },
   },
   objectDetection: {

@@ -23,6 +23,7 @@ import {
   type LazyTensor,
 } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
+import { ropeOrder } from '../shared/stateDictHooks.ts';
 import type {
   EmbeddingGemma2AudioConfig,
   EmbeddingGemma2Config,
@@ -37,16 +38,6 @@ function take(sd: LazyStateDict, what: string, name: string): LazyTensor {
   if (!t) throw checkpointMismatch(what, `missing tensor '${name}'`);
   sd.tensors.delete(name);
   return t;
-}
-
-/** Row order for permuteRows that takes each `block` rows from the
- *  checkpoint's half-split rope layout to the kernel's interleaved pairs:
- *  rows (p, p + block/2) become (2p, 2p + 1). */
-function ropeOrder(rows: number, block: number): number[] {
-  return Array.from({ length: rows }, (_, r) => {
-    const i = r % block;
-    return r - i + (i % 2 ? (i - 1) / 2 + block / 2 : i / 2);
-  });
 }
 
 /** A weightless norm's ones, as f16 halfwords: exact, and stacked with an F16

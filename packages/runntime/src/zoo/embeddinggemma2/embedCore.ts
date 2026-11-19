@@ -20,7 +20,7 @@ import {
 } from '../../core/index.ts';
 import { EMBEDDINGGEMMA2_MAX_TOKENS, type LayerType } from './config.ts';
 import type { EmbeddingGemma2Inputs, EmbeddingGemma2Model } from './model.ts';
-import { ropeTables } from './rope.ts';
+import { ropeTables } from '../shared/rope.ts';
 
 /** Token counts a single input pads up to. Longer inputs run eagerly. */
 const EMBEDDINGGEMMA2_BUCKETS: readonly number[] = [16, 32, 64, 128, 192, 256, 384, 512];
