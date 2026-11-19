@@ -245,7 +245,7 @@ describe('ReverbModel', () => {
     },
   );
 
-  it('puts codebook c of frame t at row t·codebooks + c of the audio table', () => {
+  it('puts codebook c of frame t at row t·codebooks + c of the audio embeddings', () => {
     const model = new ReverbModel(CFG);
     // Codes [codebooks 3, frames 2].
     const ids = model.audioIds(Int32Array.from([0, 1, 2, 0, 1, 2]), 2);
