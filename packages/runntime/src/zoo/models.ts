@@ -103,7 +103,7 @@ const YOLO26_POSE_M = {
 const REVERB_REPO = `${HUB}/Reverb-TTS/resolve/main/model`;
 /** The Higgs Audio v2 tokenizer, Reverb's codec: its int8 encoder and int8
  *  decoder in one file. */
-const REVERB_CODEC = `${HUB}/higgs-audio-v2-tokenizer-ExecuTorch/resolve/e0d9ccd2935d7f953764a83b09444dc0677a44a0/combined/safetensors/d8e8/model.safetensors`;
+const REVERB_CODEC = `${HUB}/higgs-audio-v2-tokenizer-Reverb/resolve/e0d9ccd2935d7f953764a83b09444dc0677a44a0/combined/safetensors/d8e8/model.safetensors`;
 /** Reverb weights in int4 or int8 under runntime/, or f16 or f32 under
  *  safetensors/. */
 const reverb = (dir: 'runntime/int4' | 'runntime/int8' | 'safetensors/fp16' | 'safetensors/fp32') =>
