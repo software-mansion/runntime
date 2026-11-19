@@ -138,3 +138,46 @@ export function rankingDifferences(
   });
   return total;
 }
+
+/** The words of `text` as WER counts them: lower case, with punctuation
+ *  dropped and apostrophes kept. */
+export function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, ' ')
+    .split(' ')
+    .filter((word) => word !== '');
+}
+
+/** The fewest insertions, deletions and substitutions that turn `a` into `b`. */
+export function editDistance<T>(a: readonly T[], b: readonly T[]): number {
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) {
+      next.push(
+        Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)),
+      );
+    }
+    row = next;
+  }
+  return row[b.length]!;
+}
+
+/** Word error rate of `hypotheses` against `references`, text by text: the
+ *  word edits over the reference words, both summed over the texts. When
+ *  the references hold no word it is NaN, or Infinity if a hypothesis holds
+ *  one. */
+export function wer(hypotheses: readonly string[], references: readonly string[]): number {
+  if (hypotheses.length !== references.length) {
+    throw new Error(`wer: ${hypotheses.length} hypotheses for ${references.length} references`);
+  }
+  let edits = 0;
+  let total = 0;
+  references.forEach((reference, i) => {
+    const want = words(reference);
+    edits += editDistance(words(hypotheses[i]!), want);
+    total += want.length;
+  });
+  return edits / total;
+}
