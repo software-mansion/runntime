@@ -191,7 +191,8 @@ await createTextToSpeech({
   int4, int8, f16 or f32 file, or your own copy of one. The weight format
   is read from the file.
 - **codecPath** - the codec weights, a `model.safetensors` file: the hosted
-  one or the Higgs Audio v2 tokenizer's from the Hub. Only its decoder is read.
+  one or the Higgs Audio v2 tokenizer's from the Hub. `createTextToSpeech` reads
+  its decoder, `createVoiceMaker` its encoder.
 - **tokenizerPath** - Reverb's `tokenizer.json`.
 - **dtype** - `'f16'` or `'f32'`, the precision of the math and the float
   weights. `f16` needs a device with `shader-f16`. Default: `f16` where the
