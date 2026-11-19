@@ -100,7 +100,18 @@ export function createReverbSpeaker(
   const rowBytes =
     4 *
     Math.max(headRows(codebooks - COARSE_CODEBOOKS, codes), 2 * ffn, (heads + kvHeads) * headDim);
-  const maxRows = Math.floor(root.device.limits.maxStorageBufferBindingSize / rowBytes);
+  const limit = root.device.limits.maxStorageBufferBindingSize;
+  const maxRows = Math.floor(limit / rowBytes);
+  // The codec decoder's widest buffer is its last block's transposed conv
+  // before the slice: T · (the earlier strides) + 1 rows of stride · channels.
+  const { channels, strides } = codec.cfg;
+  const stride = strides.at(-1)!;
+  const upsample = strides.slice(0, -1).reduce((a, b) => a * b, 1);
+  const convRowBytes = (codecAct === 'f16' ? 2 : 4) * stride * (channels / 2 ** strides.length);
+  const maxTarget = Math.min(
+    maxRows,
+    Math.floor((Math.floor(limit / convRowBytes) - 1) / upsample),
+  );
 
   // Lengths change from call to call, so each session and decode ends with
   // a trim: the pool keeps only the buffers of the last length.
@@ -123,10 +134,10 @@ export function createReverbSpeaker(
         `synthesize: the text gives ${T} frame for this voice, fewer than 2`,
       );
     }
-    if (T > maxRows) {
+    if (T > maxTarget) {
       throw new RunntimeError(
         'INVALID_ARGUMENT',
-        `synthesize: the text needs ${T} frames, more than the ${maxRows} this device runs at once`,
+        `synthesize: the text needs ${T} frames, more than the ${maxTarget} this device runs at once`,
       );
     }
     if (P > maxRows) {

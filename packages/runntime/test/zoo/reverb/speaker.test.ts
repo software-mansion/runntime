@@ -5,15 +5,17 @@ import { createReverbSpeaker, type Voice } from '../../../src/zoo/reverb/speaker
 import { HiggsDecoder } from '../../../src/zoo/higgs/decoder.ts';
 
 // The default 128 MiB binding limit. Reverb's widest row is its 6152 fine
-// logits in f32, so a pass runs at most 5454 rows. Node has no WebGPU, and
-// open() checks the lengths before it touches the device.
+// logits in f32, so a pass runs at most 5454 rows. The codec decoder's widest
+// buffer is 320·T + 1 rows of 96 values, so it decodes at most 1092 frames in
+// f32 and 2184 in f16. Node has no WebGPU, and open() checks the lengths
+// before it touches the device.
 const root = {
+  enabledFeatures: new Set(['shader-f16']),
   device: { features: new Set(), limits: { maxStorageBufferBindingSize: 2 ** 27 } },
 } as unknown as TgpuRoot;
 
-const speaker = createReverbSpeaker(root, new ReverbModel(), new HiggsDecoder(), {
-  encode: () => [1, 2, 3],
-});
+const tokenizer = { encode: () => [1, 2, 3] };
+const speaker = createReverbSpeaker(root, new ReverbModel(), new HiggsDecoder(), tokenizer);
 
 /** A voice of `frames` frames whose transcript is one letter per frame. */
 const voice = (frames: number): Voice => ({
@@ -24,12 +26,27 @@ const voice = (frames: number): Voice => ({
 });
 
 describe('createReverbSpeaker', () => {
-  it('refuses a text past the rows a pass can bind', () => {
+  it('refuses a text past the frames the codec decoder can bind', () => {
     // One frame per letter.
-    expect(() => speaker.open('a'.repeat(5455), voice(10))).toThrow(
+    expect(() => speaker.open('a'.repeat(1093), voice(10))).toThrow(
       expect.objectContaining({
         code: 'INVALID_ARGUMENT',
-        message: expect.stringMatching(/5455 frames/),
+        message: expect.stringMatching(/1093 frames, more than the 1092 /),
+      }),
+    );
+  });
+
+  it('lets an f16 codec decoder take twice the frames', () => {
+    const half = createReverbSpeaker(
+      root,
+      new ReverbModel(),
+      new HiggsDecoder().half(root),
+      tokenizer,
+    );
+    expect(() => half.open('a'.repeat(2185), voice(10))).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message: expect.stringMatching(/2185 frames, more than the 2184 /),
       }),
     );
   });
