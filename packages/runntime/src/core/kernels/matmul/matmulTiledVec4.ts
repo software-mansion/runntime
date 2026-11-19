@@ -107,9 +107,10 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
   const bn4 = BN / 4;
   const k4 = k / 4;
   const n4 = n / 4;
-  const aVecs = (BM * bk4) / lanes;
-  const bVecs = (BK * bn4) / lanes;
   const tiles = Math.ceil(k / BK);
+  if (BM * bk4 !== lanes || BK * bn4 !== lanes) {
+    throw new Error('matmulTiledVec4: each tile needs one vec4 per thread');
+  }
   const tileA = tgpu.workgroupVar(d.arrayOf(elem.vec4, BM * bk4));
   const tileB = tgpu.workgroupVar(d.arrayOf(elem.vec4, BK * bn4));
   return tgpu.computeFn({
@@ -124,30 +125,37 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
     const nBase4 = wid.x * bn4;
 
     const accs = d.arrayOf(d.vec4f, tm)();
+    // Thread lid fills slot lid of each tile.
+    const am = mBase + std.intdiv(lid, bk4);
+    const aCol = lid % bk4;
+    const bRow = std.intdiv(lid, bn4);
+    const bc4 = nBase4 + (lid % bn4);
+    let ra = storeVec4();
+    let rb = storeVec4();
+    if (am < m && aCol < k4) {
+      ra = storeVec4(loadASlot.$(am, aCol));
+    }
+    if (bRow < k && bc4 < n4) {
+      rb = storeVec4(layout.$.b[bRow * n4 + bc4]!);
+    }
     for (const t of std.range(tiles)) {
-      // Neighbouring threads load neighbouring vec4s.
-      for (const i of tgpu.unroll(std.range(aVecs))) {
-        const e = lid + i * lanes;
-        const am = mBase + d.u32(e / bk4);
-        const ak4 = t * bk4 + (e % bk4);
-        let v = storeVec4();
-        if (am < m && ak4 < k4) {
-          v = storeVec4(loadASlot.$(am, ak4));
-        }
-        tileA.$[e] = storeVec4(v);
-      }
-      for (const i of tgpu.unroll(std.range(bVecs))) {
-        const e = lid + i * lanes;
-        const bk = t * BK + d.u32(e / bn4);
-        const bc4 = nBase4 + (e % bn4);
-        let v = storeVec4();
-        if (bk < k && bc4 < n4) {
-          v = storeVec4(layout.$.b[bk * n4 + bc4]!);
-        }
-        tileB.$[e] = storeVec4(v);
-      }
+      tileA.$[lid] = storeVec4(ra);
+      tileB.$[lid] = storeVec4(rb);
       std.workgroupBarrier();
-
+      // The next tile's loads are in flight while this one computes.
+      const tn = t + 1;
+      if (tn < tiles) {
+        const ak4 = tn * bk4 + aCol;
+        ra = storeVec4();
+        if (am < m && ak4 < k4) {
+          ra = storeVec4(loadASlot.$(am, ak4));
+        }
+        const bk = tn * BK + bRow;
+        rb = storeVec4();
+        if (bk < k && bc4 < n4) {
+          rb = storeVec4(layout.$.b[bk * n4 + bc4]!);
+        }
+      }
       for (const kv of tgpu.unroll(std.range(bk4))) {
         const b0 = d.vec4f(tileB.$[kv * 4 * bn4 + tx]!);
         const b1 = d.vec4f(tileB.$[(kv * 4 + 1) * bn4 + tx]!);

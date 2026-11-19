@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   bufferSource,
-  derivedTensor,
+  derive,
   fromSafetensors,
   memoryStateDict,
   quantTensor,
@@ -9,6 +9,8 @@ import {
 } from '../../../src/core/weights/safetensors.ts';
 import {
   concatRows,
+  dequantize,
+  floatTensor,
   permuteRows,
   readFloats,
   reshapeWeight,
@@ -56,7 +58,7 @@ describe('concatRows', () => {
 
   it('reads a part listed several times once', async () => {
     const compute = vi.fn(async () => new Float32Array([1, 2]));
-    const norm = derivedTensor([2], compute);
+    const norm = derive([2], [], compute);
     const out = concatRows([norm, norm, norm]);
     expect(await contents(out)).toEqual({ type: 'f32', values: [1, 2, 1, 2, 1, 2] });
     expect(compute).toHaveBeenCalledOnce();
@@ -287,7 +289,7 @@ describe('reshapeWeight', () => {
 describe('weight helpers', () => {
   it('fetch nothing until an output is read, and split sources read once', async () => {
     const compute = vi.fn(async () => new Float32Array([1, 2, 3, 4]));
-    const t = derivedTensor([2, 2], compute);
+    const t = derive([2, 2], [], compute);
     const [top, bottom] = splitRows(t, [1, 1]);
     const [left, right] = splitCols(t, [1, 1]);
     concatRows([t, t]);
@@ -325,7 +327,7 @@ describe('weight helpers', () => {
     { name: 'permuteRows', run: (t: LazyTensor) => permuteRows(t, [0]) },
     { name: 'scaleWeight', run: (t: LazyTensor) => scaleWeight(t, 2) },
   ])('$name rejects packed u32 words with CHECKPOINT_MISMATCH', async ({ name, run }) => {
-    const words = derivedTensor([1], async () => new Uint32Array([1]));
+    const words = derive([1], [], async () => new Uint32Array([1]));
     await expect(contents(run(words))).rejects.toMatchObject({
       code: 'CHECKPOINT_MISMATCH',
       message: `${name}: source holds packed u32 words`,
@@ -341,7 +343,7 @@ describe('weight helpers', () => {
   ])('$name rejects a derived source whose data does not fill its shape', async ({ name, run }) => {
     // A hook bug: shape [2, 3] says 6 values, data holds 5. A file tensor
     // cannot get here, its header check rejects the length mismatch.
-    const short = derivedTensor([2, 3], async () => new Float32Array([1, 2, 3, 4, 5]));
+    const short = derive([2, 3], [], async () => new Float32Array([1, 2, 3, 4, 5]));
     await expect(contents(run(short))).rejects.toMatchObject({
       code: 'CHECKPOINT_MISMATCH',
       message: `${name}: source holds 5 values for shape [2, 3]`,
@@ -467,6 +469,11 @@ describe.each([8, 4] as const)('int%i quantized sources', (bits) => {
     expect(() => transposeWeight(t)).toThrow(mismatch(/w\.weight is quantized/));
   });
 
+  it('floatTensor throws CHECKPOINT_MISMATCH naming the reader', async () => {
+    const t = await quantSource(bits, 2, 'w.weight', w);
+    expect(() => floatTensor('test', t)).toThrow(mismatch(/^test: w\.weight is quantized/));
+  });
+
   it('readFloats and the float accessors of an output reject it', async () => {
     const t = await quantSource(bits, 2, 'w.weight', w);
     await expect(readFloats('test', t)).rejects.toThrow(mismatch(/^test: w\.weight is quantized/));
@@ -487,6 +494,7 @@ describe('quantized helpers', () => {
       bits: 8,
       groupSize: 2,
       byteLength: 6,
+      sources: [],
       ints,
       scales,
     });
@@ -504,11 +512,74 @@ describe('quantized helpers', () => {
     expect(scales).toHaveBeenCalledOnce();
   });
 
+  it('dequantize gives each int times the f16 scale of its group, in the shape asked', async () => {
+    // int4, groups of 2: scales 0.5 and 0.25
+    const t = await quantSource(4, 2, 'w', {
+      ints: [1, -2, 7, -8],
+      scales: [0.5, 0.25],
+      shape: [1, 4],
+    });
+    const d = dequantize(t, [2, 2]);
+    expect(d.shape).toEqual([2, 2]);
+    expect([...(await d.f32())]).toEqual([0.5, -1, 1.75, -2]);
+    expect(d.byteLength).toBe(t.byteLength);
+  });
+
+  it('dequantize refuses a shape of another size', () => {
+    const { t } = counted();
+    expect(() => dequantize(t, [3])).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(/cannot give \[2, 2\]/),
+      }),
+    );
+  });
+
   it('splits read the source once for all their outputs', async () => {
     const { t, ints, scales } = counted();
     await Promise.all(splitRows(t, [1, 1]).map(quantContents));
     expect([ints.mock.calls.length, scales.mock.calls.length]).toEqual([1, 1]);
     await Promise.all(splitCols(t, [2]).map(quantContents));
     expect([ints.mock.calls.length, scales.mock.calls.length]).toEqual([2, 2]);
+  });
+});
+
+describe('sources', () => {
+  /** A [2, 4] float tensor named `name` in its file. */
+  const float = (name: string) =>
+    memoryStateDict({ [name]: { data: new Float32Array(8), shape: [2, 4] } }).tensors.get(name)!;
+  /** A [2, 4] int8 tensor in groups of 2, named `name` in its file. */
+  const quant = (name: string) =>
+    quantSource(8, 2, name, {
+      ints: new Array<number>(8).fill(1),
+      scales: [1, 1, 1, 1],
+      shape: [2, 4],
+    });
+
+  const HELPERS: [string, (a: LazyTensor, b: LazyTensor) => LazyTensor, string[]][] = [
+    ['concatRows', (a, b) => concatRows([a, b, a]), ['a', 'b']],
+    ['splitRows', (a) => splitRows(a, [1, 1])[1]!, ['a']],
+    ['splitCols', (a) => splitCols(a, [2, 2])[1]!, ['a']],
+    ['permuteRows', (a) => permuteRows(a, [1, 0]), ['a']],
+    ['scaleWeight', (a) => scaleWeight(a, 2), ['a']],
+    ['reshapeWeight', (a) => reshapeWeight(a, [1, 2, 4]), ['a']],
+    [
+      'a chain of helpers',
+      (a, b) => scaleWeight(concatRows([splitRows(b, [1, 1])[0]!, a]), 2),
+      ['b', 'a'],
+    ],
+  ];
+
+  it.for(HELPERS)('%s passes on the sources of a float input', ([, helper, want]) => {
+    expect(helper(float('a'), float('b')).sources.map((s) => s.name)).toEqual(want);
+  });
+
+  it.for(HELPERS)('%s passes on the sources of a quantized input', async ([, helper, want]) => {
+    expect(helper(await quant('a'), await quant('b')).sources.map((s) => s.name)).toEqual(want);
+  });
+
+  it('transposeWeight and dequantize pass on the sources of their input', async () => {
+    expect(transposeWeight(float('a')).sources.map((s) => s.name)).toEqual(['a']);
+    expect(dequantize(await quant('a')).sources.map((s) => s.name)).toEqual(['a']);
   });
 });

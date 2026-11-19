@@ -194,7 +194,7 @@ abSuite('attention', [
     kvHeads: 6,
     headDim: 48,
   }),
-  sdpa('flash f16 + key bias, Echo 12/6 heads hd 128, 335 rows over 640 keys', {
+  sdpa('flash f16 + key bias, Reverb 12/6 heads hd 128, 335 rows over 640 keys', {
     qLen: 335,
     kvLen: 640,
     qHeads: 12,
@@ -202,6 +202,30 @@ abSuite('attention', [
     headDim: 128,
     dtype: 'f16',
     keyBias: { start: 55, end: 305, value: 1 },
+  }),
+  sdpa('flash, 8 lanes, GQA 16/4 heads hd 64, causal', {
+    qLen: 256,
+    kvLen: 256,
+    qHeads: 16,
+    kvHeads: 4,
+    headDim: 64,
+    causal: true,
+  }),
+  sdpa('flash f16, EmbeddingGemma 2 sliding layer 4/2 heads hd 256, window 512', {
+    qLen: 512,
+    kvLen: 512,
+    qHeads: 4,
+    kvHeads: 2,
+    headDim: 256,
+    dtype: 'f16',
+    window: 512,
+  }),
+  sdpa('flash, EmbeddingGemma 2 full layer 4/1 heads hd 512', {
+    qLen: 512,
+    kvLen: 512,
+    qHeads: 4,
+    kvHeads: 1,
+    headDim: 512,
   }),
   packed('flash packed + segments, MiniLM bucket 128, hd 32', 128, 12, 32, 'f32'),
   packed('flash packed f16 + segments, MiniLM bucket 512, hd 32', 512, 12, 32, 'f16'),
@@ -249,7 +273,7 @@ abSuite('attention', [
     headDim: 32,
     noSubgroups: true,
   }),
-  sdpa('rowsSplit + key bias, Echo 12/6 heads hd 128, 335 rows over 640 keys', {
+  sdpa('rowsSplit + key bias, Reverb 12/6 heads hd 128, 335 rows over 640 keys', {
     qLen: 335,
     kvLen: 640,
     qHeads: 12,

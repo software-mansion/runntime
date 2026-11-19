@@ -256,7 +256,7 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
 
   /** Adjusts the lazy state dict for this subtree before binding — fold BN,
    *  permute layouts, split fused tensors. Must be synchronous: produce
-   *  derivedTensor entries, never fetch. */
+   *  derived entries with `derive`, never fetch. */
   transformStateDict?(sd: LazyStateDict, prefix: string, parent?: AnyModule): void;
 
   /** Binds every Parameter, streaming one tensor at a time. Takes a lazy state

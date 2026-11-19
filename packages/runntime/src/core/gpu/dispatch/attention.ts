@@ -153,6 +153,8 @@ export const attnSpec = defineSpec({
       kvLen,
       qPosOffset: attrs.qPosOffset,
       qHeads: attrs.qHeads,
+      kvHeads: attrs.kvHeads,
+      headDim: attrs.headDim,
       keyBias: attrs.keyBias,
     };
     const bufs = { q, k, v, out: narrowFloat(out, dtype), sinks, segs, dummyF32: ctx.dummy('f32') };

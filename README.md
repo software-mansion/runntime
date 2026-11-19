@@ -136,6 +136,7 @@ from `models`, or spread one and change a field.
 | Embedding             | `createEmbedder`          | EmbeddingGemma 2, all-MiniLM-L6-v2    |
 | Privacy filter        | `createPrivacyFilter`     | OpenAI privacy-filter (int8)          |
 | Speech to text        | `createSpeechToText`      | Moonshine tiny / base, streaming tiny |
+| Text to speech        | `createTextToSpeech`      | Reverb                                |
 | Object detection      | `createObjectDetector`    | YOLO26 n / m                          |
 | Instance segmentation | `createInstanceSegmenter` | YOLO26-seg n / m                      |
 | Pose & keypoints      | `createKeypointDetector`  | YOLO26-pose n / m                     |

@@ -1,21 +1,43 @@
 /** Audio input helpers: an encoded clip or raw microphone samples in, the
- *  16 kHz mono Float32Array the speech models take out. Both use the
+ *  mono Float32Array the speech models take out. Both use the
  *  browser's own decoder and resampler through an OfflineAudioContext, so
  *  they run in the browser only. Importing the file is safe anywhere, the
  *  browser objects appear only inside the functions. */
 
+import { RunntimeError } from '../../../core/index.ts';
+
 /** Sample rate the speech models take. */
 export const SPEECH_SAMPLE_RATE = 16_000;
 
-/** Decodes any clip the browser can play (wav, mp3, ogg, ...) to 16 kHz
- *  mono samples. Stereo is mixed down to one channel. */
-export async function decodeAudio(data: ArrayBuffer): Promise<Float32Array> {
-  // decodeAudioData resamples to its context's rate, so a 16 kHz context
-  // does the resample. Its one-frame render buffer is never used.
-  const probe = new OfflineAudioContext(1, 1, SPEECH_SAMPLE_RATE);
+/** Decodes any clip the browser can play (wav, mp3, ogg, ...) to mono
+ *  samples at `sampleRate`, 16 kHz by default. Stereo is mixed down to one
+ *  channel. Throws INVALID_ARGUMENT for a sample rate this browser does not
+ *  take. */
+export async function decodeAudio(
+  data: ArrayBuffer,
+  sampleRate = SPEECH_SAMPLE_RATE,
+): Promise<Float32Array> {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `decodeAudio: sampleRate ${sampleRate} must be a positive number`,
+    );
+  }
+  // decodeAudioData resamples to its context's rate, so a context at
+  // `sampleRate` does the resample. Its one-frame render buffer is never used.
+  let probe: OfflineAudioContext;
+  try {
+    probe = new OfflineAudioContext(1, 1, sampleRate);
+  } catch (err) {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `decodeAudio: sampleRate ${sampleRate} is not one this browser takes`,
+      { cause: err },
+    );
+  }
   const decoded = await probe.decodeAudioData(data);
   if (decoded.numberOfChannels === 1) return decoded.getChannelData(0);
-  const mix = new OfflineAudioContext(1, decoded.length, SPEECH_SAMPLE_RATE);
+  const mix = new OfflineAudioContext(1, decoded.length, sampleRate);
   const src = mix.createBufferSource();
   src.buffer = decoded;
   src.connect(mix.destination);

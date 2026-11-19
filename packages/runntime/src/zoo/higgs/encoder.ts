@@ -14,7 +14,8 @@ import {
   add,
   cat,
   concatRows,
-  derivedTensor,
+  derive,
+  floatTensor,
   elu,
   gatherRowsFrom,
   gelu,
@@ -147,8 +148,9 @@ class FeatureProjection extends nn.Module {
 
 /** HuBERT's conv position embedding: a grouped conv with weight norm, as one
  *  conv per group of channels, then GELU. An even kernel pads one frame less
- *  on the right, the frame torch cuts. The load folds the weight norm and
- *  splits the weight and bias into the groups. */
+ *  on the right, the frame torch cuts. The load folds the weight norm, or
+ *  takes the checkpoint's folded weight, and splits the weight and bias into
+ *  the groups. */
 class PositionConv extends nn.Module {
   readonly convs: nn.ModuleList<nn.Conv1d>;
   constructor(
@@ -172,9 +174,23 @@ class PositionConv extends nn.Module {
     );
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    const bias = take(sd, prefix, 'conv.bias');
+    const { hidden, groups } = this;
+    const width = hidden / groups;
+    const sizes = Array<number>(groups).fill(width);
+    const weights = splitRows(this.weight(sd, prefix), sizes);
+    const biases = splitRows(bias, sizes);
+    for (let i = 0; i < groups; i++) {
+      sd.tensors.set(at(prefix, `convs.${i}.weight`), weights[i]!);
+      sd.tensors.set(at(prefix, `convs.${i}.bias`), biases[i]!);
+    }
+  }
+  /** The checkpoint's folded weight, or its weight norm folded. Each group's
+   *  conv checks the shape of its rows. */
+  private weight(sd: LazyStateDict, prefix: string): LazyTensor {
+    if (sd.tensors.has(at(prefix, 'conv.weight'))) return take(sd, prefix, 'conv.weight');
     const g = take(sd, prefix, 'conv.parametrizations.weight.original0');
     const v = take(sd, prefix, 'conv.parametrizations.weight.original1');
-    const bias = take(sd, prefix, 'conv.bias');
     const { hidden, kernel, groups } = this;
     const width = hidden / groups;
     if (
@@ -187,13 +203,7 @@ class PositionConv extends nn.Module {
           `expected [1,1,${kernel}] and [${hidden},${width},${kernel}]`,
       );
     }
-    const sizes = Array<number>(groups).fill(width);
-    const weights = splitRows(foldWeightNorm(g, v), sizes);
-    const biases = splitRows(bias, sizes);
-    for (let i = 0; i < groups; i++) {
-      sd.tensors.set(at(prefix, `convs.${i}.weight`), weights[i]!);
-      sd.tensors.set(at(prefix, `convs.${i}.bias`), biases[i]!);
-    }
+    return foldWeightNorm(g, v);
   }
   override forward(x: Value): Value {
     const width = this.hidden / this.groups;
@@ -208,22 +218,16 @@ class PositionConv extends nn.Module {
  *  in] slice scaled to norm g[tap]. In f64. */
 function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   const [out, cIn, kernel] = v.shape as [number, number, number];
-  return derivedTensor(
-    [out, cIn, kernel],
-    async () => {
-      const gs = await g.f32();
-      const vs = await v.f32();
-      const norm = new Float64Array(kernel);
-      for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
-      const w = new Float32Array(vs.length);
-      for (let i = 0; i < vs.length; i++) {
-        const k = i % kernel;
-        w[i] = (vs[i]! * gs[k]!) / Math.sqrt(norm[k]!);
-      }
-      return w;
-    },
-    g.byteLength + v.byteLength,
-  );
+  return derive([out, cIn, kernel], [floatTensor(WHAT, g), floatTensor(WHAT, v)], ([gs, vs]) => {
+    const norm = new Float64Array(kernel);
+    for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
+    const w = new Float32Array(vs.length);
+    for (let i = 0; i < vs.length; i++) {
+      const k = i % kernel;
+      w[i] = (vs[i]! * gs[k]!) / Math.sqrt(norm[k]!);
+    }
+    return w;
+  });
 }
 
 /** Self-attention with q, k and v in one projection. The load stacks them
@@ -410,26 +414,30 @@ class Codebook extends nn.Module {
     this.score = new nn.Linear(dim, size);
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    const embed = requireTensor(sd, at(prefix, 'embed'), WHAT);
+    const embed = floatTensor(WHAT, requireTensor(sd, at(prefix, 'embed'), WHAT));
     const [size, dim] = embed.shape as [number, number];
     for (const name of ['cluster_size', 'embed_avg', 'inited']) sd.tensors.delete(at(prefix, name));
     // The rows' bytes count once, under embed.
     sd.tensors.set(
       at(prefix, 'score.weight'),
-      derivedTensor([size, dim], async () => (await embed.f32()).map((x) => 2 * x)),
+      derive([size, dim], [embed], ([e]) => e.map((x) => 2 * x), 0),
     );
     sd.tensors.set(
       at(prefix, 'score.bias'),
-      derivedTensor([size], async () => {
-        const e = await embed.f32();
-        const out = new Float32Array(size);
-        for (let i = 0; i < size; i++) {
-          let sq = 0;
-          for (let j = 0; j < dim; j++) sq += e[i * dim + j]! ** 2;
-          out[i] = -sq;
-        }
-        return out;
-      }),
+      derive(
+        [size],
+        [embed],
+        ([e]) => {
+          const out = new Float32Array(size);
+          for (let i = 0; i < size; i++) {
+            let sq = 0;
+            for (let j = 0; j < dim; j++) sq += e[i * dim + j]! ** 2;
+            out[i] = -sq;
+          }
+          return out;
+        },
+        0,
+      ),
     );
   }
 }

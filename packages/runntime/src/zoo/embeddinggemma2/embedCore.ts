@@ -20,7 +20,7 @@ import {
 } from '../../core/index.ts';
 import { EMBEDDINGGEMMA2_MAX_TOKENS, type LayerType } from './config.ts';
 import type { EmbeddingGemma2Inputs, EmbeddingGemma2Model } from './model.ts';
-import { ropeTables } from './rope.ts';
+import { ropeTables } from '../shared/rope.ts';
 
 /** Token counts a single input pads up to. Longer inputs run eagerly. */
 const EMBEDDINGGEMMA2_BUCKETS: readonly number[] = [16, 32, 64, 128, 192, 256, 384, 512];
@@ -88,7 +88,7 @@ export function createEmbeddingGemma2EmbedCore(
   const { hidden, embeddingDim, attention } = model.cfg;
   // x0 and the pool weights meet the hidden states, so they follow the
   // model's dtype; the index planes stay f32.
-  const act = model.norm.scale.shape.dtype === 'f16' ? 'f16' : 'f32';
+  const act = model.language_model.norm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
   const maxT = EMBEDDINGGEMMA2_MAX_TOKENS;
   // Rope rows for every position, gathered per forward by the positions plane.
   const table = (type: LayerType) => {

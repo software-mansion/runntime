@@ -20,7 +20,7 @@ import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/modul
 import { f16ToF32, f32ArrayToF16Bits } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
-  derivedTensor,
+  derive,
   fromSafetensors,
   memoryStateDict,
   type LazyStateDict,
@@ -51,7 +51,7 @@ const f16Checkpoint = (bits: Uint16Array, shape: number[]): Promise<LazyStateDic
  *  hook hands one over: a Uint16Array means f16 halfwords, a Uint32Array
  *  packed words. */
 function derivedCheckpoint(data: Uint16Array | Uint32Array, shape: number[]): LazyStateDict {
-  const tensor = derivedTensor(shape, () => Promise.resolve(data), data.byteLength);
+  const tensor = derive(shape, [], () => Promise.resolve(data), data.byteLength);
   return {
     metadata: {},
     tensors: new Map([['weight', tensor]]),
@@ -333,7 +333,7 @@ describe('Linear with a quantized weight', () => {
 
   it('puts the scales right after the weight, so binding keeps file order', async () => {
     const sd = await quantCheckpoint(8, 4, { 'fc.weight': entry });
-    const float = derivedTensor([4], () => Promise.resolve(new Float32Array(4)));
+    const float = derive([4], [], () => Promise.resolve(new Float32Array(4)));
     sd.tensors = new Map([
       ['first', float],
       ['fc.weight', sd.tensors.get('fc.weight')!],
@@ -523,18 +523,55 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
   });
 
   it.each([
-    {
-      name: 'kernel·in that is not a multiple of 8',
-      layer: () => new Conv1d(4, 4, 3),
-      file: () => quantCheckpoint(8, 12, { weight: zeros(4, 12, 1) }),
-      error: /needs in a multiple of 4 and 3·in of 8, got in 4/,
+    { name: 'one input channel', cIn: 1, kernel: 3 },
+    { name: 'kernel·in that is not a multiple of 8', cIn: 4, kernel: 3 },
+    { name: 'in that is not a multiple of 4', cIn: 2, kernel: 4 },
+  ])('loads a Conv1d weight on $name as its dequantized floats', async ({ cIn, kernel }) => {
+    // One scale per output row, 0.5 and 0.25; ints 1, 2, … and −1, −2, …
+    const cols = cIn * kernel;
+    const ints = Array.from({ length: 2 * cols }, (_, i) => (i < cols ? i + 1 : cols - i - 1));
+    const layer = new Conv1d(cIn, 2, kernel, { bias: false });
+    const sd = await quantCheckpoint(8, cols, {
+      weight: { ints, scales: [0.5, 0.25], shape: [2, cols] },
+    });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({ weight: meta([cols, 2]) });
+    // tap-major [kernel·in, out]: row tap·in + c holds both outputs' (c, tap)
+    const want = Array.from({ length: 2 * cols }, (_, i) => {
+      const [row, o] = [Math.floor(i / 2), i % 2];
+      const [tap, c] = [Math.floor(row / cIn), row % cIn];
+      return ints[o * cols + c * kernel + tap]! * (o === 0 ? 0.5 : 0.25);
+    });
+    expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
+  });
+
+  it.each([
+    { name: 'taps·in that is not a multiple of 8', cIn: 4, cOut: 4, kernel: 6 },
+    { name: 'out that is not a multiple of 4', cIn: 8, cOut: 2, kernel: 4 },
+  ])(
+    'loads a ConvTranspose1d weight on $name as its dequantized floats',
+    async ({ cIn, cOut, kernel }) => {
+      // stride 2; one scale per torch row c, (c + 1) / 4; ints −25 … 24
+      const [s, taps, cols] = [2, kernel / 2, cOut * kernel];
+      const ints = Array.from({ length: cIn * cols }, (_, i) => (i % 50) - 25);
+      const scales = Array.from({ length: cIn }, (_, c) => (c + 1) / 4);
+      const layer = new ConvTranspose1d(cIn, cOut, kernel, { stride: s, bias: false });
+      const sd = await quantCheckpoint(8, cols, {
+        weight: { ints, scales, shape: [cIn, cols] },
+      });
+      layer.transformStateDict(sd, '');
+      expect(shapes(layer)).toEqual({ weight: meta([taps * cIn, s * cOut]) });
+      // row i·in + c, column r·out + o holds kernel position (taps − 1 − i)·s + r
+      const want = Array.from({ length: taps * cIn * s * cOut }, (_, j) => {
+        const [row, col] = [Math.floor(j / (s * cOut)), j % (s * cOut)];
+        const [i, c, r, o] = [Math.floor(row / cIn), row % cIn, Math.floor(col / cOut), col % cOut];
+        return ints[c * cols + o * kernel + (taps - 1 - i) * s + r]! * scales[c]!;
+      });
+      expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
     },
-    {
-      name: 'in that is not a multiple of 4',
-      layer: () => new Conv1d(2, 4, 4),
-      file: () => quantCheckpoint(8, 8, { weight: zeros(4, 8, 1) }),
-      error: /needs in a multiple of 4 and 4·in of 8, got in 2/,
-    },
+  );
+
+  it.each([
     {
       name: 'a ConvTranspose1d weight in Conv1d layout',
       layer: () => new ConvTranspose1d(16, 8, 4, { stride: 2 }),
@@ -542,16 +579,16 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       error: /expected \[in, out·kernel\] = \[16, 32\]/,
     },
     {
+      name: 'a weight of another shape on one input channel',
+      layer: () => new Conv1d(1, 4, 3),
+      file: () => quantCheckpoint(8, 4, { weight: zeros(3, 4, 1) }),
+      error: /expected \[out, in·kernel\] = \[4, 3\]/,
+    },
+    {
       name: 'a weight of another shape',
       layer: () => new Conv1d(8, 4, 3),
       file: () => quantCheckpoint(8, 8, { weight: zeros(4, 16, 2) }),
       error: /expected \[out, in·kernel\] = \[4, 24\]/,
-    },
-    {
-      name: 'out that is not a multiple of 4',
-      layer: () => new ConvTranspose1d(8, 2, 4, { stride: 2 }),
-      file: () => quantCheckpoint(8, 8, { weight: zeros(8, 8, 1) }),
-      error: /needs out a multiple of 4 and stride·out of 4, got out 2, stride 2/,
     },
   ])('refuses $name with CHECKPOINT_MISMATCH', async ({ layer, file, error }) => {
     const sd = await file();
@@ -982,8 +1019,8 @@ describe('normalization layers', () => {
     expect(() => new GroupNorm(3, 8)).toThrow(/numGroups 3 must divide the 8 channels/);
   });
 
-  it('RMSNorm has one scale per feature', () => {
-    expect(shapes(new RMSNorm(8))).toEqual({ scale: meta([8]) });
+  it('RMSNorm has one weight per feature', () => {
+    expect(shapes(new RMSNorm(8))).toEqual({ weight: meta([8]) });
   });
 
   it.each([
@@ -1047,6 +1084,28 @@ describe('Embedding', () => {
 
   it('gather() refuses a GPU table', () => {
     expect(() => new Embedding(3, 2).gather([0])).toThrow(/cpu-resident tables only/);
+  });
+
+  describe('with a quantized table', () => {
+    it('uploads an int8 table as int · scale, one scale per row', async () => {
+      const sd = await quantCheckpoint(8, 4, {
+        weight: { ints: [1, -2, 3, -4, 5, 6, -7, 8], scales: [0.5, 2], shape: [2, 4] },
+      });
+      expect(await uploadedWeight(new Embedding(2, 4), sd)).toEqual(
+        new Float32Array([0.5, -1, 1.5, -2, 10, 12, -14, 16]),
+      );
+    });
+
+    it('gathers rows of an int4 table in groups of 2 on the CPU', async () => {
+      const sd = await quantCheckpoint(4, 2, {
+        weight: { ints: [1, -2, 3, -4, 5, 6, -7, 7], scales: [0.5, 1, 2, 0.25], shape: [2, 4] },
+      });
+      const e = new Embedding(2, 4, { device: 'cpu' });
+      const upload = vi.fn();
+      await loadLazyStateDict(e, sd, { upload });
+      expect(upload).not.toHaveBeenCalled();
+      expect(e.gather([1, 0])).toEqual(new Float32Array([10, 12, -1.75, 1.75, 0.5, -1, 3, -4]));
+    });
   });
 });
 

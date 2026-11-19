@@ -44,6 +44,13 @@ Short bad/good pairs are in [examples.md](examples.md).
 - Match the file: naming, error messages, how options and defaults are
   destructured. If you see a better way, do not mix two styles: change
   every place in its own PR, or suggest it and leave it.
+- Structure a model so its module tree matches the checkpoint: field
+  names and nesting follow the state-dict keys, in their case
+  (`self_attn`, `LayerNorm`, `model.decoder.embed_tokens`), so loading
+  needs no renames. A state-dict hook only builds derived tensors (a fused
+  `qkv`, a folded scale, a table computed on the CPU), under the
+  checkpoint-named parent. Moonshine, MiniLM and EmbeddingGemma 2 are
+  the examples.
 - Keep a concept in one place. Two copies of the same logic drift apart.
 
 ## Types

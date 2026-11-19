@@ -17,7 +17,7 @@ import { createTokenizer } from './tokenizer.ts';
 import { ViterbiDecoder } from './viterbi.ts';
 import { assembleDetect, type Detector } from './pipeline.ts';
 import { EagerModel } from './model.ts';
-import { transformHfPrivacyFilterStateDict } from './stateDictHooks.ts';
+import { renameExportedNormScales, transformHfPrivacyFilterStateDict } from './stateDictHooks.ts';
 import type { ModelLoadOptions } from '../load.ts';
 
 const BLOCKS = 8;
@@ -45,6 +45,8 @@ export async function loadPrivacyFilterModel(
       if (isRunntimeError(err)) throw err;
       throw mismatch(messageOf(err));
     }
+  } else {
+    renameExportedNormScales(sd);
   }
   if (sd.metadata['model'] !== 'privacy-filter') {
     throw mismatch(`file is for model '${sd.metadata['model']}', expected 'privacy-filter'`);

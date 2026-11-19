@@ -140,7 +140,8 @@ export {
   chunkedSource,
   httpRangeSource,
   parseSafetensorsHeader,
-  derivedTensor,
+  derive,
+  deriveFromTensors,
   eagerTensor,
   fromSafetensors,
   memoryStateDict,
@@ -150,6 +151,8 @@ export { createOpfsCache } from './weights/opfsCache.ts';
 export { foldBnIntoConv } from './weights/foldBn.ts';
 export {
   concatRows,
+  dequantize,
+  floatTensor,
   permuteRows,
   reshapeWeight,
   scaleWeight,
