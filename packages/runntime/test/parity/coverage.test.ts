@@ -4,12 +4,15 @@ import { describe, expect, it } from 'vitest';
 import { EMBEDDINGGEMMA2_PARITY } from '../zoo/embeddinggemma2/parity.manifest.ts';
 import { MINILM_PARITY } from '../zoo/minilm/parity.manifest.ts';
 import { MOBILENETV4_PARITY } from '../zoo/mobilenetv4/parity.manifest.ts';
+import { MOONSHINE_BASE_PARITY, MOONSHINE_TINY_PARITY } from '../zoo/moonshine/parity.manifest.ts';
 import { covers, modelEntries, type ParityManifest } from './manifest.ts';
 
 const MANIFESTS: readonly ParityManifest[] = [
   EMBEDDINGGEMMA2_PARITY,
   MINILM_PARITY,
   MOBILENETV4_PARITY,
+  MOONSHINE_TINY_PARITY,
+  MOONSHINE_BASE_PARITY,
 ];
 
 /** Families in `models` without a manifest, by the start of their entries'
@@ -17,7 +20,6 @@ const MANIFESTS: readonly ParityManifest[] = [
  *  added here: it lands with a manifest. */
 const PENDING = [
   'privacyFilter.PRIVACY_FILTER',
-  'speechToText.MOONSHINE',
   'speechToText.MOONSHINE_STREAMING',
   'textToSpeech.REVERB',
   'objectDetection.YOLO26',
