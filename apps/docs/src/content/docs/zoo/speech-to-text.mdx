@@ -139,13 +139,13 @@ const micAudio = await resampleAudio(micSamples, audioContext.sampleRate);
 ```
 
 ```ts
-function decodeAudio(bytes: ArrayBuffer): Promise<Float32Array>;
+function decodeAudio(bytes: ArrayBuffer, sampleRate?: number): Promise<Float32Array>;
 function resampleAudio(samples: Float32Array, sourceRate: number): Promise<Float32Array>;
 const SPEECH_SAMPLE_RATE: 16000;
 ```
 
-- **decodeAudio(bytes)** - decodes a clip and resamples it to 16 kHz. Stereo
-  is mixed down to mono.
+- **decodeAudio(bytes, sampleRate?)** - decodes a clip and resamples it to
+  `sampleRate`, 16 kHz by default. Stereo is mixed down to mono.
 - **resampleAudio(samples, sourceRate)** - resamples mono samples to 16 kHz.
 - **SPEECH_SAMPLE_RATE** - 16000, for an `AudioContext` that records at the
   right rate from the start.

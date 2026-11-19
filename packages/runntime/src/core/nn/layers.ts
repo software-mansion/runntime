@@ -49,7 +49,9 @@ import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
  *
  *  On 'gpu' the weight doubles as a tied LM head, read through `weight.value`
  *  in its raw orientation. On 'cpu' it never reaches the GPU — forward()
- *  gathers the requested rows and uploads those — and tying is unavailable. */
+ *  gathers the requested rows and uploads those — and tying is unavailable.
+ *
+ *  A quantized checkpoint weight loads as its dequantized floats. */
 export class Embedding extends Module<[readonly number[] | Value], Value> {
   readonly weight: Parameter;
   constructor(
@@ -66,6 +68,11 @@ export class Embedding extends Module<[readonly number[] | Value], Value> {
             dims: [numEmbeddings, embeddingDim],
           })
         : new Parameter(matrix(numEmbeddings, embeddingDim));
+  }
+  override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    const name = prefix ? `${prefix}.weight` : 'weight';
+    const t = sd.tensors.get(name);
+    if (t?.kind === 'quant') sd.tensors.set(name, dequantize(t));
   }
   /** CPU gather of the requested rows. cpu tables only. */
   gather(tokenIds: readonly number[]): Float32Array {

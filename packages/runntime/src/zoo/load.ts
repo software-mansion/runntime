@@ -65,6 +65,22 @@ export async function openWeights(
   }
 }
 
+/** One onProgress for several files loading at once: `track(file)` gives a
+ *  file's callback, and each call reports the bytes of every file together. */
+export function combinedProgress(onProgress: LoadOptions['onProgress']) {
+  const progress = new Map<string, [number, number]>();
+  return (file: string) => (name: string, done: number, total: number) => {
+    progress.set(file, [done, total]);
+    let d = 0;
+    let t = 0;
+    for (const [fd, ft] of progress.values()) {
+      d += fd;
+      t += ft;
+    }
+    onProgress?.(name, d, t);
+  };
+}
+
 /** Downloads and parses a JSON file (a tokenizer, a config). With a cache,
  *  the bytes are saved under `cacheId` (the file name by default) and reused
  *  on the next load. Fails with LOAD_FAILED, naming the URL, or

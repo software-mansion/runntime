@@ -194,7 +194,7 @@ abSuite('attention', [
     kvHeads: 6,
     headDim: 48,
   }),
-  sdpa('flash f16 + key bias, Echo 12/6 heads hd 128, 335 rows over 640 keys', {
+  sdpa('flash f16 + key bias, Reverb 12/6 heads hd 128, 335 rows over 640 keys', {
     qLen: 335,
     kvLen: 640,
     qHeads: 12,
@@ -273,7 +273,7 @@ abSuite('attention', [
     headDim: 32,
     noSubgroups: true,
   }),
-  sdpa('rowsSplit + key bias, Echo 12/6 heads hd 128, 335 rows over 640 keys', {
+  sdpa('rowsSplit + key bias, Reverb 12/6 heads hd 128, 335 rows over 640 keys', {
     qLen: 335,
     kvLen: 640,
     qHeads: 12,

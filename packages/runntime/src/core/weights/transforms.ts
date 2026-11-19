@@ -401,6 +401,11 @@ export function dequantize(t: QuantTensor, shape: readonly number[] = t.shape): 
   return deriveFromTensors([...shape], [t], async ([t]) => {
     const [ints, scales] = await Promise.all([t.ints(), t.scales()]);
     const f32 = toF32(scales);
-    return Float32Array.from(ints, (q, i) => q * f32[Math.floor(i / t.groupSize)]!);
+    const out = new Float32Array(ints.length);
+    for (let g = 0, i = 0; g < f32.length; g++) {
+      const scale = f32[g]!;
+      for (const end = i + t.groupSize; i < end; i++) out[i] = ints[i]! * scale;
+    }
+    return out;
   });
 }

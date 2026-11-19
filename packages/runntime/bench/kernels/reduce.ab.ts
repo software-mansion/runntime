@@ -39,7 +39,7 @@ const rmsNorm = (name: string, m: number, n: number, dtype: Float) =>
     return () => version.lib.rmsNorm(x, w, 1e-5);
   });
 
-/** Echo's sampler: `blocks` codebooks of 1025 logits per row, then 2 padding
+/** Reverb's sampler: `blocks` codebooks of 1025 logits per row, then 2 padding
  *  columns. The last logit of each codebook is the mask, which the argmax
  *  skips. */
 const logitStats = (name: string, m: number, blocks: number, guided: boolean): AbCase =>
@@ -91,8 +91,8 @@ abSuite('reduce', [
   ),
   rows('topk 4 f16, router [64,128]', 64, 128, 'f16', (version, x) => () => version.lib.topk(x, 4)),
 
-  logitStats('logitStats f16, Echo coarse pass [335,2052], 2 × 1025', 335, 2, false),
-  logitStats('logitStats f16 + guide, Echo fine pass [335,6152], 6 × 1025', 335, 6, true),
+  logitStats('logitStats f16, Reverb coarse pass [335,2052], 2 × 1025', 335, 2, false),
+  logitStats('logitStats f16 + guide, Reverb fine pass [335,6152], 6 × 1025', 335, 6, true),
 
   rmsNorm('rmsNorm, privacy-filter [512,640]', 512, 640, 'f32'),
   rmsNorm('rmsNorm f16, privacy-filter [512,640]', 512, 640, 'f16'),

@@ -9,6 +9,7 @@ import type {
   EmbeddingModelLoad,
   EmbeddingTask,
 } from '../tasks/multimodal/embedding.ts';
+import { combinedProgress } from '../load.ts';
 import { imageBuffer, type ImageBuffer } from '../tasks/cv/image.ts';
 import { audioTokens, encodeAudio } from './audioEncoder.ts';
 import { EmbeddingGemma2AudioModel } from './audioModel.ts';
@@ -60,17 +61,7 @@ export async function createEmbeddingModel(load: EmbeddingModelLoad): Promise<Em
       audio?.half();
     }
     // The files load at once; progress counts their bytes together.
-    const progress = new Map<string, [number, number]>();
-    const track = (file: string) => (name: string, done: number, total: number) => {
-      progress.set(file, [done, total]);
-      let d = 0;
-      let t = 0;
-      for (const [fd, ft] of progress.values()) {
-        d += fd;
-        t += ft;
-      }
-      load.onProgress?.(name, d, t);
-    };
+    const track = combinedProgress(load.onProgress);
     const loads = [model.loadStateDict(load.text, { onProgress: track('text') })];
     if (vision && load.vision) {
       loads.push(vision.loadStateDict(load.vision, { onProgress: track('vision') }));
