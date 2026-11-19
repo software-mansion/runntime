@@ -19,6 +19,21 @@ export interface Threshold {
   readonly source: string;
 }
 
+/** An f32 output within three times the reference noise. */
+export const WITHIN_NOISE = {
+  value: 3,
+  timesNoise: true,
+  source: 'three times the noise in meta.json',
+} as const;
+
+/** The same limit for a cosine distance. */
+export const COSINE_WITHIN_NOISE = {
+  value: 9,
+  timesNoise: true,
+  source:
+    '1 − cos grows with the square of the error: nine times the noise is three times the noise in error',
+} as const;
+
 export interface ParityVariant<M extends ModelConfig> {
   readonly name: string;
   /** The entry in `models`. */
