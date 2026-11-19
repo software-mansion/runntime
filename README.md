@@ -23,7 +23,7 @@ Electron.
 It ships as one package, `runntime`, with two entry points:
 
 - **`runntime/zoo`** - ready-to-run model implementations for commonly used tasks: speech, vision, and natural language processing. You call a single function, and get a running model.
-- **`runntime/core`** - this package is not yet exposed to the public. It is a set of pre-built kernels for building neural networks on the Web, mirroring PyTorch semantics.
+- **`runntime/core`** - experimental: the API can change in any release. The engine the zoo is built on: pre-built kernels and PyTorch-style modules for building your own neural networks on the Web.
 
 ## Table of Contents
 

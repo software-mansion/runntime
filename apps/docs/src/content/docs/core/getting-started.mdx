@@ -1,0 +1,41 @@
+---
+title: Getting started
+description: Build your own model from the engine's ops, modules and weight loader.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+  `runntime/core` is experimental. Its exports, names and signatures can change in any release,
+  minor or patch, without a deprecation period. Pin an exact version of `runntime` if you depend on
+  it.
+</Aside>
+
+`runntime/core` is the engine the zoo is built on: graph ops (`matmul`,
+`sdpa`, `rope`, `rmsNorm`, …), PyTorch-style `nn` modules and a safetensors
+loader. Use it to run a model the zoo does not have.
+
+Ops do not touch the GPU. Each one checks its inputs and returns a pending
+`Value`. `toArray()` runs everything the value needs in one submit and reads
+it back.
+
+```ts twoslash
+import { add, initRunntime, matmul, tensor, toArray } from 'runntime/core';
+import tgpu from 'typegpu';
+
+// 1. Connect the engine to a WebGPU device, once per page.
+initRunntime(await tgpu.init({ device: { optionalFeatures: ['subgroups', 'shader-f16'] } }));
+
+// 2. Upload inputs as [rows, columns] matrices.
+const x = tensor(new Float32Array([1, 2, 3, 4]), [2, 2]);
+const w = tensor(new Float32Array([1, 0, 0, 1]), [2, 2]);
+
+// 3. Build the graph, then run it and read the result.
+const y = add(matmul(x, w), 1);
+console.log(await toArray(y));
+```
+
+The zoo and core share one engine, so `initRunntime()` from either entry
+point sets up both. The source of every zoo model, in
+[`src/zoo`](https://github.com/software-mansion/runntime/tree/main/packages/runntime/src/zoo),
+shows how to compose ops into a model and map a checkpoint onto it.

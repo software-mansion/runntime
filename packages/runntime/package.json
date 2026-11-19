@@ -32,6 +32,10 @@
     "dist"
   ],
   "exports": {
+    "./core": {
+      "types": "./dist/core/index.d.mts",
+      "default": "./dist/core/index.mjs"
+    },
     "./zoo": {
       "types": "./dist/zoo/index.d.mts",
       "default": "./dist/zoo/index.mjs"
