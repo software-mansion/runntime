@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type FloatBuffer,
@@ -28,7 +28,7 @@ function makeVariant(elem: Elem) {
     const m = layout.$.meta.mode;
     const cols = layout.$.meta.cols;
     if (m === 1) return i % cols; // row broadcast
-    if (m === 2) return d.u32(i / cols); // col broadcast
+    if (m === 2) return std.intdiv(i, cols); // col broadcast, u32 division: f32 / rounds past 2^24
     if (m === 3) return 0; // scalar broadcast (GPU-computed [1,1])
     return i; // elementwise
   };

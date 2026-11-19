@@ -5,7 +5,7 @@
  *  bias' = beta + (bias − mean) · scale. Grouping does not matter, since the
  *  scaling is per out-channel row either way. */
 import { RunntimeError } from '../error.ts';
-import { derivedTensor, type LazyStateDict, type LazyTensor } from './safetensors.ts';
+import { deriveFromTensors, type LazyStateDict, type LazyTensor } from './safetensors.ts';
 
 export function foldBnIntoConv(
   sd: LazyStateDict,
@@ -46,30 +46,24 @@ export function foldBnIntoConv(
         const scale = g[o]! / Math.sqrt(v[o]! + eps);
         const base = o * perOut;
         // In-place is safe only because `weight` is file-backed, so each f32()
-        // decodes a fresh array. A derived tensor would hand back a shared
-        // memoized array and this loop would corrupt it for every reader.
+        // decodes a fresh array. An in-memory tensor hands back the array it
+        // was made from, and this loop would corrupt it for every reader.
         for (let i = 0; i < perOut; i++) w[base + i]! *= scale;
         b[o] = be[o]! + ((prior?.[o] ?? 0) - m[o]!) * scale;
       }
       return { w, b };
     })());
 
+  const inputs = [weight, gamma, beta, mean, variance, ...(priorBias ? [priorBias] : [])];
   // All file bytes the fold downloads are attributed to the weight (bias
   // shares the same memoized fetch), keeping progress totals accurate.
-  const foldedBytes =
-    weight.byteLength +
-    gamma.byteLength +
-    beta.byteLength +
-    mean.byteLength +
-    variance.byteLength +
-    (priorBias?.byteLength ?? 0);
   sd.tensors.set(
     `${convPrefix}.weight`,
-    derivedTensor(weight.shape, async () => (await folded()).w, foldedBytes),
+    deriveFromTensors(weight.shape, inputs, async () => (await folded()).w),
   );
   sd.tensors.set(
     `${convPrefix}.bias`,
-    derivedTensor([cOut], async () => (await folded()).b),
+    deriveFromTensors([cOut], inputs, async () => (await folded()).b, 0),
   );
   for (const suffix of ['weight', 'bias', 'running_mean', 'running_var', 'num_batches_tracked']) {
     sd.tensors.delete(`${bnPrefix}.${suffix}`);

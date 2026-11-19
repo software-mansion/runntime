@@ -1,4 +1,4 @@
-/** Streaming state-dict loader: transform hooks, then a strict name check over
+/** Streaming state-dict loader: transform hooks, then a name check over
  *  headers alone, then per-tensor fetch, adapt, preprocess and upload. Peak
  *  host memory is one tensor's working set. */
 import type { TgpuRoot } from 'typegpu';
@@ -8,7 +8,12 @@ import { defaultRoot } from '../gpu/context.ts';
 import { inGpuErrorScopes } from '../gpu/errorScopes.ts';
 import { materialized, type Value, type ValueMeta } from '../graph/value.ts';
 import { bf16ToF16Bits, f32ArrayToF16Bits } from '../weights/convert.ts';
-import type { LazyStateDict, LazyTensor } from '../weights/safetensors.ts';
+import type {
+  DerivedTensor,
+  FileSource,
+  FileTensor,
+  LazyStateDict,
+} from '../weights/safetensors.ts';
 import { CpuParameter, type AnyModule } from './module.ts';
 
 export type UploadFn = (data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) => Value;
@@ -20,6 +25,11 @@ export interface LoadStateDictOpts {
   upload?: UploadFn;
   /** After each bound tensor: cumulative file bytes done / total. */
   onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  /** Whether a tensor in the file that no parameter reads is an error
+   *  (CHECKPOINT_MISMATCH) rather than a warning. Default false, like
+   *  PyTorch's `strict=False`: the tensor is left unbound. A parameter the
+   *  file lacks is always an error, as it has no value to fall back to. */
+  strict?: boolean;
 }
 
 /** The default GPU upload.
@@ -53,7 +63,7 @@ export function gpuUpload(root: TgpuRoot): UploadFn {
   };
 }
 
-async function materialize(name: string, t: LazyTensor, want: ValueMeta['dtype']) {
+async function materialize(name: string, t: FileTensor | DerivedTensor, want: ValueMeta['dtype']) {
   if (want === 'f16') {
     // F16 bytes are already the buffer contents; BF16 converts directly, and
     // anything else rounds down from f32.
@@ -125,7 +135,7 @@ async function bindStateDict(
   const paramNames = new Set(params.map(([n]) => n));
   const missing = params.filter(([n]) => !sd.tensors.has(n)).map(([n]) => n);
   const unexpected = [...sd.tensors.keys()].filter((n) => !paramNames.has(n));
-  if (missing.length || unexpected.length) {
+  if (missing.length || (unexpected.length && opts.strict)) {
     throw new RunntimeError(
       'CHECKPOINT_MISMATCH',
       'loadStateDict: state dict does not match model.' +
@@ -133,23 +143,68 @@ async function bindStateDict(
         (unexpected.length ? ` unexpected: ${list(unexpected)}.` : ''),
     );
   }
+  if (unexpected.length) {
+    console.warn(
+      `loadStateDict: state dict has tensors the model does not read: ${list(unexpected)}.`,
+    );
+  }
 
-  // Bind in state-dict (file) order, so each chunk is read once. Module order
-  // jumps around the payload and refetches evicted chunks. Keys a transform
-  // added sort last; they read nothing new.
-  const position = new Map([...sd.tensors.keys()].map((name, i) => [name, i]));
-  params.sort(([a], [b]) => (position.get(a) ?? Infinity) - (position.get(b) ?? Infinity));
+  // Bind in file order, so each chunk is read once. Module order jumps
+  // around the payload and refetches evicted chunks. A tensor sits where the
+  // largest of its sources does, whatever key a hook gave it, before or
+  // during the load: exporters often park the small tensors at the front of
+  // the file, far from the weight they fold into. Of sources as large, the
+  // first in the file counts. One read from no file tensor sits last.
+  const dictOrder = new Map([...sd.tensors.keys()].map((name, i) => [name, i]));
+  const fileOrder = new Map(
+    params.map(([name]) => {
+      const largest = sd.tensors
+        .get(name)!
+        .sources.reduce<FileSource | undefined>(
+          (best, s) =>
+            !best ||
+            s.byteLength > best.byteLength ||
+            (s.byteLength === best.byteLength && s.position < best.position)
+              ? s
+              : best,
+          undefined,
+        );
+      return [name, largest?.position ?? Infinity];
+    }),
+  );
+  params.sort(([a], [b]) =>
+    fileOrder.get(a) === fileOrder.get(b)
+      ? dictOrder.get(a)! - dictOrder.get(b)!
+      : fileOrder.get(a)! - fileOrder.get(b)!,
+  );
 
-  const total = sd.totalBytes();
+  // Unbound tensors are never read, so they do not count towards the total.
+  const total = params.reduce((sum, [name]) => sum + sd.tensors.get(name)!.byteLength, 0);
   let done = 0;
   for (const [name, p] of params) {
     const t = sd.tensors.get(name)!;
-    const numel = t.shape.reduce((a, b) => a * b, 1);
-    const expected = numel;
-    if (expected !== p.shape.elems) {
+    // Linear's and the convs' hooks turn a quantized weight into quantW
+    // words, so a QuantTensor still here is bound to something else.
+    if (t.kind === 'quant') {
       throw new RunntimeError(
         'CHECKPOINT_MISMATCH',
-        `loadStateDict: '${name}' checkpoint shape [${t.shape}] (${numel} elems) != model ${JSON.stringify(p.shape.dims)} (${p.shape.elems} ${p.shape.dtype === 'quantW' ? 'words' : 'elems'})`,
+        `loadStateDict: '${name}' is quantized (int${t.bits}), but only a Linear, Conv1d or ` +
+          `ConvTranspose1d weight loads quantized and this parameter holds ${p.shape.dtype}`,
+      );
+    }
+    const numel = t.shape.reduce((a, b) => a * b, 1);
+    // A quantW slot counts u32 words under logical dims. Privacy-filter's
+    // pre-packed U32 file tensors count words too; anything else, like
+    // Linear's packed weight, counts logical values.
+    const words = p.shape.dtype === 'quantW' && t.kind === 'file' && t.dtype === 'U32';
+    const expected =
+      p.shape.dtype === 'quantW' && !words
+        ? p.shape.dims!.reduce((a, b) => a * b, 1)
+        : p.shape.elems;
+    if (numel !== expected) {
+      throw new RunntimeError(
+        'CHECKPOINT_MISMATCH',
+        `loadStateDict: '${name}' checkpoint shape [${t.shape}] (${numel} elems) != model ${JSON.stringify(p.shape.dims)} (${expected} ${words ? 'words' : 'elems'})`,
       );
     }
     if (p instanceof CpuParameter) {

@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 import {
@@ -10,8 +10,10 @@ import {
 } from '../common.ts';
 import { activationFor, actSlot } from '../activations.ts';
 import { type Elem, F32_ELEM } from '../elem.ts';
+import type { ScaleAt, ScaleSource } from '../matmul/matmulQuantTiled.ts';
+import { type ASource, type LoadA, matmulTiledVec4Layout } from '../matmul/matmulTiledVec4.ts';
 
-/** Direct strided 1-D convolution, time-major.
+/** Direct strided, dilated 1-D convolution, time-major.
  *
  *  One thread per (output frame, 4-channel unit) holds a vec4 accumulator, so
  *  each x value is loaded once and feeds four output channels. The last unit
@@ -31,6 +33,7 @@ const Dims = d.struct({ tIn: d.u32, tOut: d.u32 });
 const Config = d.struct({
   kernel: d.u32,
   stride: d.u32,
+  dilation: d.u32,
   cIn: d.u32,
   cOut: d.u32,
   c4c: d.u32, // ceil(cOut/4) — channel units per frame (tail unit may be partial)
@@ -40,6 +43,7 @@ const Config = d.struct({
 const config = tgpu.accessor(Config, {
   kernel: 1,
   stride: 1,
+  dilation: 1,
   cIn: 1,
   cOut: 1,
   c4c: 1,
@@ -78,8 +82,8 @@ function makeConv1dVariant(elem: Elem) {
     if (ch0 + 4 <= C.cOut) {
       let acc = d.vec4f();
       for (let tap = d.u32(0); tap < C.kernel; tap++) {
-        if (windowStart + tap >= C.padLeft) {
-          const xFrame = windowStart + tap - C.padLeft;
+        if (windowStart + tap * C.dilation >= C.padLeft) {
+          const xFrame = windowStart + tap * C.dilation - C.padLeft;
           if (xFrame < tIn) {
             const xBase = xFrame * C.cIn;
             const wBase = tap * C.cIn * C.cOut;
@@ -134,8 +138,8 @@ function makeConv1dVariant(elem: Elem) {
     for (let ch = ch0; ch < C.cOut; ch++) {
       let acc = d.f32(0);
       for (let tap = d.u32(0); tap < C.kernel; tap++) {
-        if (windowStart + tap >= C.padLeft) {
-          const xFrame = windowStart + tap - C.padLeft;
+        if (windowStart + tap * C.dilation >= C.padLeft) {
+          const xFrame = windowStart + tap * C.dilation - C.padLeft;
           if (xFrame < tIn) {
             const xBase = xFrame * C.cIn;
             const wBase = tap * C.cIn * C.cOut;
@@ -170,6 +174,7 @@ export function createConv1dPipeline(
   cfg: {
     kernel: number;
     stride: number;
+    dilation?: number;
     cIn: number;
     cOut: number;
     padLeft: number;
@@ -182,6 +187,7 @@ export function createConv1dPipeline(
     .with(config, {
       kernel: cfg.kernel,
       stride: cfg.stride,
+      dilation: cfg.dilation ?? 1,
       cIn: cfg.cIn,
       cOut: cfg.cOut,
       c4c: Math.ceil(cfg.cOut / 4),
@@ -212,4 +218,78 @@ export function conv1dHandle(
     bindGroup,
     Math.ceil((args.tOut * Math.ceil(args.cOut / 4)) / WORKGROUP_SIZE),
   );
+}
+
+/** Runs a padded or dilated conv1d on a tiled matmul: row i of a is output
+ *  frame i's window over the [aRows, cIn] input, and tap j of it reads frame
+ *  i·stride + j·dilation − padLeft, zero outside the input. */
+export function conv1dLoadA(
+  elem: Elem,
+  geom: { cIn: number; stride: number; dilation: number; padLeft: number },
+  source: ASource = matmulTiledVec4Layout(elem),
+): LoadA {
+  const storeVec4 = elem.vec4;
+  const cIn4 = geom.cIn / 4;
+  const { stride, dilation, padLeft } = geom;
+  return (row: number, k4: number) => {
+    'use gpu';
+    const tap = std.intdiv(k4, cIn4);
+    const pos = d.i32(row * stride + tap * dilation) - padLeft;
+    let v = storeVec4();
+    if (pos >= 0 && pos < d.i32(source.$.dims.aRows)) {
+      v = storeVec4(source.$.a[d.u32(pos) * cIn4 + (k4 % cIn4)]!);
+    }
+    return v;
+  };
+}
+
+/** Reads the scales of a Conv1d weight quantized in torch layout [out,
+ *  in·kernel], one per groupSize values of a row, stored as [in·kernel /
+ *  groupSize, n]. Row tap·cIn + c of W is value c·kernel + tap of the torch
+ *  row, so a group can end inside a channel. */
+export function conv1dScales(
+  geom: { cIn: number; kernel: number; groupSize: number; n: number },
+  source: ScaleSource,
+): ScaleAt {
+  const { cIn, kernel, groupSize } = geom;
+  const n4 = geom.n / 4;
+  return (row: number, col4: number) => {
+    'use gpu';
+    const g = std.intdiv((row % cIn) * kernel + std.intdiv(row, cIn), groupSize);
+    return d.vec4f(source.$.scales[g * n4 + col4]!);
+  };
+}
+
+/** Reads the scales of a ConvTranspose1d weight quantized in torch layout
+ *  [in, out·kernel], one per groupSize values of a row, stored as is. The
+ *  layer runs as a conv over kernel / stride taps: row i·cIn + c, column
+ *  r·out + o of W is kernel position (taps − 1 − i)·stride + r of input c and
+ *  output o. A group can span several outputs, so each column reads its own
+ *  scale. out is a multiple of 4. */
+export function convTransposeScales(
+  geom: { cIn: number; out: number; kernel: number; stride: number; groupSize: number },
+  source: ScaleSource,
+): ScaleAt {
+  const { cIn, out, kernel, stride, groupSize } = geom;
+  const last = kernel / stride - 1;
+  const groups = (out * kernel) / groupSize;
+  const scale = (i: number) => {
+    'use gpu';
+    return source.$.scales[std.intdiv(i, 4)]![i % 4]!;
+  };
+  return (row: number, col4: number) => {
+    'use gpu';
+    const c = row % cIn;
+    const col = col4 * 4;
+    // The 4 columns share a frame r and hold outputs o to o + 3, kernel
+    // values apart in the torch row.
+    const at = (col % out) * kernel + (last - std.intdiv(row, cIn)) * stride + std.intdiv(col, out);
+    const base = c * groups;
+    return d.vec4f(
+      scale(base + std.intdiv(at, groupSize)),
+      scale(base + std.intdiv(at + kernel, groupSize)),
+      scale(base + std.intdiv(at + 2 * kernel, groupSize)),
+      scale(base + std.intdiv(at + 3 * kernel, groupSize)),
+    );
+  };
 }

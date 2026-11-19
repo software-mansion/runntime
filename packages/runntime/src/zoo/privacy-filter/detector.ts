@@ -17,7 +17,8 @@ import { createTokenizer } from './tokenizer.ts';
 import { ViterbiDecoder } from './viterbi.ts';
 import { assembleDetect, type Detector } from './pipeline.ts';
 import { EagerModel } from './model.ts';
-import { transformHfPrivacyFilterStateDict } from './stateDictHooks.ts';
+import { renameExportedNormScales, transformHfPrivacyFilterStateDict } from './stateDictHooks.ts';
+import type { ModelLoadOptions } from '../load.ts';
 
 const BLOCKS = 8;
 const EXPERTS = 128;
@@ -32,9 +33,7 @@ const mismatch = (message: string) => checkpointMismatch('privacy-filter weights
 
 export async function loadPrivacyFilterModel(
   sd: LazyStateDict,
-  opts: {
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
-  } = {},
+  opts: ModelLoadOptions = {},
 ): Promise<LoadedPrivacyFilterModel> {
   const device = defaultRoot().device;
   // The Hub file has no model metadata and transformers tensor names, so
@@ -46,6 +45,8 @@ export async function loadPrivacyFilterModel(
       if (isRunntimeError(err)) throw err;
       throw mismatch(messageOf(err));
     }
+  } else {
+    renameExportedNormScales(sd);
   }
   if (sd.metadata['model'] !== 'privacy-filter') {
     throw mismatch(`file is for model '${sd.metadata['model']}', expected 'privacy-filter'`);
@@ -97,7 +98,7 @@ export async function loadPrivacyFilterModel(
       : 'f32';
   try {
     await model.loadStateDict(sd, { onProgress: opts.onProgress });
-    await warmUp(device, () => toArray(model.forward([1000])));
+    if (opts.warmUp !== false) await warmUp(device, () => toArray(model.forward([1000])));
   } catch (err) {
     model.dispose();
     throw err;
@@ -107,15 +108,10 @@ export async function loadPrivacyFilterModel(
 
 export async function createDetector(
   sd: LazyStateDict,
-  opts: {
-    biases?: ViterbiBiases;
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
-  } = {},
+  opts: ModelLoadOptions & { biases?: ViterbiBiases } = {},
 ): Promise<Detector> {
   const device = defaultRoot().device;
-  const { model, weightFormat } = await loadPrivacyFilterModel(sd, {
-    onProgress: opts.onProgress,
-  });
+  const { model, weightFormat } = await loadPrivacyFilterModel(sd, opts);
   const tokenizer = createTokenizer();
   const info = buildLabelInfo(V2_NER_CLASS_NAMES);
   const decoder = new ViterbiDecoder(info, opts.biases ?? ZERO_BIASES);

@@ -228,7 +228,8 @@ describe('attn kernels', () => {
       subgroups: false,
       c: { qLen: GRID_Y_STRIDE + 5, kvLen: 4, qHeads: 1, kvHeads: 1, headDim: 2 },
     })),
-    // batch: with GQA, a window, sinks and segments on the serial kernel
+    // batch: with GQA, a window, sinks, segments and a key bias on the serial
+    // kernel
     {
       name: 'past GRID_Y_STRIDE row-heads with every option (batch)',
       device: 'noSubgroups',
@@ -244,6 +245,7 @@ describe('attn kernels', () => {
         windowRight: 0,
         sinks: true,
         segments: true,
+        keyBias: true,
       },
     },
   ];

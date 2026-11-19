@@ -149,7 +149,8 @@ wait for the GPU. Work you submit after it sees the map.
 - a texture: a `GPUTexture`, a TypeGPU texture with `sampled` usage, or a
   `GPUExternalTexture` from a video. It is fitted like an `ImageBuffer`,
   with the estimator's `resizeMode`, and each value 0-1 counts as a byte
-  0-255. Formats: `rgba8unorm`, `bgra8unorm`, `rgb10a2unorm`,
+  0-255; values outside 0-1 are clamped. Formats: `rgba8unorm`,
+  `bgra8unorm`, `rgb10a2unorm`,
   `rgba16float`, `rgba32float`. sRGB formats are rejected: the GPU would
   turn their values linear, which the model was not trained on.
 - a buffer holding the model input as is: 3×448×448 f32, normalized RGB,
@@ -231,7 +232,7 @@ await createDepthEstimator({ modelPath: '/models/depthart-s/model.safetensors' }
 
 ## Loading options
 
-The second argument controls the download. Every field is optional.
+The second argument controls the download and the warm-up run. Every field is optional.
 
 ```ts
 interface LoadOptions {
@@ -240,8 +241,15 @@ interface LoadOptions {
   onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
   onBytes?: (chunkBytes: number) => void;
   signal?: AbortSignal;
+  warmUp?: boolean;
 }
 ```
+
+By default `create` runs the model once on a blank input before it returns,
+so the kernels compile during the load and a GPU error fails the load.
+With `warmUp: false` it skips that run and returns sooner. The first call
+then pays the compile time, and a GPU error is not reported: the call
+returns zeros instead of throwing.
 
 Example:
 

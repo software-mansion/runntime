@@ -212,7 +212,7 @@ entry. Without `modelPath`, the model is EmbeddingGemma 2.
 
 ## Loading options
 
-The second argument controls the download. Every field is optional.
+The second argument controls the download and the warm-up run. Every field is optional.
 
 ```ts
 interface LoadOptions {
@@ -221,8 +221,15 @@ interface LoadOptions {
   onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
   onBytes?: (chunkBytes: number) => void;
   signal?: AbortSignal;
+  warmUp?: boolean;
 }
 ```
+
+By default `create` runs the model once on a blank input before it returns,
+so the kernels compile during the load and a GPU error fails the load.
+With `warmUp: false` it skips that run and returns sooner. The first call
+then pays the compile time, and a GPU error is not reported: the call
+returns zeros instead of throwing.
 
 Example:
 

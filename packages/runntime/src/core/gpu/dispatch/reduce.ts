@@ -6,6 +6,7 @@ import { createMeanPipeline, meanHandle } from '../../kernels/reduce/reduce.ts';
 import { createLayerNormPipeline, layerNormHandle } from '../../kernels/reduce/layerNorm.ts';
 import { createRmsNormPipeline, rmsNormHandle } from '../../kernels/reduce/rmsNorm.ts';
 import { createTopkSelectPipeline, topkSelectHandle } from '../../kernels/reduce/topkSelect.ts';
+import { createLogitStatsPipeline, logitStatsHandle } from '../../kernels/reduce/logitStats.ts';
 import { defineSpec, floatDtype, narrow, narrowFloat } from './spec.ts';
 
 export const softmaxSpec = defineSpec({
@@ -149,6 +150,43 @@ export const topkSpec = defineSpec({
         { tokens, experts },
         { logits: narrowFloat(inputs[0]!, input.dtype), out: narrow(out, 'f32') },
         elemFor(input.dtype),
+      ),
+    ];
+  },
+});
+
+export const logitStatsSpec = defineSpec({
+  attrs: (p) => {
+    const [blocks, block, argmaxCols, guided, weight] = p.attrs as [
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    return { blocks, block, argmaxCols, guided, weight };
+  },
+  cfg: (node, attrs) => ({
+    blocks: attrs.blocks,
+    block: attrs.block,
+    argmaxCols: attrs.argmaxCols,
+    guided: attrs.guided,
+    inDtype: node.pending!.inputs[0]!.shape.dtype,
+  }),
+  pipeline: (root, _dtype, cfg) => createLogitStatsPipeline(root, cfg, elemFor(cfg.inDtype)),
+  encode: ({ node, attrs, cfg, pipeline, inputs, out, ctx }) => {
+    const [rows, cols] = node.pending!.inputs[0]!.shape.dims as [number, number];
+    return [
+      logitStatsHandle(
+        ctx.root,
+        pipeline,
+        { rows, rowStride: cols, blocks: attrs.blocks, weight: attrs.weight },
+        {
+          x: narrowFloat(inputs[0]!, cfg.inDtype),
+          guide: attrs.guided === 1 ? narrowFloat(inputs[1]!, cfg.inDtype) : undefined,
+          out: narrow(out, 'f32'),
+        },
+        elemFor(cfg.inDtype),
       ),
     ];
   },

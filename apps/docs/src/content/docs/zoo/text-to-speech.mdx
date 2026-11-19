@@ -1,0 +1,254 @@
+---
+title: Text to speech
+description: Turn text into spoken audio.
+---
+
+Text to speech turns written text into spoken audio. It powers voice
+replies, read-aloud, narration and dubbing.
+
+With no arguments, `createTextToSpeech` runs
+[Reverb](https://huggingface.co/software-mansion/Reverb-TTS), a voice
+cloning model: it speaks the text in the voice of a short reference clip,
+in English, German, French, Spanish, Italian, Polish or Portuguese.
+
+## Quick start
+
+Reverb expects text written the way it is spoken, so the example passes
+`verbalize` with [Verbalis](https://www.npmjs.com/package/verbalis)
+(`npm i verbalis`) to read numbers, dates and symbols as words.
+
+```ts twoslash
+import type { Voice } from 'runntime/zoo';
+declare const voice: Voice;
+// ---cut---
+import { createTextToSpeech, models } from 'runntime/zoo';
+import { Verbalizer } from 'verbalis';
+
+// 1. Load the model once. The weights download from the Hugging Face Hub.
+const tts = await createTextToSpeech({
+  ...models.textToSpeech.REVERB.DEFAULT,
+  verbalize: (text, language) => new Verbalizer(language).process(text),
+});
+
+// 2. Speak a text in a voice: mono samples at tts.sampleRate come back.
+const audio = await tts.synthesize('It is 21 °C today.', voice);
+
+// 3. Free the GPU memory when done.
+tts.dispose();
+```
+
+The engine must be set up first, see [Getting started](/zoo/getting-started/).
+
+## Methods
+
+```ts
+function createTextToSpeech(
+  model?: TextToSpeechModel,
+  options?: LoadOptions,
+): Promise<TextToSpeech>;
+
+interface TextToSpeech {
+  readonly sampleRate: number;
+  synthesize(text: string, voice: Voice, options?: SynthesizeOptions): Promise<Float32Array>;
+  dispose(): void;
+}
+
+interface SynthesizeOptions {
+  readonly steps?: number; // default 8
+  readonly seed?: number; // default 0
+  readonly raw?: boolean; // default false
+}
+```
+
+- `synthesize(text, voice, options?)` speaks `text` in `voice` and returns
+  mono samples at `sampleRate`. The length of the clip follows from the
+  text and the pace of the reference. Calls run one after another. A text
+  too long for one pass on the device throws `INVALID_ARGUMENT`, so split
+  long texts.
+  - **steps** - how many passes pick the codes.
+  - **seed** - an integer that seeds the random choices. The same text,
+    voice and seed give the same audio.
+  - **raw** - keeps the clip as decoded. By default the silence at both
+    ends is trimmed, to 100 ms.
+- `sampleRate` is the rate of the returned samples, 24000 for Reverb. Pass
+  it to an `AudioBuffer` to play them.
+- `dispose()` frees the GPU memory.
+
+## Voices
+
+A voice is a reference clip of the speaker, at least 3 seconds long, as
+Reverb reads it: the clip's
+[Higgs Audio v2](https://huggingface.co/eustlb/higgs-audio-v2-tokenizer)
+codec codes, its transcript and its language.
+
+```ts
+interface Voice {
+  readonly codes: Int32Array;
+  readonly frames: number;
+  readonly transcript: string;
+  readonly language: ReverbLanguage;
+  readonly speechFrames?: number;
+}
+
+type ReverbLanguage = 'en' | 'de' | 'fr' | 'es' | 'it' | 'pl' | 'pt';
+```
+
+- **codes** - the codec codes, 8 codebooks × `frames`, codebook-major: code
+  `t` of codebook `c` at `c * frames + t`. Each is in [0, 1024).
+- **frames** - the clip's length in codec frames, 25 per second. Under 75
+  (3 s) throws `INVALID_ARGUMENT`.
+- **transcript** - what is said in the clip, word for word.
+- **language** - the clip's language, an ISO 639-1 code. Any other value
+  throws `INVALID_ARGUMENT`.
+- **speechFrames** - optional. How many of the clip's frames the speaker
+  spends speaking, with the silent edges dropped and pauses capped at 0.5 s.
+  The output's pace follows it; without it, the whole clip counts.
+  `fromRecording` sets it. Not an integer of at least 1 throws
+  `INVALID_ARGUMENT`.
+
+`createVoiceMaker` makes a voice from a recording. It takes the same model
+config as `createTextToSpeech` and reads only its `codecPath`: the codec's
+encoder, about 170 MB, run in f32.
+
+```ts twoslash
+declare const file: File;
+// ---cut---
+import { createTextToSpeech, createVoiceMaker, decodeAudio, models } from 'runntime/zoo';
+import { Verbalizer } from 'verbalis';
+
+const model = {
+  ...models.textToSpeech.REVERB.DEFAULT,
+  verbalize: (text: string, language: string) => new Verbalizer(language).process(text),
+};
+
+// 1. Make the voice from a recording decoded at 24 kHz.
+const maker = await createVoiceMaker(model);
+const voice = await maker.fromRecording(await decodeAudio(await file.arrayBuffer(), 24_000), {
+  sampleRate: 24_000,
+  transcript: 'Hi, this is my voice for the demo.',
+  language: 'en',
+});
+maker.dispose();
+
+// 2. Speak in it, as often as you like.
+const tts = await createTextToSpeech(model);
+const audio = await tts.synthesize('The weather today is lovely.', voice);
+```
+
+```ts
+function createVoiceMaker(model?: TextToSpeechModel, options?: LoadOptions): Promise<VoiceMaker>;
+
+interface VoiceMaker {
+  readonly minSeconds: number;
+  readonly maxSeconds: number;
+  fromRecording(samples: Float32Array, options: FromRecordingOptions): Promise<Voice>;
+  dispose(): void;
+}
+
+interface FromRecordingOptions {
+  readonly sampleRate: number;
+  readonly transcript: string;
+  readonly language: ReverbLanguage;
+}
+```
+
+- `fromRecording(samples, options)` returns the voice of mono `samples` at
+  `sampleRate`, with their `transcript` and `language` as above. Calls run
+  one after another.
+- `minSeconds` and `maxSeconds` are the shortest and the longest recording
+  one call takes: 3 s, and about 20 s depending on the device. Any other
+  throws `INVALID_ARGUMENT`.
+- `dispose()` frees the GPU memory. `synthesize` does not need the maker.
+
+## Options
+
+The first argument is the model config, a plain object with the fields
+below. `models.textToSpeech.REVERB` holds ready-made ones: `INT4` (int4
+weights, the `DEFAULT`), `INT8` (int8 weights), `F16` (f16 weights, f16
+forced) and `F32` (f32 weights, f32 forced). Pass one as is, copy it with a
+field changed, or point at your own files.
+
+```ts
+interface TextToSpeechModel {
+  readonly modelPath?: ModelPath;
+  readonly codecPath?: ModelPath;
+  readonly tokenizerPath?: string;
+  readonly dtype?: 'f32' | 'f16';
+  readonly verbalize?: (text: string, language: ReverbLanguage) => string;
+}
+
+type ModelPath = string | RangeSource; // a URL, or bytes you already have
+```
+
+Example:
+
+```ts twoslash
+import { createTextToSpeech } from 'runntime/zoo';
+
+// Your own copy of the files.
+await createTextToSpeech({
+  modelPath: '/models/reverb/model.safetensors',
+  codecPath: '/models/higgs-audio-v2-tokenizer/model.safetensors',
+  tokenizerPath: '/models/reverb/tokenizer.json',
+});
+```
+
+- **modelPath** - the Reverb weights, a `model.safetensors` file: a hosted
+  int4, int8, f16 or f32 file, or your own copy of one. The weight format
+  is read from the file.
+- **codecPath** - the codec weights, a `model.safetensors` file: the hosted
+  one or the Higgs Audio v2 tokenizer's from the Hub. `createTextToSpeech` reads
+  its decoder, `createVoiceMaker` its encoder.
+- **tokenizerPath** - Reverb's `tokenizer.json`.
+- **dtype** - `'f16'` or `'f32'`, the precision of the math and the float
+  weights. `f16` needs a device with `shader-f16`. Default: `f16` where the
+  device has it, `f32` elsewhere. Both work with any weight file.
+- **verbalize** - rewrites the text and the voice's transcript the way
+  they are read aloud before `synthesize` speaks, in the voice's language:
+  numbers, dates and symbols as words, as Verbalis does in the examples
+  above. Without it both go to the model as written, digits and symbols
+  included. An empty result throws `INVALID_ARGUMENT`, and an error it
+  throws rejects `synthesize` as is.
+
+Every field is optional. A missing path comes from `REVERB.DEFAULT`.
+
+## Loading options
+
+The second argument controls the download. Every field is optional.
+
+```ts
+interface LoadOptions {
+  cache?: WeightCache;
+  cacheId?: string;
+  onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+  onBytes?: (chunkBytes: number) => void;
+  signal?: AbortSignal;
+}
+```
+
+Example:
+
+```ts twoslash
+import { createOpfsCache, createTextToSpeech, models } from 'runntime/zoo';
+
+const tts = await createTextToSpeech(models.textToSpeech.REVERB.DEFAULT, {
+  cache: await createOpfsCache('my-app'),
+  onProgress: (name, done, total) => console.log(`${Math.round((100 * done) / total)}%`),
+});
+```
+
+- **cache** - keeps the downloaded weights and tokenizer in the browser, so
+  the next visit loads them without the network. `createOpfsCache(name)` is
+  the built-in one.
+- **onProgress** - called while the weights upload to the GPU, with the
+  tensor name, bytes done and bytes total, the model and codec files
+  counted together. Use it for a progress bar.
+- **signal** - an `AbortSignal`. Abort it to stop the load between steps.
+  A step already running, like the download or the GPU upload, finishes
+  first.
+
+## Supported models
+
+| Model                                                        | Config                       | Languages                  | Parameters | Weights                                                                         |
+| ------------------------------------------------------------ | ---------------------------- | -------------------------- | ---------- | ------------------------------------------------------------------------------- |
+| [Reverb](https://huggingface.co/software-mansion/Reverb-TTS) | `models.textToSpeech.REVERB` | en, de, fr, es, it, pl, pt | 297M       | int4 191 MB, int8 307 MB, f16 594 MB, f32 1.19 GB, plus 26 MB of the codec file |

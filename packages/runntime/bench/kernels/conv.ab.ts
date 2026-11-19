@@ -4,7 +4,7 @@
  *  DepthART and Moonshine. */
 import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
-import { chw, convWeight, randHwc4, randMat } from './inputs.ts';
+import { chw, convWeight, quantWeight, randHwc4, randMat } from './inputs.ts';
 
 interface Conv {
   cIn: number;
@@ -69,20 +69,100 @@ function conv1d(
   k: number,
   stride: number,
   act?: 'tanh' | 'gelu',
+  geometry: { padLeft?: number; padRight?: number; dilation?: number } = {},
 ): AbCase {
   return {
     name,
     build: (version) => {
       const x = randMat(version, tIn, cIn);
-      const w = version.upload(
-        version.lib.convToTapMajor(version.rand(cOut * cIn * k), cOut, cIn, k),
-        {
-          elems: k * cIn * cOut,
-          dtype: 'f32',
-          dims: [k * cIn, cOut],
-        },
-      );
-      return () => version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act });
+      // Random taps need no tap-major reorder: a permutation of them is as
+      // random, and A and B draw the same numbers either way.
+      const w = version.upload(version.rand(cOut * cIn * k), {
+        elems: k * cIn * cOut,
+        dtype: 'f32',
+        dims: [k * cIn, cOut],
+      });
+      const call = () =>
+        version.lib.conv1d(x, w, { kernelSize: k, stride, activation: act, ...geometry });
+      // Built once here, so a base that refuses the geometry skips the case.
+      call();
+      return call;
+    },
+  };
+}
+
+/** conv1d with a quantW weight [k·cIn, cOut] and f32 scales [k·cIn /
+ *  groupSize, cOut], one per groupSize values of a torch row [cOut, cIn·k]. */
+function conv1dQuant(
+  name: string,
+  tIn: number,
+  cIn: number,
+  cOut: number,
+  k: number,
+  bits: 8 | 4,
+  groupSize: number,
+  geometry: { padLeft?: number; padRight?: number; dilation?: number } = {},
+  dtype: 'f32' | 'f16' = 'f32',
+): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      const x = randMat(version, tIn, cIn, dtype);
+      // The scales' values do not matter for timing.
+      const { w, scales } = quantWeight(version, 1, k * cIn, cOut, bits, groupSize);
+      const call = () =>
+        version.lib.conv1d(x, w, {
+          kernelSize: k,
+          stride: 1,
+          ...geometry,
+          scales,
+          bits,
+          groupSize,
+        });
+      // Built once here, so a base without quantW conv1d skips the case.
+      call();
+      return call;
+    },
+  };
+}
+
+/** A quantized ConvTranspose1d cIn→out with kernel 2·stride, as the layer
+ *  runs it: conv1d over 2 taps to stride·out channels, its scales [cIn,
+ *  out·kernel / groupSize] in torch layout. */
+function convTransposeQuant(
+  name: string,
+  tIn: number,
+  cIn: number,
+  out: number,
+  stride: number,
+  bits: 8 | 4,
+  groupSize: number,
+  dtype: 'f32' | 'f16' = 'f32',
+): AbCase {
+  const kernel = 2 * stride;
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      const x = randMat(version, tIn, cIn, dtype);
+      // As many scales as torch [cIn, out·kernel] has; their values do not
+      // matter for timing.
+      const { w, scales } = quantWeight(version, 1, 2 * cIn, stride * out, bits, groupSize);
+      const call = () =>
+        version.lib.conv1d(x, w, {
+          kernelSize: 2,
+          stride: 1,
+          padLeft: 1,
+          padRight: 1,
+          scales,
+          bits,
+          groupSize,
+          transposedKernel: kernel,
+        });
+      // Built once here, so a base without it skips the case.
+      call();
+      return call;
     },
   };
 }
@@ -235,6 +315,137 @@ abSuite('conv', [
   conv1d('conv1d + tanh, Moonshine-tiny stem 1→288 k127 s64', 16000, 1, 288, 127, 64, 'tanh'),
   conv1d('conv1d + gelu, Moonshine-tiny conv2 288→576 k7 s3', 249, 288, 576, 7, 3, 'gelu'),
   conv1d('conv1d, cOut not a multiple of 4, 32→6 k3', 500, 32, 6, 3, 1),
+  // Padded or dilated conv1d: the tiled matmul maps each tap to its input frame.
+  conv1d(
+    'conv1d causal, Moonshine-streaming conv1 320→640 k5 s2, 1 s',
+    200,
+    320,
+    640,
+    5,
+    2,
+    undefined,
+    {
+      padLeft: 4,
+    },
+  ),
+  conv1d(
+    'conv1d causal, Moonshine-streaming conv1 320→640 k5 s2, 15 s',
+    3000,
+    320,
+    640,
+    5,
+    2,
+    undefined,
+    {
+      padLeft: 4,
+    },
+  ),
+  conv1d(
+    'conv1d causal, Moonshine-streaming medium conv2 1240→620 k5 s2',
+    1500,
+    1240,
+    620,
+    5,
+    2,
+    undefined,
+    {
+      padLeft: 4,
+    },
+  ),
+  conv1d('conv1d same, Higgs conv_in 256→1024 k7, 10 s', 250, 256, 1024, 7, 1, undefined, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1d('conv1d same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 1, undefined, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1d('conv1d dilated, Higgs residual 64ch k7 d9, 10 s', 80000, 64, 64, 7, 1, undefined, {
+    padLeft: 27,
+    padRight: 27,
+    dilation: 9,
+  }),
+  conv1d('conv1d, Higgs upsampling 1024→8·512 as 2 taps, 10 s', 250, 1024, 4096, 2, 1, undefined, {
+    padLeft: 1,
+    padRight: 1,
+  }),
+
+  // conv1d with a quantW weight: matmulQuantTiled. Groups of 56 values are 8
+  // channels of a k7 conv.
+  conv1dQuant('conv1d int8 same, Higgs conv_in 256→1024 k7, 10 s', 250, 256, 1024, 7, 8, 56, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1dQuant('conv1d int8 same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 8, 56, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1dQuant(
+    'conv1d int8 same, groups of 32, Higgs residual 64ch k7, 10 s',
+    80000,
+    64,
+    64,
+    7,
+    8,
+    32,
+    {
+      padLeft: 3,
+      padRight: 3,
+    },
+  ),
+  conv1dQuant(
+    'conv1d int8 same f16, Higgs residual 64ch k7, 10 s',
+    80000,
+    64,
+    64,
+    7,
+    8,
+    56,
+    { padLeft: 3, padRight: 3 },
+    'f16',
+  ),
+  conv1dQuant('conv1d int4 same, Higgs residual 64ch k7, 10 s', 80000, 64, 64, 7, 4, 56, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1dQuant('conv1d int8 dilated, Higgs residual 64ch k7 d9, 10 s', 80000, 64, 64, 7, 8, 56, {
+    padLeft: 27,
+    padRight: 27,
+    dilation: 9,
+  }),
+  // Unpadded: the strided loader.
+  conv1dQuant('conv1d int8 1×1, Higgs residual 64ch, 10 s', 80000, 64, 64, 1, 8, 8),
+  // One output channel pads to 4 columns; the float conv takes the direct kernel.
+  conv1d('conv1d same, Higgs output 32→1 k7, 10 s', 240000, 32, 1, 7, 1, undefined, {
+    padLeft: 3,
+    padRight: 3,
+  }),
+  conv1dQuant(
+    'conv1d int8 same, Higgs output 32→1 k7 as 4 columns, 10 s',
+    240000,
+    32,
+    4,
+    7,
+    8,
+    56,
+    {
+      padLeft: 3,
+      padRight: 3,
+    },
+  ),
+  // ConvTranspose1d with a quantW weight: each column reads its own scale.
+  convTransposeQuant('convT int8, Higgs upsampling 1024→512 s8, 10 s', 250, 1024, 512, 8, 8, 32),
+  convTransposeQuant(
+    'convT int8 f16, Higgs upsampling 1024→512 s8, 10 s',
+    250,
+    1024,
+    512,
+    8,
+    8,
+    32,
+    'f16',
+  ),
+  convTransposeQuant('convT int8, Higgs upsampling 64→32 s3, 10 s', 80000, 64, 32, 3, 8, 32),
 
   // gluConv1d: its own kernel.
   gluConv1d('gluConv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5', 750, 1024, 5, 'f32'),

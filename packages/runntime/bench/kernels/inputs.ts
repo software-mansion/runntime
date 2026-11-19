@@ -1,7 +1,7 @@
 /** Input builders shared by the kernel A/B cases. Random data comes from
  *  `Version.rand`, so A and B get the same numbers. */
 import type { Version } from '../ab.ts';
-import type { EagerDtype, Value, ValueMeta } from '../../src/core/index.ts';
+import { packQuantW, type EagerDtype, type Value, type ValueMeta } from '../../src/core/index.ts';
 
 type Float = 'f32' | 'f16';
 
@@ -55,7 +55,9 @@ export function convWeight(
   );
 }
 
-/** A quantized [E·K, O] weight and its f32 scales [E·K/groupSize, O]. */
+/** A quantized [E·K, O] weight and its f32 scales [E·K/groupSize, O]. Both
+ *  versions get words from this checkout's packer: the layout is the
+ *  kernels' contract, so A and B read the same words. */
 export function quantWeight(
   version: Version,
   e: number,
@@ -64,17 +66,22 @@ export function quantWeight(
   bits: 8 | 4,
   groupSize: number,
 ): { w: Value; scales: Value } {
-  const perByte = bits === 8 ? 1 : 2;
-  const qbytes = new Uint8Array((e * k * o) / perByte).map((_, i) => (i * 37 + 11) & 0xff);
+  const half = 2 ** (bits - 1);
+  const ints = Int8Array.from({ length: e * k * o }, (_, i) => ((i * 37 + 11) % (2 * half)) - half);
+  // Each expert is its own run of tiles, so the experts pack one by one.
+  const words = new Uint32Array((e * k * o * bits) / 32);
+  for (let x = 0; x < e; x++) {
+    const expert = packQuantW(ints.subarray(x * k * o, (x + 1) * k * o), k, o, bits);
+    words.set(expert, x * expert.length);
+  }
   const raw = version.rand((e * k * o) / groupSize).map((x) => Math.abs(x) * 0.01 + 1e-3);
-  const packed = version.lib.packQuantColSlice(qbytes, raw, bits, groupSize, e, k, o, 0, o);
   const w = version.freeAfterCase(
     version.lib.materialized(
-      { elems: (e * k * o) / (32 / bits), dtype: 'quantW', dims: [e * k, o] },
-      version.lib.uploadU32(version.root, packed.qdata),
+      { elems: words.length, dtype: 'quantW', dims: [e * k, o] },
+      version.lib.uploadU32(version.root, words),
     ),
   );
-  const scales = version.upload(packed.scales, mat((e * k) / groupSize, o));
+  const scales = version.upload(raw, mat((e * k) / groupSize, o));
   return { w, scales };
 }
 

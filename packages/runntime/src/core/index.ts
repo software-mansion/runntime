@@ -10,7 +10,6 @@ export {
   packConvHwc4F16,
   packDwHwc4F16,
   permuteConvTransposeF16,
-  transposeF32,
 } from './weights/convert.ts';
 export {
   createStorageFor,
@@ -28,6 +27,16 @@ export { ACC_F16, ACC_F32, getMatmulAccum, setMatmulAccum } from './kernels/matm
 export type { F16Buffer, F32Buffer, KernelHandle, U32Buffer, V4Buffer } from './kernels/common.ts';
 export { createImageToChw, type FitMode, type ImageToChwArgs } from './kernels/image/imageToChw.ts';
 export { createMapToTexture } from './kernels/image/mapToTexture.ts';
+export {
+  createDecodeDetections,
+  detectionList,
+  instanceSegmentation,
+  keypointDetection,
+  objectDetection,
+  type DecodeTask,
+  type DetectionList,
+} from './kernels/detect/decodeDetections.ts';
+export { classScore, classScoreList, createSoftmaxTopK } from './kernels/reduce/softmaxTopK.ts';
 // --- Eager runtime ---
 import './graph/methods.ts'; // attaches the torch-style method forms to Value
 export { Value, c4of, elemBytes, hwc4Meta, materialized, matrix, tensor3d } from './graph/value.ts';
@@ -43,12 +52,14 @@ export {
   conv1d,
   conv2d,
   convTranspose2d,
+  elu,
   gatherRows,
   gatherRowsFrom,
   gelu,
   gluConv1d,
   layerNorm,
   localAttention,
+  logitStats,
   matmul,
   matmulGather,
   maxPool2d,
@@ -64,6 +75,7 @@ export {
   sigmoid,
   silu,
   slice,
+  snake,
   softmax,
   split,
   sub,
@@ -121,14 +133,15 @@ export {
 } from './error.ts';
 export { createResourceScope, type Disposable, type ResourceScope } from './lifetime.ts';
 export { BufferPool } from './gpu/bufferPool.ts';
-export { packQuantColSlice } from './weights/quantPack.ts';
+export { packQuantW } from './weights/quantPack.ts';
 export type { WeightCache } from './weights/cache.ts';
 export {
   bufferSource,
   chunkedSource,
   httpRangeSource,
   parseSafetensorsHeader,
-  derivedTensor,
+  derive,
+  deriveFromTensors,
   eagerTensor,
   fromSafetensors,
   memoryStateDict,
@@ -136,6 +149,17 @@ export {
 export { cachedRangeSource } from './weights/cachedSource.ts';
 export { createOpfsCache } from './weights/opfsCache.ts';
 export { foldBnIntoConv } from './weights/foldBn.ts';
+export {
+  concatRows,
+  dequantize,
+  floatTensor,
+  permuteRows,
+  reshapeWeight,
+  scaleWeight,
+  splitCols,
+  splitRows,
+  transposeWeight,
+} from './weights/transforms.ts';
 export type {
   RangeSource,
   SafeDtype,
@@ -144,6 +168,7 @@ export type {
   LazyStateDict,
   LazyTensor,
   MemoryStateDict,
+  QuantTensor,
 } from './weights/safetensors.ts';
 export { gpuUpload } from './nn/loadStateDict.ts';
 export type { LoadStateDictOpts, UploadFn } from './nn/loadStateDict.ts';

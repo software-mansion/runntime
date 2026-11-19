@@ -11,6 +11,7 @@ export {
   BatchNorm2d,
   Conv1d,
   Conv2d,
+  ConvTranspose1d,
   ConvTranspose2d,
   Embedding,
   GroupNorm,
@@ -18,6 +19,7 @@ export {
   Linear,
   MultiHeadAttention,
   RMSNorm,
+  Snake,
   type MultiHeadAttentionOpts,
 } from './layers.ts';
 export { gpuUpload, loadLazyStateDict } from './loadStateDict.ts';

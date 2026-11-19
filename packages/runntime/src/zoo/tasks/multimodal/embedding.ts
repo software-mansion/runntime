@@ -222,7 +222,7 @@ export async function createEmbedder(
 
     // Compiles the kernels, and turns a GPU error into one load error.
     throwIfAborted(opts.signal);
-    await warmUp(device, () => model.warm());
+    if (opts.warmUp !== false) await warmUp(device, () => model.warm());
 
     let disposed = false;
     const guard = () => {

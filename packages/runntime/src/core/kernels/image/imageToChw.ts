@@ -3,7 +3,7 @@
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
-import { flatIndex, WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
+import { flatIndex, WORKGROUP_SIZE, type F32Buffer, type U32Buffer } from '../common.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** How the image is fitted into the input, as the CPU preprocessor's
@@ -32,6 +32,7 @@ const Params = d.struct({
 
 const ioLayout = tgpu.bindGroupLayout({
   out: { storage: d.arrayOf(d.f32), access: 'mutable' },
+  size: { storage: d.arrayOf(d.u32), access: 'mutable' },
   params: { uniform: Params },
 });
 
@@ -43,6 +44,8 @@ const externalLayout = tgpu.bindGroupLayout({
   src: { externalTexture: d.textureExternal() },
 });
 
+// A texel stands for a byte, but a float format can hold any value and a
+// video frame's YUV->RGB conversion overshoots [0, 1] on saturated colors.
 const textureSource = {
   size: (): d.v2u => {
     'use gpu';
@@ -50,7 +53,7 @@ const textureSource = {
   },
   load: (p: d.v2i): d.v4f => {
     'use gpu';
-    return std.textureLoad(textureLayout.$.src, p, 0);
+    return std.saturate(std.textureLoad(textureLayout.$.src, p, 0));
   },
 };
 
@@ -61,7 +64,7 @@ const externalSource = {
   },
   load: (p: d.v2i): d.v4f => {
     'use gpu';
-    return std.textureLoad(externalLayout.$.src, p);
+    return std.saturate(std.textureLoad(externalLayout.$.src, p));
   },
 };
 
@@ -81,6 +84,10 @@ const makeImageToChwKernel = (source: typeof textureSource) =>
       return;
     }
     const srcSize = source.size();
+    if (idx === 0) {
+      ioLayout.$.size[0] = srcSize.x;
+      ioLayout.$.size[1] = srcSize.y;
+    }
     const img = d.vec2f(srcSize);
     const out = d.vec2f(d.f32(P.outW), d.f32(P.outH));
     // Input pixel = image pixel * scale + offset.
@@ -133,13 +140,20 @@ export interface ImageToChwArgs {
 }
 
 /** Records texture-to-input passes. Create once per model: it holds the two
- *  pipelines, one for `texture_2d<f32>` and one for external textures. */
+ *  pipelines, one for `texture_2d<f32>` and one for external textures, and
+ *  the buffer the image size goes to. */
 export function createImageToChw(root: TgpuRoot) {
   const pipelines = {
     texture: root.createComputePipeline({ compute: makeImageToChwKernel(textureSource) }),
     external: root.createComputePipeline({ compute: makeImageToChwKernel(externalSource) }),
   };
+  // An external texture has no size on the CPU, so work that maps results
+  // back onto the image reads it from here.
+  const size: U32Buffer = root.createBuffer(d.arrayOf(d.u32, 2)).$usage('storage');
   return {
+    /** `[width, height]` of the image the last encode() read, written by
+     *  the pass that encode() records. */
+    size,
     /** Fits `src` into `out`, `[3, outH, outW]` f32. */
     encode(
       encoder: GPUCommandEncoder,
@@ -165,7 +179,7 @@ export function createImageToChw(root: TgpuRoot) {
         padG: pad[1],
         padB: pad[2],
       });
-      const io = cachedBindGroup(root, ioLayout, { out, params });
+      const io = cachedBindGroup(root, ioLayout, { out, size, params });
       const workgroups = Math.ceil((outW * outH) / WORKGROUP_SIZE);
       const pass = encoder.beginComputePass();
       // A bind group per call: external textures expire every frame, and a
@@ -178,6 +192,9 @@ export function createImageToChw(root: TgpuRoot) {
         pipelines.external.with(pass).with(io).with(ext).dispatchWorkgroups(workgroups);
       }
       pass.end();
+    },
+    dispose(): void {
+      size.destroy();
     },
   };
 }

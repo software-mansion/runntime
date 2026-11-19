@@ -281,15 +281,25 @@ export function gatherRows(x: Value, idx: readonly number[]): Value {
 }
 
 /** Row gather with a GPU-resident index vector, so token selection can feed
- *  the next decode step without a CPU readback.
+ *  the next decode step without a CPU readback. With `group`, output row r
+ *  adds up the rows at idx[r·group, (r + 1)·group), in f32.
  *
  *  The caller guarantees idx lands in [0, x rows); it is data, unverifiable at
  *  graph-build time. */
-export function gatherRowsFrom(x: Value, idx: Value): Value {
+export function gatherRowsFrom(x: Value, idx: Value, group = 1): Value {
   const [, n, dtype] = want2d('gatherRowsFrom', x, FLOAT_DTYPES);
   if (idx.shape.dtype !== 'f32') {
     throw new Error(`gatherRowsFrom: idx must be f32, got ${idx.shape.dtype}`);
   }
-  const rows = idx.shape.elems;
-  return pending({ elems: rows * n, dtype, dims: [rows, n] }, 'gatherRowsFrom', [x, idx]);
+  if (!Number.isInteger(group) || group < 1 || idx.shape.elems % group !== 0) {
+    throw new Error(`gatherRowsFrom: group ${group} must divide the ${idx.shape.elems} indices`);
+  }
+  const rows = idx.shape.elems / group;
+  return pending(
+    { elems: rows * n, dtype, dims: [rows, n] },
+    'gatherRowsFrom',
+    [x, idx],
+    undefined,
+    [group],
+  );
 }

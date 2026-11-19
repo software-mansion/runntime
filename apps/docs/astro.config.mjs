@@ -146,6 +146,7 @@ export default defineConfig({
                   items: [
                     { label: 'Embedding', slug: 'zoo/embedding' },
                     { label: 'Speech to text', slug: 'zoo/speech-to-text' },
+                    { label: 'Text to speech', slug: 'zoo/text-to-speech' },
                     { label: 'Privacy filter', slug: 'zoo/privacy-filter' },
                     { label: 'Object detection', slug: 'zoo/object-detection' },
                     { label: 'Instance segmentation', slug: 'zoo/instance-segmentation' },
@@ -174,8 +175,9 @@ export default defineConfig({
             },
           ],
           {
-            // The splash landing page belongs to no topic.
-            exclude: ['/'],
+            // The splash landing page belongs to no topic, and the core pages stay
+            // unlisted until runntime core is published.
+            exclude: ['/', '/core/**'],
             // The generated index pages sit outside the sidebar groups.
             topics: { zoo: ['/api/**'] },
           },

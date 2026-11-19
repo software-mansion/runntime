@@ -21,6 +21,7 @@ import {
 } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
 import { DEPTHART_B_448, DEPTHART_S_448, DepthartModel, type DepthartConfig } from './model.ts';
+import type { ModelLoadOptions } from '../load.ts';
 
 export type DepthartVariant = 'b' | 's';
 
@@ -69,10 +70,7 @@ interface Frame {
 
 export async function createEstimator(
   sd: LazyStateDict,
-  opts: {
-    variant?: DepthartVariant;
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
-  } = {},
+  opts: ModelLoadOptions & { variant?: DepthartVariant } = {},
 ): Promise<Estimator> {
   const root = defaultRoot();
   const found = variantFromStateDict(sd);
@@ -147,7 +145,9 @@ export async function createEstimator(
       // forward() ends in toChw(..., 'f32'), so the map is f32.
       read(f.target.buffer as F32Buffer);
     };
-    await warmUp(root.device, () => run(new Float32Array(3 * size * size), size, size));
+    if (opts.warmUp !== false) {
+      await warmUp(root.device, () => run(new Float32Array(3 * size * size), size, size));
+    }
     return { variant, inputSize: size, run, encode, dispose };
   } catch (err) {
     dispose();

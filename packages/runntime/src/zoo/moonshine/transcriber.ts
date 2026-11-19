@@ -30,6 +30,7 @@ import { MIN_SAMPLES, stemFrames } from './convStem.ts';
 import { MoonshineModel } from './model.ts';
 import type { SelfKV } from './decoder.ts';
 import type { MoonshineTokenizer } from './tokenizer.ts';
+import type { LoadOptions } from '../load.ts';
 
 export interface TranscribeResult {
   ids: number[];
@@ -73,7 +74,7 @@ export async function createTranscriber(
   opts: {
     cfg?: MoonshineConfig;
     weightDtype?: 'f32' | 'f16';
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
+    onProgress?: LoadOptions['onProgress'];
     chunking?: Partial<Pick<ChunkOpts, 'maxSeconds' | 'searchSeconds'>>;
     perf?: TranscriberPerf;
   } = {},
@@ -130,8 +131,8 @@ export async function createTranscriber(
     const encCos = tensor(root, enc.cos, [frames.conv3, cfg.headDim]);
     const encSin = tensor(root, enc.sin, [frames.conv3, cfg.headDim]);
 
-    const encOut = model.encoder.forward(model.stem.forward(x), encCos, encSin);
-    const cross = model.decoder.precomputeCrossKV(encOut);
+    const encOut = model.model.encoder.forward(x, encCos, encSin);
+    const cross = model.model.decoder.precomputeCrossKV(encOut);
     // The K/V co-targets pin every buffer the decode loop reads.
     evalValues([encOut, ...cross.flatMap((c) => [c.k, c.v])], ex);
     // Keeps the encoder's GPU tail out of the first burst's readback wait.
@@ -167,7 +168,7 @@ export async function createTranscriber(
       let x = model.embed([ids[base]!]); // burst opener: CPU-known id
       for (let j = 0; j < burst; j++) {
         const t = base + j;
-        const h = model.decoder.forwardStep(
+        const h = model.model.decoder.forwardStep(
           x,
           slice(decCos, 0, t, t + 1),
           slice(decSin, 0, t, t + 1),

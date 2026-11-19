@@ -4,7 +4,10 @@
  *
  *  Layers are the text model's without PLE. Positions enter twice: x and y
  *  embeddings on the patches and a 2D rope on q and k. q, k and v are
- *  RMS-normed per head, so scores carry no 1/√d scale. */
+ *  RMS-normed per head, so scores carry no 1/√d scale.
+ *
+ *  Module fields are named like the checkpoint: the tower under
+ *  `vision_tower`, its projection to the text model under `embed_vision`. */
 
 import {
   add,
@@ -51,34 +54,66 @@ export interface EmbeddingGemma2VisionInputs {
   pool: Value;
 }
 
-class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value> {
-  readonly input_layernorm: nn.RMSNorm;
+/** A Linear stored under a `linear` child, as the tower's projections are. */
+class WrappedLinear extends nn.Module {
+  readonly linear: nn.Linear;
+  constructor(inFeatures: number, outFeatures: number, opts?: { activation?: 'geluTanh' }) {
+    super();
+    this.linear = new nn.Linear(inFeatures, outFeatures, { bias: false, ...opts });
+  }
+  forward(x: Value): Value {
+    return this.linear.forward(x);
+  }
+}
+
+/** The attention projections and per-head norms, fused at load. */
+class Attention extends nn.Module {
   /** q | k | v rows, with q and k permuted for the interleaved rope. */
   readonly qkv: nn.Linear;
   /** q_norm and k_norm tiled per head, ones for v. */
   readonly qkv_norm: nn.Parameter;
-  readonly o_proj: nn.Linear;
+  readonly o_proj: WrappedLinear;
+  constructor({ hidden, heads, headDim }: EmbeddingGemma2VisionConfig) {
+    super();
+    const width = 3 * heads * headDim;
+    this.qkv = new nn.Linear(hidden, width, { bias: false });
+    this.qkv_norm = new nn.Parameter({ elems: width, dtype: 'f32', dims: [width] });
+    this.o_proj = new WrappedLinear(heads * headDim, hidden);
+  }
+}
+
+/** GeGLU MLP, GELU in the gate matmul's epilogue. */
+class Mlp extends nn.Module {
+  readonly gate_proj: WrappedLinear;
+  readonly up_proj: WrappedLinear;
+  readonly down_proj: WrappedLinear;
+  constructor({ hidden, ffn }: EmbeddingGemma2VisionConfig) {
+    super();
+    this.gate_proj = new WrappedLinear(hidden, ffn, { activation: 'geluTanh' });
+    this.up_proj = new WrappedLinear(hidden, ffn);
+    this.down_proj = new WrappedLinear(ffn, hidden);
+  }
+  forward(x: Value): Value {
+    return this.down_proj.forward(mul(this.gate_proj.forward(x), this.up_proj.forward(x)));
+  }
+}
+
+class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value> {
+  readonly input_layernorm: nn.RMSNorm;
+  readonly self_attn: Attention;
   readonly post_attention_layernorm: nn.RMSNorm;
   readonly pre_feedforward_layernorm: nn.RMSNorm;
-  readonly gate_proj: nn.Linear;
-  readonly up_proj: nn.Linear;
-  readonly down_proj: nn.Linear;
+  readonly mlp: Mlp;
   readonly post_feedforward_layernorm: nn.RMSNorm;
 
   constructor(private readonly cfg: EmbeddingGemma2VisionConfig) {
     super();
-    const { hidden, heads, headDim, ffn, eps } = cfg;
-    const width = 3 * heads * headDim;
-    const norm = () => new nn.RMSNorm(hidden, eps);
+    const norm = () => new nn.RMSNorm(cfg.hidden, cfg.eps);
     this.input_layernorm = norm();
-    this.qkv = new nn.Linear(hidden, width, { bias: false });
-    this.qkv_norm = new nn.Parameter({ elems: width, dtype: 'f32', dims: [width] });
-    this.o_proj = new nn.Linear(heads * headDim, hidden, { bias: false });
+    this.self_attn = new Attention(cfg);
     this.post_attention_layernorm = norm();
     this.pre_feedforward_layernorm = norm();
-    this.gate_proj = new nn.Linear(hidden, ffn, { bias: false, activation: 'geluTanh' });
-    this.up_proj = new nn.Linear(hidden, ffn, { bias: false });
-    this.down_proj = new nn.Linear(ffn, hidden, { bias: false });
+    this.mlp = new Mlp(cfg);
     this.post_feedforward_layernorm = norm();
   }
 
@@ -86,11 +121,12 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
     const { hidden, heads, headDim: d, eps } = this.cfg;
     const w = heads * d;
     const postNorm = (norm: nn.RMSNorm, y: Value, residual: Value) =>
-      rmsNorm(y, norm.scale.value, norm.eps, { residual });
+      rmsNorm(y, norm.weight.value, norm.eps, { residual });
 
     // One grouped norm for every head, then q and k roped in one dispatch.
-    const qkv = this.qkv.forward(this.input_layernorm.forward(x));
-    const n = rmsNorm(qkv, this.qkv_norm.value, eps, { group: d });
+    const { self_attn } = this;
+    const qkv = self_attn.qkv.forward(this.input_layernorm.forward(x));
+    const n = rmsNorm(qkv, self_attn.qkv_norm.value, eps, { group: d });
     const qk = rope(n, inp.cos, inp.sin, { headDim: d, width: 2 * w });
     const head = (v: Value, start: number) => slice(v, 1, start, start + d);
     const p = x.shape.elems / hidden;
@@ -119,44 +155,91 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
         windowRight: Infinity,
       });
     }
-    x = postNorm(this.post_attention_layernorm, this.o_proj.forward(a), x);
+    x = postNorm(this.post_attention_layernorm, self_attn.o_proj.forward(a), x);
 
-    // GeGLU MLP, GELU in the gate matmul's epilogue.
-    const f = this.pre_feedforward_layernorm.forward(x);
-    const m = this.down_proj.forward(mul(this.gate_proj.forward(f), this.up_proj.forward(f)));
+    const m = this.mlp.forward(this.pre_feedforward_layernorm.forward(x));
     return postNorm(this.post_feedforward_layernorm, m, x);
   }
 }
 
-export class EmbeddingGemma2VisionModel extends nn.Module<[EmbeddingGemma2VisionInputs], Value> {
+/** Patches to the tower's width, plus their x and y position embeddings. */
+class PatchEmbedder extends nn.Module<[Value, Value, Value], Value> {
   readonly input_proj: nn.Linear;
+  /** The checkpoint's `position_embedding_table`, split at load. */
   readonly pos_x: nn.Embedding;
   readonly pos_y: nn.Embedding;
-  readonly layers: nn.ModuleList<VisionLayer>;
-  /** The pooled tokens enter this weightless norm scaled by √hidden. The
-   *  norm cancels the scale, so eps divided by hidden stands in for it. */
-  readonly embedding_pre_projection_norm: nn.RMSNorm;
-  readonly embedding_projection: nn.Linear;
-
-  constructor(readonly cfg: EmbeddingGemma2VisionConfig = EMBEDDINGGEMMA2_VISION) {
+  constructor({ hidden, patch, positions }: EmbeddingGemma2VisionConfig) {
     super();
-    const { hidden, patch, positions, eps } = cfg;
     this.input_proj = new nn.Linear(3 * patch * patch, hidden, { bias: false });
     this.pos_x = new nn.Embedding(positions, hidden);
     this.pos_y = new nn.Embedding(positions, hidden);
+  }
+  forward(patches: Value, xs: Value, ys: Value): Value {
+    const addend = add(this.pos_x.forward(xs), this.pos_y.forward(ys));
+    return this.input_proj.forward(patches, { addend });
+  }
+}
+
+class VisionEncoder extends nn.Module {
+  readonly layers: nn.ModuleList<VisionLayer>;
+  constructor(cfg: EmbeddingGemma2VisionConfig) {
+    super();
     this.layers = new nn.ModuleList(Array.from({ length: cfg.layers }, () => new VisionLayer(cfg)));
-    this.embedding_pre_projection_norm = new nn.RMSNorm(hidden, eps / hidden);
+  }
+}
+
+class VisionTower extends nn.Module {
+  readonly patch_embedder: PatchEmbedder;
+  readonly encoder: VisionEncoder;
+  constructor(cfg: EmbeddingGemma2VisionConfig) {
+    super();
+    this.patch_embedder = new PatchEmbedder(cfg);
+    this.encoder = new VisionEncoder(cfg);
+  }
+}
+
+/** The pooled tokens' projection to the text model's width. */
+class EmbedVision extends nn.Module {
+  /** The pooled tokens enter this weightless norm scaled by √hidden. The
+   *  norm cancels the scale, so eps divided by hidden stands in for it. Its
+   *  weight is ones, a Buffer since the checkpoint has none. */
+  readonly embedding_pre_projection_norm: nn.Buffer;
+  readonly embedding_projection: nn.Linear;
+  private readonly eps: number;
+  constructor({ hidden, eps }: EmbeddingGemma2VisionConfig) {
+    super();
+    this.eps = eps / hidden;
+    this.embedding_pre_projection_norm = new nn.Buffer(new Float32Array(hidden).fill(1), {
+      elems: hidden,
+      dtype: 'f32',
+      dims: [hidden],
+    });
     this.embedding_projection = new nn.Linear(hidden, EMBEDDINGGEMMA2_TEXT.hidden, { bias: false });
+  }
+  forward(pooled: Value): Value {
+    return this.embedding_projection.forward(
+      rmsNorm(pooled, this.embedding_pre_projection_norm.value, this.eps),
+    );
+  }
+}
+
+export class EmbeddingGemma2VisionModel extends nn.Module<[EmbeddingGemma2VisionInputs], Value> {
+  readonly vision_tower: VisionTower;
+  readonly embed_vision: EmbedVision;
+
+  constructor(readonly cfg: EmbeddingGemma2VisionConfig = EMBEDDINGGEMMA2_VISION) {
+    super();
+    this.vision_tower = new VisionTower(cfg);
+    this.embed_vision = new EmbedVision(cfg);
   }
 
   /** One image to its tokens [N, text hidden], ready to stand in for N
    *  placeholder rows of the text model's input. */
   override forward(inp: EmbeddingGemma2VisionInputs): Value {
-    const addend = add(this.pos_x.forward(inp.xs), this.pos_y.forward(inp.ys));
-    let x = this.input_proj.forward(inp.patches, { addend });
-    for (const layer of this.layers.items) x = layer.forward(x, inp);
-    const pooled = matmul(inp.pool, x);
-    return this.embedding_projection.forward(this.embedding_pre_projection_norm.forward(pooled));
+    const { patch_embedder, encoder } = this.vision_tower;
+    let x = patch_embedder.forward(inp.patches, inp.xs, inp.ys);
+    for (const layer of encoder.layers.items) x = layer.forward(x, inp);
+    return this.embed_vision.forward(matmul(inp.pool, x));
   }
 
   override transformStateDict(sd: LazyStateDict, prefix: string): void {

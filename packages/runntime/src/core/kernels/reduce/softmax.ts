@@ -35,9 +35,9 @@ const Dims = d.struct({
 
 /** Start of the running max. A thread with no columns adds (NEG_FLT_MAX, 0),
  *  which changes nothing. */
-const NEG_FLT_MAX = -3.4028234663852886e38;
+export const NEG_FLT_MAX = -3.4028234663852886e38;
 
-const TREE_STRIDES = Array.from(
+export const TREE_STRIDES = Array.from(
   { length: Math.log2(WORKGROUP_SIZE) },
   (_, level) => WORKGROUP_SIZE >> (level + 1),
 );
@@ -54,7 +54,7 @@ const subgroupMaxSum = (m: number, s: number): d.v2f => {
 
 /** The same through a fixed pairwise tree in workgroup memory. Each step
  *  rescales both sums to the larger max. */
-const treeMaxSum = (m: number, s: number, tid: number): d.v2f => {
+export const treeMaxSum = (m: number, s: number, tid: number): d.v2f => {
   'use gpu';
   partialMax.$[tid] = m;
   partialSum.$[tid] = s;

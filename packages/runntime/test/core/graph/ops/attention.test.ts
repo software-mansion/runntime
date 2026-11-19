@@ -60,6 +60,13 @@ describe('sdpa', () => {
     expect(c.pending?.inputs).toEqual([q, k, v, sinks, segments]);
   });
 
+  it('carries a key bias as attrs, not an input', () => {
+    const { q, k, v } = qkv(5, 7);
+    const c = sdpa(q, k, v, { ...causal, keyBias: { start: 2, end: 7, value: -1.5 } });
+    expect(c.pending?.inputs).toEqual([q, k, v]);
+    expect(c.pending?.attrs?.slice(10)).toEqual([1, 2, 7, -1.5]);
+  });
+
   it.each([
     {
       name: 'q cols that are not qHeads·headDim',
@@ -134,6 +141,26 @@ describe('sdpa', () => {
       opts: { ...causal, segments: input([5, 2]), maxSegment: 1.5 },
       error: /maxSegment 1.5 must be a positive integer/,
     },
+    {
+      name: 'a key bias past the last key',
+      opts: { ...causal, keyBias: { start: 3, end: 8, value: 1 } },
+      error: /keyBias keys \[3, 8\) must lie within the 7 keys/,
+    },
+    {
+      name: 'a key bias range that ends before it starts',
+      opts: { ...causal, keyBias: { start: 4, end: 2, value: 1 } },
+      error: /keyBias keys \[4, 2\)/,
+    },
+    {
+      name: 'a fractional key bias range',
+      opts: { ...causal, keyBias: { start: 0.5, end: 2, value: 1 } },
+      error: /keyBias keys \[0.5, 2\)/,
+    },
+    {
+      name: 'a key bias that is not finite',
+      opts: { ...causal, keyBias: { start: 0, end: 2, value: NaN } },
+      error: /keyBias value NaN must be finite/,
+    },
   ])('rejects $name', ({ opts, error }) => {
     const { q, k, v } = qkv(5, 7);
     expect(() => sdpa(q, k, v, opts)).toThrow(error);
@@ -143,6 +170,13 @@ describe('sdpa', () => {
     const { q, k, v } = qkv(1, 7);
     expect(() => sdpa(q, k, v, { ...causal, segments: input([1, 2]) })).toThrow(
       /segments need qLen > 1/,
+    );
+  });
+
+  it('rejects a key bias on decode', () => {
+    const { q, k, v } = qkv(1, 7);
+    expect(() => sdpa(q, k, v, { ...causal, keyBias: { start: 0, end: 2, value: 1 } })).toThrow(
+      /keyBias needs qLen > 1/,
     );
   });
 

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ACT_CODE } from '../../../src/core/graph/ops/shared.ts';
 import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
 import {
   BatchNorm2d,
   Conv1d,
   Conv2d,
+  ConvTranspose1d,
   ConvTranspose2d,
   Embedding,
   GroupNorm,
@@ -11,10 +13,21 @@ import {
   Linear,
   MultiHeadAttention,
   RMSNorm,
+  Snake,
 } from '../../../src/core/nn/layers.ts';
+import { loadLazyStateDict } from '../../../src/core/nn/loadStateDict.ts';
 import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/module.ts';
-import { memoryStateDict } from '../../../src/core/weights/safetensors.ts';
+import { f16ToF32, f32ArrayToF16Bits } from '../../../src/core/weights/convert.ts';
+import {
+  bufferSource,
+  derive,
+  fromSafetensors,
+  memoryStateDict,
+  type LazyStateDict,
+} from '../../../src/core/weights/safetensors.ts';
+import { scaleWeight } from '../../../src/core/weights/transforms.ts';
 import { hwc4Input, input, meta } from '../graph/values.ts';
+import { contents, quantFile, safetensorsFile, type QuantEntry } from '../weights/checkpoint.ts';
 
 /** Binds every parameter to a stand-in of its declared shape, so forward()
  *  can build its graph without real weights. */
@@ -26,6 +39,57 @@ function fakeLoad<M extends AnyModule>(m: M): M {
 /** name → declared shape, for comparing whole layers at once. */
 const shapes = (m: AnyModule) =>
   Object.fromEntries([...m.namedParameters()].map(([n, p]) => [n, p.shape]));
+
+/** A state dict with one F16 tensor named `weight`, read from a real file:
+ *  memoryStateDict reads a Uint16Array as BF16. */
+const f16Checkpoint = (bits: Uint16Array, shape: number[]): Promise<LazyStateDict> =>
+  fromSafetensors(bufferSource(safetensorsFile({ weight: { data: bits, shape } })), {
+    chunkBytes: 0,
+  });
+
+/** A state dict whose `weight` is a derived tensor holding `data`, as a zoo
+ *  hook hands one over: a Uint16Array means f16 halfwords, a Uint32Array
+ *  packed words. */
+function derivedCheckpoint(data: Uint16Array | Uint32Array, shape: number[]): LazyStateDict {
+  const tensor = derive(shape, [], () => Promise.resolve(data), data.byteLength);
+  return {
+    metadata: {},
+    tensors: new Map([['weight', tensor]]),
+    totalBytes: () => data.byteLength,
+  };
+}
+
+/** bf16 bits: the top half of the f32 pattern. */
+const bf16 = (values: number[]) =>
+  Uint16Array.from(values, (v) => new Uint32Array(new Float32Array([v]).buffer)[0]! >>> 16);
+
+/** Loads `sd` into a layer with only a weight and returns what reached its
+ *  upload. */
+async function uploadedWeight(layer: AnyModule, sd: LazyStateDict) {
+  const upload = vi.fn((_data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) =>
+    pending(shape, 'reshape', []),
+  );
+  await loadLazyStateDict(layer, sd, { upload });
+  return upload.mock.calls[0]![0];
+}
+
+/** The array type and raw bit patterns, so -0, subnormals and infinities
+ *  compare exactly. */
+function bitsOf(data: Float32Array | Uint32Array | Uint16Array) {
+  if (data instanceof Float32Array) return { type: 'f32', bits: [...new Uint32Array(data.buffer)] };
+  if (data instanceof Uint16Array) return { type: 'f16', bits: [...data] };
+  return { type: 'u32', bits: [...data] };
+}
+
+/** f16 bits a widening to f32 could disturb: 1, −0, the smallest and largest
+ *  subnormals, the largest finite value, −inf. */
+const EDGE_BITS = [0x3c00, 0x8000, 0x0001, 0x03ff, 0x7bff, 0xfc00] as const;
+
+/** Every f16 bit pattern but NaN. f16 → f32 → f16 maps each of these back to
+ *  itself; NaN payloads collapse to one quiet NaN on that trip. */
+const ALL_F16 = Uint16Array.from({ length: 1 << 16 }, (_, i) => i).filter(
+  (b) => (b & 0x7c00) !== 0x7c00 || (b & 0x3ff) === 0,
+);
 
 describe('Linear', () => {
   it('stores the weight as [in, out] and the bias as [out]', () => {
@@ -69,6 +133,472 @@ describe('Linear', () => {
     new Linear(3, 2).transformStateDict(sd, '');
     expect(sd.tensors.get('weight')!.shape).toEqual([3, 2]);
   });
+
+  // torch [2, 3] rows [a b c], [d e f] load as [3, 2]: a d, b e, c f.
+  const [a, b, c, d, e, f] = EDGE_BITS;
+  it.each([
+    {
+      name: 'F16 into an f16 layer uploads the halfwords transposed',
+      checkpoint: () => f16Checkpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: true,
+      want: { type: 'f16', bits: [a, d, b, e, c, f] },
+    },
+    {
+      name: 'F16 into an f32 layer decodes the transposed halfwords',
+      checkpoint: () => f16Checkpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: false,
+      // a d b e c f = 1, (1023/1024)·2^-14, -0, 65504, 2^-24, -inf
+      want: bitsOf(new Float32Array([1, (1023 / 1024) * 2 ** -14, -0, 65504, 2 ** -24, -Infinity])),
+    },
+    {
+      name: 'F32 into an f32 layer uploads f32 transposed',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: false,
+      want: bitsOf(new Float32Array([1, 4, 2, 5, 3, 6])),
+    },
+    {
+      name: 'F32 into an f16 layer narrows the transposed f32',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: true,
+      // f16 bits of 1, 4, 2, 5, 3, 6
+      want: { type: 'f16', bits: [0x3c00, 0x4400, 0x4000, 0x4500, 0x4200, 0x4600] },
+    },
+    {
+      name: 'BF16 into an f32 layer decodes, then transposes',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: false,
+      want: bitsOf(new Float32Array([1, 4, 2, 5, 3, 6])),
+    },
+    {
+      name: 'BF16 into an f16 layer decodes, transposes, then narrows',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16([1, 2, 3, 4, 5, 6]), shape: [2, 3] } }),
+      half: true,
+      // f16 bits of 1, 4, 2, 5, 3, 6
+      want: { type: 'f16', bits: [0x3c00, 0x4400, 0x4000, 0x4500, 0x4200, 0x4600] },
+    },
+    {
+      name: 'derived halfwords into an f16 layer upload transposed',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: true,
+      want: { type: 'f16', bits: [a, d, b, e, c, f] },
+    },
+    {
+      name: 'derived halfwords into an f32 layer decode transposed',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(EDGE_BITS), [2, 3]),
+      half: false,
+      want: bitsOf(new Float32Array([1, (1023 / 1024) * 2 ** -14, -0, 65504, 2 ** -24, -Infinity])),
+    },
+  ])('$name', async ({ checkpoint, half, want }) => {
+    const layer = new Linear(3, 2, { bias: false });
+    if (half) layer.half();
+    expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('rejects derived packed words', async () => {
+    const sd = derivedCheckpoint(new Uint32Array(6), [2, 3]);
+    await expect(uploadedWeight(new Linear(3, 2, { bias: false }), sd)).rejects.toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'transposeWeight: source holds packed u32 words',
+      }),
+    );
+  });
+
+  it('transposes F16 halfwords without decoding them to f32', async () => {
+    const sd = await f16Checkpoint(new Uint16Array(EDGE_BITS), [2, 3]);
+    const f32 = vi.spyOn(sd.tensors.get('weight')!, 'f32');
+    new Linear(3, 2, { bias: false }).transformStateDict(sd, '');
+    const w = sd.tensors.get('weight')!;
+    if (w.kind !== 'derived') throw new Error('expected a derived tensor');
+    expect(await w.data()).toBeInstanceOf(Uint16Array);
+    expect(w.byteLength).toBe(12);
+    expect(f32).not.toHaveBeenCalled();
+  });
+
+  // The reference is the f32 round trip: decode, transpose in f32, then
+  // narrow for an f16 layer.
+  it.each([
+    { name: 'an f16 layer', half: true },
+    { name: 'an f32 layer', half: false },
+  ])(
+    'loads every F16 value into $name with the same bits as the f32 round trip',
+    async ({ half }) => {
+      // 63490 values as 70 × 907.
+      const rows = 70;
+      const cols = ALL_F16.length / rows;
+      const values = f16ToF32(ALL_F16);
+      const transposed = new Float32Array(values.length);
+      for (let r = 0; r < rows; r++) {
+        for (let col = 0; col < cols; col++) transposed[col * rows + r] = values[r * cols + col]!;
+      }
+      const want = half ? f32ArrayToF16Bits(transposed).data : transposed;
+      const layer = new Linear(cols, rows, { bias: false });
+      if (half) layer.half();
+      const got = await uploadedWeight(layer, await f16Checkpoint(ALL_F16, [rows, cols]));
+      expect(bitsOf(got)).toEqual(bitsOf(want));
+    },
+  );
+});
+
+/** A quantized file of `entries` as a lazy state dict. */
+const quantCheckpoint = (bits: 4 | 8, groupSize: number, entries: Record<string, QuantEntry>) =>
+  fromSafetensors(bufferSource(quantFile(bits, groupSize, entries)), { chunkBytes: 0 });
+
+describe('Linear with a quantized weight', () => {
+  // torch [out 4, in 8], value o·8 + i, so a kernel column (one torch row)
+  // holds o·8 + 0..7 and its 4-row chunks are 4 consecutive bytes.
+  const numbered = Array.from({ length: 32 }, (_, i) => i);
+  // f16-exact scales [out 4, in/4 = 2]: o + g/2
+  const scales = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
+  const entry: QuantEntry = { ints: numbered, scales, shape: [4, 8] };
+
+  // int4 packs out features 8 to a word, so it takes [out 8, in 8].
+  const int4Entry: QuantEntry = {
+    ints: Array.from({ length: 64 }, (_, i) => (i % 16) - 8),
+    scales: Array.from({ length: 16 }, (_, i) => i / 2),
+    shape: [8, 8],
+  };
+
+  it.each([
+    { name: 'int8', bits: 8 as const, quant: entry, words: 8 },
+    { name: 'int4', bits: 4 as const, quant: int4Entry, words: 8 },
+  ])('retypes the weight to $name quantW and adds f32 scales', async ({ bits, quant, words }) => {
+    const out = quant.shape[0];
+    const layer = new Linear(8, out);
+    const sd = await quantCheckpoint(bits, 4, { 'fc.weight': quant });
+    layer.transformStateDict(sd, 'fc');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: words, dtype: 'quantW', dims: [8, out] },
+      bias: meta([out]),
+      weightScale: meta([2, out]),
+    });
+    expect(layer.weightScale!.pinned).toBe(true);
+    expect([...sd.tensors.keys()]).toEqual(['fc.weight', 'fc.weightScale']);
+    expect(sd.tensors.get('fc.weight')!.shape).toEqual([8, out]);
+  });
+
+  it('packs the torch [out, in] int8 ints as kernel [in, out] tiles', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: entry });
+    new Linear(8, 4).transformStateDict(sd, '');
+    // Tile (unit 0, rows 0..3) then (unit 0, rows 4..7); column c of a tile
+    // is torch row c, so its word holds bytes c·8 + 4·k4 + 0..3.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x03020100, 0x0b0a0908, 0x13121110, 0x1b1a1918, 0x07060504, 0x0f0e0d0c, 0x17161514,
+      0x1f1e1d1c,
+    ]);
+  });
+
+  it('packs int4 ints two columns to a word', async () => {
+    const sd = await quantCheckpoint(4, 4, { weight: int4Entry });
+    new Linear(8, 8).transformStateDict(sd, '');
+    // Column c is torch row c: i - 8 for an even row, i for an odd one. A
+    // word holds an even column's 4 nibbles, then an odd one's.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x3210ba98,
+      0x3210ba98,
+      0x7654fedc,
+      0x7654fedc, // columns 0..3: rows 0..3, rows 4..7
+      0x3210ba98,
+      0x3210ba98,
+      0x7654fedc,
+      0x7654fedc, // columns 4..7
+    ]);
+  });
+
+  it('transposes the scales to [in / groupSize, out]', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: entry });
+    new Linear(8, 4).transformStateDict(sd, '');
+    const scale = sd.tensors.get('weightScale')!;
+    expect(scale.shape).toEqual([2, 4]);
+    expect(await contents(scale)).toEqual({
+      type: 'f32',
+      values: [0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5],
+    });
+  });
+
+  it('takes f32 scales from scaleWeight as they are', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: entry });
+    sd.tensors.set('weight', scaleWeight(sd.tensors.get('weight')!, [1, 2, 3, 4]));
+    new Linear(8, 4).transformStateDict(sd, '');
+    // torch row o times o + 1, then transposed
+    expect(await contents(sd.tensors.get('weightScale')!)).toEqual({
+      type: 'f32',
+      values: [0, 2, 6, 12, 0.5, 3, 7.5, 14],
+    });
+  });
+
+  it('puts the scales right after the weight, so binding keeps file order', async () => {
+    const sd = await quantCheckpoint(8, 4, { 'fc.weight': entry });
+    const float = derive([4], [], () => Promise.resolve(new Float32Array(4)));
+    sd.tensors = new Map([
+      ['first', float],
+      ['fc.weight', sd.tensors.get('fc.weight')!],
+      ['fc.bias', float],
+    ]);
+    new Linear(8, 4).transformStateDict(sd, 'fc');
+    expect([...sd.tensors.keys()]).toEqual(['first', 'fc.weight', 'fc.weightScale', 'fc.bias']);
+  });
+
+  it('gives the words the bytes of the ints and scales, and the scales none', async () => {
+    const sd = await quantCheckpoint(4, 4, { weight: int4Entry });
+    const total = sd.totalBytes();
+    new Linear(8, 8).transformStateDict(sd, '');
+    expect(sd.tensors.get('weight')!.byteLength).toBe(32 + 32); // 64 nibbles, 16 f16 scales
+    expect(sd.tensors.get('weightScale')!.byteLength).toBe(0);
+    expect(sd.totalBytes()).toBe(total);
+  });
+
+  it('keeps the bias of a half() layer f16 and the scales f32', async () => {
+    const layer = new Linear(8, 4).half();
+    layer.transformStateDict(await quantCheckpoint(8, 4, { weight: entry }), '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 8, dtype: 'quantW', dims: [8, 4] },
+      bias: meta([4], 'f16'),
+      weightScale: meta([2, 4]),
+    });
+  });
+
+  it.each([
+    { name: 'in features off the 8-row tiles', inF: 12, outF: 4, bits: 8 as const, groupSize: 4 },
+    { name: 'int4 out features off 8 per word', inF: 8, outF: 4, bits: 4 as const, groupSize: 4 },
+    { name: 'a group size off 4', inF: 16, outF: 4, bits: 8 as const, groupSize: 2 },
+  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ inF, outF, bits, groupSize }) => {
+    const sd = await quantCheckpoint(bits, groupSize, {
+      weight: {
+        ints: new Array(inF * outF).fill(0),
+        scales: new Array((inF * outF) / groupSize).fill(1),
+        shape: [outF, inF],
+      },
+    });
+    const layer = new Linear(inF, outF);
+    expect(() => layer.transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
+    );
+    expect(layer.weight.shape.dtype).toBe('f32');
+  });
+
+  it.each([
+    { name: 'f32', half: false },
+    { name: 'f16', half: true },
+  ])(
+    'runs the $name forward as a quantized matmul with bias and activation in the epilogue',
+    async ({ half }) => {
+      const layer = new Linear(8, 4, { activation: 'gelu' });
+      if (half) layer.half();
+      layer.transformStateDict(await quantCheckpoint(8, 4, { weight: entry }), '');
+      fakeLoad(layer);
+      const x = input([5, 8], half ? 'f16' : 'f32');
+      const addend = input([5, 4], half ? 'f16' : 'f32');
+      const y = layer.forward(x, { addend });
+      expect(y.shape).toEqual(meta([5, 4], half ? 'f16' : 'f32'));
+      expect(y.pending?.op).toBe('matmulQuantW');
+      expect(y.pending?.inputs).toEqual([
+        x,
+        layer.weight.value,
+        layer.weightScale!.value,
+        layer.bias!.value,
+        addend,
+      ]);
+      // baseRow, scaleBase, bits, groupSize, bias, addend, activation
+      expect(y.pending?.attrs).toEqual([0, 0, 8, 4, 1, 1, ACT_CODE.gelu]);
+    },
+  );
+
+  it('refuses a weight in [in, out] layout', async () => {
+    const sd = await quantCheckpoint(8, 4, { weight: { ints: numbered, scales, shape: [8, 4] } });
+    expect(() => new Linear(8, 4).transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
+    );
+  });
+});
+
+describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
+  /** A [rows, cols] int8 entry of zeros, with `groups` scales per row. */
+  const zeros = (rows: number, cols: number, groups: number): QuantEntry => ({
+    ints: Array<number>(rows * cols).fill(0),
+    scales: Array<number>(rows * groups).fill(1),
+    shape: [rows, cols],
+  });
+
+  it('retypes a Conv1d weight to quantW [kernel·in, out] with its scales', async () => {
+    const layer = new Conv1d(8, 4, 3);
+    // groups of 12 values: 4 input channels with their 3 taps
+    const sd = await quantCheckpoint(8, 12, { weight: zeros(4, 24, 2) });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 24, dtype: 'quantW', dims: [24, 4] },
+      bias: meta([4]),
+      weightScale: meta([2, 4]),
+    });
+    expect([...sd.tensors.keys()]).toEqual(['weight', 'weightScale']);
+  });
+
+  it('pads a Conv1d to 1 output channel up to 4 columns, bias included', async () => {
+    const layer = new Conv1d(8, 1, 3);
+    const sd = await quantCheckpoint(8, 12, { weight: zeros(1, 24, 2) });
+    sd.tensors.set('bias', memoryStateDict({ bias: Float32Array.of(2.5) }).tensors.get('bias')!);
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 24, dtype: 'quantW', dims: [24, 4] },
+      bias: meta([4]),
+      weightScale: meta([2, 4]),
+    });
+    expect([...(await sd.tensors.get('bias')!.f32())]).toEqual([2.5, 0, 0, 0]);
+  });
+
+  it('refuses a padded Conv1d bias of another length with CHECKPOINT_MISMATCH', async () => {
+    const layer = new Conv1d(8, 1, 3);
+    const sd = await quantCheckpoint(8, 12, { weight: zeros(1, 24, 2) });
+    sd.tensors.set('bias', memoryStateDict({ bias: Float32Array.of(1, 2) }).tensors.get('bias')!);
+    expect(() => layer.transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(/bias has shape \[2\], expected \[1\]/),
+      }),
+    );
+  });
+
+  it('packs torch [out, in, kernel] ints tap-major and transposes the scales', async () => {
+    // torch [out 4, in 4, kernel 2], value o·8 + c·2 + tap; scales [4, 2]
+    // are o + g/2, f16-exact.
+    const sd = await quantCheckpoint(8, 4, {
+      weight: {
+        ints: Array.from({ length: 32 }, (_, i) => i),
+        scales: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5],
+        shape: [4, 8],
+      },
+    });
+    new Conv1d(4, 4, 2).transformStateDict(sd, '');
+    // Row tap·4 + c of column o holds o·8 + c·2 + tap: tile rows 0..3 are
+    // tap 0, rows 4..7 tap 1.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x06040200, 0x0e0c0a08, 0x16141210, 0x1e1c1a18, 0x07050301, 0x0f0d0b09, 0x17151311,
+      0x1f1d1b19,
+    ]);
+    expect([...(await sd.tensors.get('weightScale')!.f32())]).toEqual([
+      0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5,
+    ]);
+  });
+
+  it('keeps a Conv1d group that ends inside a channel', async () => {
+    const layer = new Conv1d(8, 4, 3);
+    // groups of 4 values: a channel's 3 taps and the next channel's first
+    const sd = await quantCheckpoint(8, 4, { weight: zeros(4, 24, 6) });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer).weightScale).toEqual(meta([6, 4]));
+  });
+
+  it('retypes a ConvTranspose1d weight [in, out·kernel] to quantW [taps·in, stride·out]', async () => {
+    const layer = new ConvTranspose1d(8, 4, 4, { stride: 2 });
+    // groups of 4 values: one output's 4 kernel positions
+    const sd = await quantCheckpoint(8, 4, { weight: zeros(8, 16, 4) });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: 32, dtype: 'quantW', dims: [16, 8] },
+      bias: meta([8]),
+      weightScale: meta([8, 4]),
+    });
+  });
+
+  it('packs torch [in, out, kernel] ints by frame and tap and keeps the scales', async () => {
+    // torch [in 4, out 4, kernel 4] with stride 2, so 2 taps; value
+    // c·16 + o·4 + kk; scales [4, 2] are c + g/2, f16-exact.
+    const scales = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5];
+    const sd = await quantCheckpoint(8, 8, {
+      weight: { ints: Array.from({ length: 64 }, (_, i) => i), scales, shape: [4, 16] },
+    });
+    new ConvTranspose1d(4, 4, 4, { stride: 2 }).transformStateDict(sd, '');
+    // Row i·4 + c, column r·4 + o holds kernel position (1 − i)·2 + r. Tiles
+    // run frame 0 taps 0 and 1, then frame 1.
+    expect([...(await sd.tensors.get('weight')!.words())]).toEqual([
+      0x32221202, 0x36261606, 0x3a2a1a0a, 0x3e2e1e0e, 0x30201000, 0x34241404, 0x38281808,
+      0x3c2c1c0c, 0x33231303, 0x37271707, 0x3b2b1b0b, 0x3f2f1f0f, 0x31211101, 0x35251505,
+      0x39291909, 0x3d2d1d0d,
+    ]);
+    expect([...(await sd.tensors.get('weightScale')!.f32())]).toEqual(scales);
+  });
+
+  it.each([
+    { name: 'one input channel', cIn: 1, kernel: 3 },
+    { name: 'kernel·in that is not a multiple of 8', cIn: 4, kernel: 3 },
+    { name: 'in that is not a multiple of 4', cIn: 2, kernel: 4 },
+  ])('loads a Conv1d weight on $name as its dequantized floats', async ({ cIn, kernel }) => {
+    // One scale per output row, 0.5 and 0.25; ints 1, 2, … and −1, −2, …
+    const cols = cIn * kernel;
+    const ints = Array.from({ length: 2 * cols }, (_, i) => (i < cols ? i + 1 : cols - i - 1));
+    const layer = new Conv1d(cIn, 2, kernel, { bias: false });
+    const sd = await quantCheckpoint(8, cols, {
+      weight: { ints, scales: [0.5, 0.25], shape: [2, cols] },
+    });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({ weight: meta([cols, 2]) });
+    // tap-major [kernel·in, out]: row tap·in + c holds both outputs' (c, tap)
+    const want = Array.from({ length: 2 * cols }, (_, i) => {
+      const [row, o] = [Math.floor(i / 2), i % 2];
+      const [tap, c] = [Math.floor(row / cIn), row % cIn];
+      return ints[o * cols + c * kernel + tap]! * (o === 0 ? 0.5 : 0.25);
+    });
+    expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
+  });
+
+  it.each([
+    { name: 'taps·in that is not a multiple of 8', cIn: 4, cOut: 4, kernel: 6 },
+    { name: 'out that is not a multiple of 4', cIn: 8, cOut: 2, kernel: 4 },
+  ])(
+    'loads a ConvTranspose1d weight on $name as its dequantized floats',
+    async ({ cIn, cOut, kernel }) => {
+      // stride 2; one scale per torch row c, (c + 1) / 4; ints −25 … 24
+      const [s, taps, cols] = [2, kernel / 2, cOut * kernel];
+      const ints = Array.from({ length: cIn * cols }, (_, i) => (i % 50) - 25);
+      const scales = Array.from({ length: cIn }, (_, c) => (c + 1) / 4);
+      const layer = new ConvTranspose1d(cIn, cOut, kernel, { stride: s, bias: false });
+      const sd = await quantCheckpoint(8, cols, {
+        weight: { ints, scales, shape: [cIn, cols] },
+      });
+      layer.transformStateDict(sd, '');
+      expect(shapes(layer)).toEqual({ weight: meta([taps * cIn, s * cOut]) });
+      // row i·in + c, column r·out + o holds kernel position (taps − 1 − i)·s + r
+      const want = Array.from({ length: taps * cIn * s * cOut }, (_, j) => {
+        const [row, col] = [Math.floor(j / (s * cOut)), j % (s * cOut)];
+        const [i, c, r, o] = [Math.floor(row / cIn), row % cIn, Math.floor(col / cOut), col % cOut];
+        return ints[c * cols + o * kernel + (taps - 1 - i) * s + r]! * scales[c]!;
+      });
+      expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
+    },
+  );
+
+  it.each([
+    {
+      name: 'a ConvTranspose1d weight in Conv1d layout',
+      layer: () => new ConvTranspose1d(16, 8, 4, { stride: 2 }),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(8, 64, 8) }),
+      error: /expected \[in, out·kernel\] = \[16, 32\]/,
+    },
+    {
+      name: 'a weight of another shape on one input channel',
+      layer: () => new Conv1d(1, 4, 3),
+      file: () => quantCheckpoint(8, 4, { weight: zeros(3, 4, 1) }),
+      error: /expected \[out, in·kernel\] = \[4, 3\]/,
+    },
+    {
+      name: 'a weight of another shape',
+      layer: () => new Conv1d(8, 4, 3),
+      file: () => quantCheckpoint(8, 8, { weight: zeros(4, 16, 2) }),
+      error: /expected \[out, in·kernel\] = \[4, 24\]/,
+    },
+  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ layer, file, error }) => {
+    const sd = await file();
+    expect(() => layer().transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(error),
+      }),
+    );
+  });
 });
 
 describe('Conv1d', () => {
@@ -100,6 +630,184 @@ describe('Conv1d', () => {
     expect(() => new Conv1d(1, 2, 2).transformStateDict(sd, 'c')).toThrow(
       expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
     );
+  });
+
+  // torch [out 2, in 3, k 2] holding elements 0..11 loads tap-major as
+  // 0 6 2 8 4 10 1 7 3 9 5 11 (row tap·in + i, column out), as in the f32
+  // case above.
+  const TAP_MAJOR = [0, 6, 2, 8, 4, 10, 1, 7, 3, 9, 5, 11];
+  // EDGE_BITS, then each with its sign flipped.
+  const halves = [...EDGE_BITS, ...EDGE_BITS.map((b) => b ^ 0x8000)];
+  const reordered = new Uint16Array(TAP_MAJOR.map((i) => halves[i]!));
+  const f32Values = Array.from({ length: 12 }, (_, i) => i + 1);
+  it.each([
+    {
+      name: 'F16 into an f16 layer uploads the halfwords reordered',
+      checkpoint: () => f16Checkpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: true,
+      want: bitsOf(reordered),
+    },
+    {
+      name: 'F16 into an f32 layer decodes the reordered halfwords',
+      checkpoint: () => f16Checkpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: false,
+      want: bitsOf(f16ToF32(reordered)),
+    },
+    {
+      name: 'F32 into an f32 layer uploads f32 reordered',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: new Float32Array(f32Values), shape: [2, 3, 2] } }),
+      half: false,
+      want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
+    },
+    {
+      name: 'BF16 into an f32 layer decodes, then reorders',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16(f32Values), shape: [2, 3, 2] } }),
+      half: false,
+      want: bitsOf(new Float32Array(TAP_MAJOR.map((i) => i + 1))),
+    },
+    {
+      name: 'BF16 into an f16 layer decodes, reorders, then narrows',
+      checkpoint: async () =>
+        memoryStateDict({ weight: { data: bf16(f32Values), shape: [2, 3, 2] } }),
+      half: true,
+      want: bitsOf(f32ArrayToF16Bits(new Float32Array(TAP_MAJOR.map((i) => i + 1))).data),
+    },
+    {
+      name: 'derived halfwords into an f16 layer upload reordered',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: true,
+      want: bitsOf(reordered),
+    },
+    {
+      name: 'derived halfwords into an f32 layer decode reordered',
+      checkpoint: async () => derivedCheckpoint(new Uint16Array(halves), [2, 3, 2]),
+      half: false,
+      want: bitsOf(f16ToF32(reordered)),
+    },
+  ])('$name', async ({ checkpoint, half, want }) => {
+    const layer = new Conv1d(3, 2, 2, { bias: false });
+    if (half) layer.half();
+    expect(bitsOf(await uploadedWeight(layer, await checkpoint()))).toEqual(want);
+  });
+
+  it('rejects derived packed words', async () => {
+    const sd = derivedCheckpoint(new Uint32Array(12), [2, 3, 2]);
+    await expect(uploadedWeight(new Conv1d(3, 2, 2, { bias: false }), sd)).rejects.toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'Conv1d: source holds packed u32 words',
+      }),
+    );
+  });
+
+  it('reorders F16 halfwords without decoding them to f32', async () => {
+    const sd = await f16Checkpoint(new Uint16Array(halves), [2, 3, 2]);
+    const f32 = vi.spyOn(sd.tensors.get('weight')!, 'f32');
+    new Conv1d(3, 2, 2, { bias: false }).transformStateDict(sd, '');
+    const w = sd.tensors.get('weight')!;
+    if (w.kind !== 'derived') throw new Error('expected a derived tensor');
+    expect(await w.data()).toBeInstanceOf(Uint16Array);
+    expect(w.byteLength).toBe(24);
+    expect(f32).not.toHaveBeenCalled();
+  });
+
+  // The reference is the f32 round trip: decode, reorder in f32, then narrow
+  // for an f16 layer.
+  it.each([
+    { name: 'an f16 layer', half: true },
+    { name: 'an f32 layer', half: false },
+  ])(
+    'loads every F16 value into $name with the same bits as the f32 round trip',
+    async ({ half }) => {
+      // 63490 values as out 10, in 907, k 7.
+      const [cOut, cIn, k] = [10, 907, 7];
+      const values = f16ToF32(ALL_F16);
+      const tapMajor = new Float32Array(values.length);
+      for (let o = 0; o < cOut; o++) {
+        for (let i = 0; i < cIn; i++) {
+          for (let t = 0; t < k; t++)
+            tapMajor[(t * cIn + i) * cOut + o] = values[(o * cIn + i) * k + t]!;
+        }
+      }
+      const want = half ? f32ArrayToF16Bits(tapMajor).data : tapMajor;
+      const layer = new Conv1d(cIn, cOut, k, { bias: false });
+      if (half) layer.half();
+      const got = await uploadedWeight(layer, await f16Checkpoint(ALL_F16, [cOut, cIn, k]));
+      expect(bitsOf(got)).toEqual(bitsOf(want));
+    },
+  );
+
+  it('widens the window by the dilation', () => {
+    const conv = (padding?: 'same') =>
+      fakeLoad(new Conv1d(4, 6, 3, { dilation: 2, padding })).forward(input([10, 4])).shape;
+    expect(conv()).toEqual(meta([6, 6]));
+    expect(conv('same')).toEqual(meta([10, 6]));
+  });
+});
+
+describe('ConvTranspose1d', () => {
+  it('stores the weight as [taps·in, stride·out] and the bias once per frame', () => {
+    expect(shapes(new ConvTranspose1d(4, 6, 4, { stride: 2 }))).toEqual({
+      weight: meta([8, 12]),
+      bias: meta([12]),
+    });
+  });
+
+  it('maps [T, in] to [(T − 1)·stride − 2·padding + kernel + outputPadding, out]', () => {
+    const conv = new ConvTranspose1d(4, 8, 6, { stride: 3, padding: 2, outputPadding: 1 });
+    expect(fakeLoad(conv).forward(input([10, 4])).shape).toEqual(meta([30, 8]));
+    const unpadded = new ConvTranspose1d(4, 8, 3, { stride: 3 });
+    expect(fakeLoad(unpadded).forward(input([10, 4])).shape).toEqual(meta([30, 8]));
+  });
+
+  it('reorders a torch [in, out, k] weight and repeats the bias at load', async () => {
+    const sd = memoryStateDict({
+      'c.weight': { data: new Float32Array([1, 2, 3, 4]), shape: [1, 1, 4] },
+      'c.bias': new Float32Array([5]),
+    });
+    new ConvTranspose1d(1, 1, 4, { stride: 2 }).transformStateDict(sd, 'c');
+    // Tap 0 reads the later frame, so it takes kernel positions 2 and 3.
+    expect(await sd.tensors.get('c.weight')!.f32()).toEqual(new Float32Array([3, 4, 1, 2]));
+    expect(await sd.tensors.get('c.bias')!.f32()).toEqual(new Float32Array([5, 5]));
+  });
+
+  it('rejects a weight in another layout', () => {
+    const sd = memoryStateDict({ 'c.weight': { data: new Float32Array(4), shape: [1, 4, 1] } });
+    expect(() => new ConvTranspose1d(1, 1, 4, { stride: 2 }).transformStateDict(sd, 'c')).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
+    );
+  });
+
+  it.each([
+    { name: 'a kernel that is not a multiple of the stride', k: 5, opts: { stride: 2 } },
+    {
+      name: 'an outputPadding above the padding',
+      k: 4,
+      opts: { stride: 2, padding: 0, outputPadding: 1 },
+    },
+  ])('rejects $name', ({ k, opts }) => {
+    expect(() => new ConvTranspose1d(2, 2, k, opts)).toThrow(/ConvTranspose1d/);
+  });
+});
+
+describe('Snake', () => {
+  it('declares a pinned f32 [2, channels] weight', () => {
+    const s = new Snake(8);
+    expect(shapes(s)).toEqual({ weight: meta([2, 8]) });
+    expect(s.weight.pinned).toBe(true);
+  });
+
+  it('turns a torch alpha [1, C, 1] into alpha and 1 / (alpha + 1e-9) at load', async () => {
+    const sd = memoryStateDict({
+      's.alpha': { data: new Float32Array([0.5, 2]), shape: [1, 2, 1] },
+    });
+    new Snake(2).transformStateDict(sd, 's');
+    expect(sd.tensors.has('s.alpha')).toBe(false);
+    const w = sd.tensors.get('s.weight')!;
+    expect(w.shape).toEqual([2, 2]);
+    expect(await w.f32()).toEqual(new Float32Array([0.5, 2, 1 / (0.5 + 1e-9), 1 / (2 + 1e-9)]));
   });
 });
 
@@ -305,18 +1013,20 @@ describe('normalization layers', () => {
     });
   });
 
-  it('GroupNorm has a weight and bias per channel, and needs one group', () => {
+  it('GroupNorm has a weight and bias per channel, and groups that divide the channels', () => {
     expect(shapes(new GroupNorm(1, 8))).toEqual({ weight: meta([8]), bias: meta([8]) });
-    expect(() => new GroupNorm(2, 8)).toThrow(/only numGroups = 1 is supported, got 2/);
+    expect(shapes(new GroupNorm(8, 8))).toEqual({ weight: meta([8]), bias: meta([8]) });
+    expect(() => new GroupNorm(3, 8)).toThrow(/numGroups 3 must divide the 8 channels/);
   });
 
-  it('RMSNorm has one scale per feature', () => {
-    expect(shapes(new RMSNorm(8))).toEqual({ scale: meta([8]) });
+  it('RMSNorm has one weight per feature', () => {
+    expect(shapes(new RMSNorm(8))).toEqual({ weight: meta([8]) });
   });
 
   it.each([
     ['LayerNorm', () => new LayerNorm(8, 1e-5, { bias: true })],
     ['GroupNorm', () => new GroupNorm(1, 8)],
+    ['GroupNorm per channel', () => new GroupNorm(8, 8)],
     ['RMSNorm', () => new RMSNorm(8)],
   ] as const)('%s keeps the [T, N] shape', (_, make) => {
     expect(fakeLoad(make()).forward(input([5, 8])).shape).toEqual(meta([5, 8]));
@@ -374,6 +1084,28 @@ describe('Embedding', () => {
 
   it('gather() refuses a GPU table', () => {
     expect(() => new Embedding(3, 2).gather([0])).toThrow(/cpu-resident tables only/);
+  });
+
+  describe('with a quantized table', () => {
+    it('uploads an int8 table as int · scale, one scale per row', async () => {
+      const sd = await quantCheckpoint(8, 4, {
+        weight: { ints: [1, -2, 3, -4, 5, 6, -7, 8], scales: [0.5, 2], shape: [2, 4] },
+      });
+      expect(await uploadedWeight(new Embedding(2, 4), sd)).toEqual(
+        new Float32Array([0.5, -1, 1.5, -2, 10, 12, -14, 16]),
+      );
+    });
+
+    it('gathers rows of an int4 table in groups of 2 on the CPU', async () => {
+      const sd = await quantCheckpoint(4, 2, {
+        weight: { ints: [1, -2, 3, -4, 5, 6, -7, 7], scales: [0.5, 1, 2, 0.25], shape: [2, 4] },
+      });
+      const e = new Embedding(2, 4, { device: 'cpu' });
+      const upload = vi.fn();
+      await loadLazyStateDict(e, sd, { upload });
+      expect(upload).not.toHaveBeenCalled();
+      expect(e.gather([1, 0])).toEqual(new Float32Array([10, 12, -1.75, 1.75, 0.5, -1, 3, -4]));
+    });
   });
 });
 

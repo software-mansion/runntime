@@ -9,7 +9,10 @@
  *  Built for few dispatches: q/k/v are one matmul, their per-head norms one
  *  grouped RMSNorm, and every post-norm also adds the residual. GELU rides
  *  the gate matmul's epilogue. Long inputs run attention per head as two
- *  matmuls around a masked softmax, short ones as one sdpa. */
+ *  matmuls around a masked softmax, short ones as one sdpa.
+ *
+ *  Module fields are named like the checkpoint: everything sits under
+ *  `language_model`. */
 
 import {
   cat,
@@ -48,22 +51,62 @@ const MATMUL_ATTENTION_MIN_SEGMENT = 256;
  *  outside its window. */
 const MATMUL_ATTENTION_MAX_SLIDING_ROWS = 1024;
 
-class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
-  readonly input_layernorm: nn.RMSNorm;
+/** The attention projections and per-head norms, fused at load. */
+class Attention extends nn.Module {
   /** q | k | v rows, with q and k permuted for the interleaved rope. */
   readonly qkv: nn.Linear;
   /** q_norm tiled per q head, k_norm per kv head, ones for v. */
   readonly qkv_norm: nn.Parameter;
   readonly o_proj: nn.Linear;
-  readonly post_attention_layernorm: nn.RMSNorm;
-  readonly pre_feedforward_layernorm: nn.RMSNorm;
+  constructor(hidden: number, heads: number, kvHeads: number, headDim: number) {
+    super();
+    const width = (heads + 2 * kvHeads) * headDim;
+    this.qkv = new nn.Linear(hidden, width, { bias: false });
+    this.qkv_norm = new nn.Parameter({ elems: width, dtype: 'f32', dims: [width] });
+    this.o_proj = new nn.Linear(heads * headDim, hidden, { bias: false });
+  }
+}
+
+/** GeGLU MLP, GELU in the gate matmul's epilogue. */
+class Mlp extends nn.Module {
   readonly gate_proj: nn.Linear;
   readonly up_proj: nn.Linear;
   readonly down_proj: nn.Linear;
-  readonly post_feedforward_layernorm: nn.RMSNorm;
+  constructor(hidden: number, ffn: number) {
+    super();
+    this.gate_proj = new nn.Linear(hidden, ffn, { bias: false, activation: 'geluTanh' });
+    this.up_proj = new nn.Linear(hidden, ffn, { bias: false });
+    this.down_proj = new nn.Linear(ffn, hidden, { bias: false });
+  }
+  forward(x: Value): Value {
+    return this.down_proj.forward(mul(this.gate_proj.forward(x), this.up_proj.forward(x)));
+  }
+}
+
+/** The PLE gate and projection, between the layer's output and its norm. */
+class PleBlock extends nn.Module {
   readonly per_layer_input_gate: nn.Linear;
   readonly per_layer_projection: nn.Linear;
   readonly post_per_layer_input_norm: nn.RMSNorm;
+  constructor({ hidden, pleDim, eps }: EmbeddingGemma2Config) {
+    super();
+    this.per_layer_input_gate = new nn.Linear(hidden, pleDim, {
+      bias: false,
+      activation: 'geluTanh',
+    });
+    this.per_layer_projection = new nn.Linear(pleDim, hidden, { bias: false });
+    this.post_per_layer_input_norm = new nn.RMSNorm(hidden, eps);
+  }
+}
+
+class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
+  readonly input_layernorm: nn.RMSNorm;
+  readonly self_attn: Attention;
+  readonly post_attention_layernorm: nn.RMSNorm;
+  readonly pre_feedforward_layernorm: nn.RMSNorm;
+  readonly mlp: Mlp;
+  readonly post_feedforward_layernorm: nn.RMSNorm;
+  readonly ple_block: PleBlock;
   /** One number that scales the layer's output; read on the CPU. */
   readonly layer_scalar: nn.CpuParameter;
 
@@ -72,26 +115,16 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
     readonly type: LayerType,
   ) {
     super();
-    const { hidden, heads, ffn, pleDim, eps } = cfg;
+    const { hidden, heads, ffn, eps } = cfg;
     const { headDim, kvHeads } = cfg.attention[type];
-    const width = (heads + 2 * kvHeads) * headDim;
     const norm = () => new nn.RMSNorm(hidden, eps);
     this.input_layernorm = norm();
-    this.qkv = new nn.Linear(hidden, width, { bias: false });
-    this.qkv_norm = new nn.Parameter({ elems: width, dtype: 'f32', dims: [width] });
-    this.o_proj = new nn.Linear(heads * headDim, hidden, { bias: false });
+    this.self_attn = new Attention(hidden, heads, kvHeads, headDim);
     this.post_attention_layernorm = norm();
     this.pre_feedforward_layernorm = norm();
-    this.gate_proj = new nn.Linear(hidden, ffn, { bias: false, activation: 'geluTanh' });
-    this.up_proj = new nn.Linear(hidden, ffn, { bias: false });
-    this.down_proj = new nn.Linear(ffn, hidden, { bias: false });
+    this.mlp = new Mlp(hidden, ffn);
     this.post_feedforward_layernorm = norm();
-    this.per_layer_input_gate = new nn.Linear(hidden, pleDim, {
-      bias: false,
-      activation: 'geluTanh',
-    });
-    this.per_layer_projection = new nn.Linear(pleDim, hidden, { bias: false });
-    this.post_per_layer_input_norm = norm();
+    this.ple_block = new PleBlock(cfg);
     this.layer_scalar = new nn.CpuParameter({ elems: 1, dtype: 'f32', dims: [1] });
   }
 
@@ -101,12 +134,13 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
     const { cos, sin } = inp.rope[this.type];
     const window = this.type === 'sliding' ? slidingWindow : Infinity;
     const postNorm = (norm: nn.RMSNorm, y: Value, residual: Value, scale?: number) =>
-      rmsNorm(y, norm.scale.value, norm.eps, { residual, scale });
+      rmsNorm(y, norm.weight.value, norm.eps, { residual, scale });
 
     // Attention: qkv, one grouped norm for all heads, rope q and k. Columns
     // of n: q heads, then k heads, then v heads.
-    const qkv = this.qkv.forward(this.input_layernorm.forward(x));
-    const n = rmsNorm(qkv, this.qkv_norm.value, eps, { group: d });
+    const { self_attn, ple_block } = this;
+    const qkv = self_attn.qkv.forward(this.input_layernorm.forward(x));
+    const n = rmsNorm(qkv, self_attn.qkv_norm.value, eps, { group: d });
     const roped = (start: number, width: number) =>
       rope(n, cos, sin, { headDim: d, srcStart: start, width });
     const vStart = (heads + kvHeads) * d;
@@ -144,17 +178,15 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
         },
       );
     }
-    x = postNorm(this.post_attention_layernorm, this.o_proj.forward(a), x);
+    x = postNorm(this.post_attention_layernorm, self_attn.o_proj.forward(a), x);
 
-    // GeGLU MLP, GELU in the gate matmul's epilogue.
-    const f = this.pre_feedforward_layernorm.forward(x);
-    const m = this.down_proj.forward(mul(this.gate_proj.forward(f), this.up_proj.forward(f)));
+    const m = this.mlp.forward(this.pre_feedforward_layernorm.forward(x));
     x = postNorm(this.post_feedforward_layernorm, m, x);
 
     // PLE: gate against this layer's slice, project back, then scale the layer.
-    const g = mul(this.per_layer_input_gate.forward(x), perLayer);
-    const p = this.per_layer_projection.forward(g);
-    return postNorm(this.post_per_layer_input_norm, p, x, this.layer_scalar.data[0]!);
+    const g = mul(ple_block.per_layer_input_gate.forward(x), perLayer);
+    const p = ple_block.per_layer_projection.forward(g);
+    return postNorm(ple_block.post_per_layer_input_norm, p, x, this.layer_scalar.data[0]!);
   }
 }
 
@@ -171,19 +203,20 @@ class Ple extends nn.Module<[Value], Value> {
    *  hidden^-½ scale is folded into the projection at load. */
   override forward(x: Value): Value {
     const norm = this.per_layer_projection_norm;
-    return rmsNorm(this.per_layer_model_projection.forward(x), norm.scale.value, norm.eps, {
+    return rmsNorm(this.per_layer_model_projection.forward(x), norm.weight.value, norm.eps, {
       group: this.cfg.pleDim,
     });
   }
 }
 
-export class EmbeddingGemma2Model extends nn.Module<[EmbeddingGemma2Inputs], Value> {
+/** The checkpoint's `language_model`: the whole text model. */
+class LanguageModel extends nn.Module {
   readonly embed_tokens: nn.Embedding;
   readonly ple: Ple;
   readonly layers: nn.ModuleList<Layer>;
   readonly norm: nn.RMSNorm;
   readonly embedding_projection: nn.Linear;
-  constructor(readonly cfg: EmbeddingGemma2Config = EMBEDDINGGEMMA2_TEXT) {
+  constructor(cfg: EmbeddingGemma2Config) {
     super();
     // 262k rows of 512, and a call reads a handful: keep it on the CPU.
     this.embed_tokens = new nn.Embedding(cfg.vocab, cfg.hidden, { device: 'cpu' });
@@ -192,11 +225,19 @@ export class EmbeddingGemma2Model extends nn.Module<[EmbeddingGemma2Inputs], Val
     this.norm = new nn.RMSNorm(cfg.hidden, cfg.eps);
     this.embedding_projection = new nn.Linear(cfg.hidden, cfg.embeddingDim, { bias: false });
   }
+}
+
+export class EmbeddingGemma2Model extends nn.Module<[EmbeddingGemma2Inputs], Value> {
+  readonly language_model: LanguageModel;
+  constructor(readonly cfg: EmbeddingGemma2Config = EMBEDDINGGEMMA2_TEXT) {
+    super();
+    this.language_model = new LanguageModel(cfg);
+  }
 
   /** Token ids to input rows [ids.length · hidden], scaled by √hidden,
    *  written into `out` at row `offset`. */
   embedRows(ids: readonly number[], out: Float32Array, offset: number): void {
-    const rows = this.embed_tokens.gather(ids);
+    const rows = this.language_model.embed_tokens.gather(ids);
     const s = Math.sqrt(this.cfg.hidden);
     const base = offset * this.cfg.hidden;
     for (let i = 0; i < rows.length; i++) out[base + i] = rows[i]! * s;
@@ -205,15 +246,16 @@ export class EmbeddingGemma2Model extends nn.Module<[EmbeddingGemma2Inputs], Val
   /** Packed inputs to their pooled, projected embeddings [B, embeddingDim],
    *  not yet unit length. */
   override forward(inp: EmbeddingGemma2Inputs): Value {
-    const perLayer = this.ple.forward(inp.x0);
+    const { ple, layers, norm, embedding_projection } = this.language_model;
+    const perLayer = ple.forward(inp.x0);
     const pd = this.cfg.pleDim;
     let x = inp.x0;
-    this.layers.items.forEach((layer, i) => {
+    layers.items.forEach((layer, i) => {
       x = layer.forward(x, slice(perLayer, 1, i * pd, (i + 1) * pd), inp);
     });
     // Pooling before the projection: both are linear, and this projects B
     // rows instead of T.
-    return this.embedding_projection.forward(matmul(inp.selector, this.norm.forward(x)));
+    return embedding_projection.forward(matmul(inp.selector, norm.forward(x)));
   }
 
   override transformStateDict(sd: LazyStateDict, prefix: string): void {

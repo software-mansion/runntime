@@ -28,27 +28,34 @@ interface GatherCase {
   count: number;
   op: 'gatherRows' | 'gatherRowsFrom';
   dtype?: 'f32' | 'f16';
+  /** gatherRowsFrom only: indices summed into each output row. */
+  group?: number;
 }
 
-/** out[i, c] = x[idx[i], c], with x[r, c] = r · cols + c so every value says
- *  where it came from. Every table stays under 2048 values, exact in f16. */
+/** out[i, c] = the sum of x[idx[i·group + g], c] over g, with x[r, c] =
+ *  r · cols + c so every value says where it came from. Every table and sum
+ *  stays under 2048, exact in f16. */
 async function checkGather({
   table,
   cols,
   count: gathered,
   op,
   dtype = 'f32',
+  group = 1,
 }: GatherCase): Promise<void> {
   const x = Float32Array.from({ length: table * cols }, (_, i) => i);
-  const idx = Float32Array.from({ length: gathered }, (_, i) => (i * 7) % table);
+  const idx = Float32Array.from({ length: gathered * group }, (_, i) => (i * 7) % table);
   const xs = upload(root, x, { ...matrix(table, cols), dtype });
   const y =
     op === 'gatherRows'
       ? gatherRows(xs, Array.from(idx))
-      : gatherRowsFrom(xs, upload(root, idx, matrix(gathered, 1)));
+      : gatherRowsFrom(xs, upload(root, idx, matrix(gathered * group, 1)), group);
   const want = new Float32Array(gathered * cols);
   for (let i = 0; i < gathered; i++) {
-    for (let c = 0; c < cols; c++) want[i * cols + c] = x[idx[i]! * cols + c]!;
+    for (let g = 0; g < group; g++) {
+      const row = idx[i * group + g]!;
+      for (let c = 0; c < cols; c++) want[i * cols + c]! += x[row * cols + c]!;
+    }
   }
   expectClose(await toArray(y, ex), want, EXACT);
 }
@@ -193,7 +200,8 @@ describe('rows kernels', () => {
     expectClose(await toArray(second, ex), [...count(3, 1), ...count(6, 10)], EXACT);
   });
 
-  // gatherRows takes its ids as a list, gatherRowsFrom from a GPU buffer.
+  // gatherRows takes its ids as a list, gatherRowsFrom from a GPU buffer and
+  // sums each group of them.
   it.for<GatherCase>([
     { name: 'gatherRows, a few rows', table: 16, cols: 8, count: 5, op: 'gatherRows' },
     { name: 'gatherRows, 3 columns', table: 16, cols: 3, count: 9, op: 'gatherRows' },
@@ -207,6 +215,23 @@ describe('rows kernels', () => {
       count: 11,
       op: 'gatherRowsFrom',
       dtype: 'f16',
+    },
+    {
+      name: 'gatherRowsFrom, groups of 8',
+      table: 16,
+      cols: 8,
+      count: 5,
+      op: 'gatherRowsFrom',
+      group: 8,
+    },
+    {
+      name: 'gatherRowsFrom f16, groups of 3',
+      table: 16,
+      cols: 6,
+      count: 11,
+      op: 'gatherRowsFrom',
+      dtype: 'f16',
+      group: 3,
     },
     // Past 2^24 output values an f32 quotient rounds the index and picks the
     // wrong row; the kernels divide in integers.

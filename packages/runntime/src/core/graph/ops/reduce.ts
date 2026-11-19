@@ -98,3 +98,39 @@ export function topk(x: Value, k: number): Value {
   if (n < k) throw new Error(`topk: need at least ${k} columns, got ${n}`);
   return pending({ elems: m * 2 * k, dtype: 'f32', dims: [m, 2 * k] }, 'topk', [x]);
 }
+
+/** Sampler statistics of logit rows x [rows, cols], cut into `blocks` blocks
+ *  of `block` columns from column 0; later columns are ignored. Out is f32
+ *  [blocks·rows, 2], block-major: row b·rows + r holds, for block b of row r,
+ *  the argmax over the block's first argmaxCols columns and the
+ *  log-probability of that column over the whole block.
+ *
+ *  With `guide` (same shape and dtype as x) the argmax is over
+ *  (1 + guideWeight)·x − guideWeight·guide; the log-probability stays x's. */
+export function logitStats(
+  x: Value,
+  opts: { blocks: number; block: number; argmaxCols: number; guide?: Value; guideWeight?: number },
+): Value {
+  const [rows, cols, dtype] = want2d('logitStats', x, FLOAT_DTYPES);
+  const { blocks, block, argmaxCols, guide, guideWeight = 0 } = opts;
+  const ints = [blocks, block, argmaxCols];
+  if (!ints.every((v) => Number.isInteger(v) && v > 0) || argmaxCols > block) {
+    throw new Error(
+      `logitStats: blocks, block and argmaxCols ${ints} must be positive, argmaxCols <= block`,
+    );
+  }
+  if (blocks * block > cols) {
+    throw new Error(`logitStats: ${blocks} blocks of ${block} exceed ${cols} cols`);
+  }
+  if (guide && (guide.shape.dtype !== dtype || guide.shape.elems !== rows * cols)) {
+    throw new Error(`logitStats: guide must be ${dtype} [${rows}, ${cols}] like x`);
+  }
+  if (!Number.isFinite(guideWeight)) throw new Error('logitStats: guideWeight must be finite');
+  return pending(
+    { elems: blocks * rows * 2, dtype: 'f32', dims: [blocks * rows, 2] },
+    'logitStats',
+    guide ? [x, guide] : [x],
+    undefined,
+    [blocks, block, argmaxCols, guide ? 1 : 0, guideWeight],
+  );
+}

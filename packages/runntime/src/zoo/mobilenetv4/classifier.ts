@@ -12,16 +12,26 @@ import {
   uploadF32,
   warmUp,
   writeF32,
+  type F32Buffer,
   type LazyStateDict,
 } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
 import { MOBILENETV4_CONV_S, type Mnv4Config } from './config.ts';
 import { MobileNetV4Model } from './model.ts';
+import type { ModelLoadOptions } from '../load.ts';
 
 export interface Classifier {
   readonly inputSize: number;
   readonly numClasses: number;
   run(pixels: Float32Array): Promise<Float32Array>;
+  /** Records one forward into `encoder`. `fill` records what writes the
+   *  `[3, size, size]` input, `read` what reads the `[numClasses]` logits.
+   *  Nothing is submitted. */
+  encode(
+    encoder: GPUCommandEncoder,
+    fill: (input: F32Buffer) => void,
+    read: (logits: F32Buffer) => void,
+  ): void;
   dispose(): void;
 }
 
@@ -44,10 +54,7 @@ export function assertCheckpoint(sd: LazyStateDict, cfg: Mnv4Config): void {
 
 export async function createClassifier(
   sd: LazyStateDict,
-  opts: {
-    cfg?: Mnv4Config;
-    onProgress?: (name: string, doneBytes: number, totalBytes: number) => void;
-  } = {},
+  opts: ModelLoadOptions & { cfg?: Mnv4Config } = {},
 ): Promise<Classifier> {
   const root = defaultRoot();
   const cfg = opts.cfg ?? MOBILENETV4_CONV_S;
@@ -84,8 +91,16 @@ export async function createClassifier(
       queue = job.catch(() => undefined);
       return job;
     };
-    await warmUp(root.device, () => run(new Float32Array(3 * size * size)));
-    return { inputSize: size, numClasses: cfg.numClasses, run, dispose };
+    const encode: Classifier['encode'] = (encoder, fill, read) => {
+      fill(buffer);
+      cap.encodeReplay(encoder);
+      // forward() ends in astype(..., 'f32'), so the logits are f32.
+      read(cap.targets.buffer as F32Buffer);
+    };
+    if (opts.warmUp !== false) {
+      await warmUp(root.device, () => run(new Float32Array(3 * size * size)));
+    }
+    return { inputSize: size, numClasses: cfg.numClasses, run, encode, dispose };
   } catch (err) {
     dispose();
     throw err;

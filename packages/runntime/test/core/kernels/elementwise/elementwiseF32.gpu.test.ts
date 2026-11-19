@@ -136,6 +136,22 @@ describe('elementwiseF32 kernel', () => {
     );
   });
 
+  // f32 counts exactly only up to 2^24, so an f32 row index would read the
+  // wrong row of b past it.
+  it('subtracts a column past 2^24 elements', async () => {
+    const rows = 4100;
+    const cols = 4097;
+    expect(rows * cols).toBeGreaterThan(2 ** 24);
+    const a = Float32Array.from({ length: rows * cols }, (_, i) => i % 7);
+    const b = Float32Array.from({ length: rows }, (_, r) => r % 2039);
+    const got = await toArray(sub(upload(root, a, [rows, cols]), upload(root, b, [rows, 1])), ex);
+    expectClose(
+      got,
+      Float32Array.from(a, (x, i) => x - b[Math.floor(i / cols)]!),
+      { atol: 0, rtol: 0 },
+    );
+  });
+
   it('adds random values in a shape no vec4 or workgroup divides', async () => {
     const a = randomF32(37 * 53, 1);
     const b = randomF32(53, 2);

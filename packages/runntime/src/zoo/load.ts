@@ -26,7 +26,16 @@ export interface LoadOptions {
   onBytes?: (chunkBytes: number) => void;
   /** Stops the load between steps. A step already running finishes first. */
   signal?: AbortSignal;
+  /** Runs the model once on a blank input before returning, which compiles
+   *  the kernels and fails the load with EXECUTION_FAILED when the GPU
+   *  errors or returns unusable output. With false, the first call pays the
+   *  compile time, and a GPU error is not caught: most tasks return zeros
+   *  instead of throwing. Default: true. */
+  warmUp?: boolean;
 }
+
+/** The LoadOptions a model constructor reads. */
+export type ModelLoadOptions = Pick<LoadOptions, 'onProgress' | 'warmUp'>;
 
 /** Throws LOAD_ABORTED when the signal is already aborted. */
 export function throwIfAborted(signal?: AbortSignal): void {
@@ -54,6 +63,22 @@ export async function openWeights(
     const where = typeof modelPath === 'string' ? modelPath : 'weights';
     throw new RunntimeError('LOAD_FAILED', `${where}: ${messageOf(err)}`, { cause: err });
   }
+}
+
+/** One onProgress for several files loading at once: `track(file)` gives a
+ *  file's callback, and each call reports the bytes of every file together. */
+export function combinedProgress(onProgress: LoadOptions['onProgress']) {
+  const progress = new Map<string, [number, number]>();
+  return (file: string) => (name: string, done: number, total: number) => {
+    progress.set(file, [done, total]);
+    let d = 0;
+    let t = 0;
+    for (const [fd, ft] of progress.values()) {
+      d += fd;
+      t += ft;
+    }
+    onProgress?.(name, d, t);
+  };
 }
 
 /** Downloads and parses a JSON file (a tokenizer, a config). With a cache,

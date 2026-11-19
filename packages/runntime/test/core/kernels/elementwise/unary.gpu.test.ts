@@ -4,6 +4,7 @@ import {
   add,
   asinh,
   clamp,
+  elu,
   gelu,
   mul,
   rsqrt,
@@ -76,6 +77,7 @@ const OPS: {
     tol: { atol: 1e-6, rtol: 1e-5 },
   },
   { name: 'silu', op: silu, ref: (x) => x / (1 + Math.exp(-x)), scale: 8 },
+  { name: 'elu', op: elu, ref: (x) => (x > 0 ? x : Math.expm1(x)), scale: 8 },
   // asinh: log(1 + x) for small x loses the digits past f32's 2^-24
   { name: 'asinh', op: asinh, ref: Math.asinh, scale: 20, tol: { atol: 1e-6, rtol: 1e-5 } },
 ];
@@ -104,13 +106,15 @@ describe('unary kernels', () => {
   });
 
   // Values worked out by hand: sigmoid(0) = 0.5, silu(-1) = -1/(1 + e),
-  // gelu(1) = Φ(1) = 0.841344746, asinh(1) = ln(1 + √2), rsqrt(4) = 0.5.
+  // gelu(1) = Φ(1) = 0.841344746, asinh(1) = ln(1 + √2), rsqrt(4) = 0.5,
+  // elu(-1) = 1/e − 1.
   it.each([
     { name: 'sigmoid(0)', op: sigmoid, x: 0, want: 0.5 },
     { name: 'silu(-1)', op: silu, x: -1, want: -1 / (1 + Math.E) },
     { name: 'gelu(1)', op: gelu, x: 1, want: 0.841344746 },
     { name: 'asinh(1)', op: asinh, x: 1, want: Math.log(1 + Math.SQRT2) },
     { name: 'rsqrt(4)', op: rsqrt, x: 4, want: 0.5 },
+    { name: 'elu(-1)', op: elu, x: -1, want: 1 / Math.E - 1 },
   ])('$name', async ({ op, x, want }) => {
     const got = await toArray(op(upload(root, new Float32Array([x]), [1, 1])), ex);
     expectClose(got, [want], { atol: 1e-7, rtol: 1e-6 });
@@ -122,6 +126,7 @@ describe('unary kernels', () => {
     { name: 'sigmoid', op: sigmoid, want: [0, 1] },
     { name: 'silu', op: silu, want: [-0, 1000] },
     { name: 'gelu', op: gelu, want: [-0, 1000] },
+    { name: 'elu', op: elu, want: [-1, 1000] },
   ])('$name saturates at ±1000', async ({ op, want }) => {
     const got = await toArray(op(upload(root, new Float32Array([-1000, 1000]), [1, 2])), ex);
     expectClose(got, want, { atol: 1e-6, rtol: 1e-6 });

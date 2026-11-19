@@ -310,4 +310,20 @@ describe('gatherRowsFrom', () => {
   it('needs f32 indices', () => {
     expect(() => gatherRowsFrom(input([5, 3]), input([7], 'f16'))).toThrow(/idx must be f32/);
   });
+
+  it('gives one row per group of indices', () => {
+    const y = gatherRowsFrom(input([5, 3], 'f16'), input([12]), 4);
+    expect(y.shape).toEqual(meta([3, 3], 'f16'));
+    expect(y.pending?.attrs).toEqual([4]);
+  });
+
+  it.each([
+    { name: 'that does not divide the indices', group: 5 },
+    { name: 'of zero', group: 0 },
+    { name: 'that is fractional', group: 1.5 },
+  ])('rejects a group $name', ({ group }) => {
+    expect(() => gatherRowsFrom(input([5, 3]), input([12]), group)).toThrow(
+      `gatherRowsFrom: group ${group} must divide the 12 indices`,
+    );
+  });
 });

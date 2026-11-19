@@ -7,11 +7,13 @@ export {
   add,
   asinh,
   clamp,
+  elu,
   gelu,
   mul,
   rsqrt,
   sigmoid,
   silu,
+  snake,
   sub,
   swiglu,
   swigluChunk,
@@ -39,7 +41,7 @@ export {
   transpose,
   writeRows,
 } from './ops/shape.ts';
-export { layerNorm, mean, rmsNorm, softmax, topk } from './ops/reduce.ts';
+export { layerNorm, logitStats, mean, rmsNorm, softmax, topk } from './ops/reduce.ts';
 export { channelAffine, toChw, toHwc4 } from './ops/hwc4.ts';
 export { conv1d, gluConv1d } from './ops/conv/conv1d.ts';
 export { SSM_DIRS, SSM_STATE, ssmScanMerge, ssmScanProject, ssmSelectiveScan } from './ops/ssm.ts';

@@ -3,11 +3,13 @@ import {
   add,
   asinh,
   clamp,
+  elu,
   gelu,
   mul,
   rsqrt,
   sigmoid,
   silu,
+  snake,
   sub,
   swiglu,
   swigluChunk,
@@ -152,6 +154,7 @@ describe('unary ops', () => {
     ['gelu', gelu],
     ['silu', silu],
     ['asinh', asinh],
+    ['elu', elu],
   ] as const)('%s keeps shape and dtype', (_, op) => {
     expect(op(input([4, 7], 'f16')).shape).toEqual(meta([4, 7], 'f16'));
   });
@@ -162,6 +165,7 @@ describe('unary ops', () => {
     ['gelu', gelu],
     ['silu', silu],
     ['asinh', asinh],
+    ['elu', elu],
   ] as const)('%s runs on hwc4, since it maps 0 to 0', (_, op) => {
     expect(op(hwc4Input(5, 2, 2)).shape.layout).toBe('hwc4');
   });
@@ -223,5 +227,29 @@ describe('swigluChunk', () => {
 
   it('rejects an odd column count', () => {
     expect(() => swigluChunk(input([4, 9]))).toThrow(/cols 9 must be even/);
+  });
+});
+
+describe('snake', () => {
+  it('keeps the shape and dtype of x', () => {
+    expect(snake(input([5, 8], 'f16'), input([2, 8])).shape).toEqual(meta([5, 8], 'f16'));
+  });
+
+  it.each([
+    {
+      name: 'channels not a multiple of 4',
+      x: input([5, 6]),
+      ab: input([2, 6]),
+      error: /channels 6/,
+    },
+    {
+      name: 'an ab of the wrong size',
+      x: input([5, 8]),
+      ab: input([8]),
+      error: /ab must be f32 \[2, 8\]/,
+    },
+    { name: 'an f16 ab', x: input([5, 8]), ab: input([2, 8], 'f16'), error: /ab must be f32/ },
+  ])('rejects $name', ({ x, ab, error }) => {
+    expect(() => snake(x, ab)).toThrow(error);
   });
 });

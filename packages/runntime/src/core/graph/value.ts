@@ -66,6 +66,8 @@ export type OpName =
   | 'gelu'
   | 'silu'
   | 'asinh'
+  | 'elu'
+  | 'snake'
   // matmul
   | 'matmul'
   | 'matmulQuantW'
@@ -102,6 +104,7 @@ export type OpName =
   | 'layerNorm'
   | 'rmsNorm'
   | 'topk'
+  | 'logitStats'
   // shape
   | 'astype'
   | 'transpose'

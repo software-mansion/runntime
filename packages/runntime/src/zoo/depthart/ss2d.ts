@@ -39,7 +39,7 @@ import {
   type ConvAct,
 } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
-import { derivedTensor, type LazyStateDict } from '../../core/index.ts';
+import { derive, floatTensor, type LazyStateDict } from '../../core/index.ts';
 import { requireTensor } from '../errors.ts';
 import { Conv2dBN, RepDW } from './layers.ts';
 
@@ -96,19 +96,16 @@ export class SS2D extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     // prefix is empty when this module is the root.
     const key = prefix ? `${prefix}.A_logs` : 'A_logs';
-    const src = requireTensor(sd, key, `SS2D at '${prefix}'`);
+    const where = `SS2D at '${prefix}'`;
+    const src = floatTensor(where, requireTensor(sd, key, where));
+    // f32 on purpose: A is an f32 parameter of the scan.
     sd.tensors.set(
       key,
-      derivedTensor(
-        [src.shape.reduce((a, b) => a * b, 1)],
-        async () => {
-          const logs = await src.f32();
-          const out = new Float32Array(logs.length);
-          for (let i = 0; i < logs.length; i++) out[i] = -Math.exp(logs[i]!);
-          return out;
-        },
-        src.byteLength,
-      ),
+      derive([src.shape.reduce((a, b) => a * b, 1)], [src], ([logs]) => {
+        const out = new Float32Array(logs.length);
+        for (let i = 0; i < logs.length; i++) out[i] = -Math.exp(logs[i]!);
+        return out;
+      }),
     );
   }
 

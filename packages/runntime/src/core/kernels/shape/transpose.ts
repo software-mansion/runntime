@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type FloatBuffer,
@@ -30,7 +30,7 @@ function makeTransposeVariant(elem: Elem) {
     if (i >= rows * cols) {
       return;
     }
-    const r = d.u32(i / cols); // explicit integer division (codebase convention)
+    const r = std.intdiv(i, cols); // u32 division: f32 / rounds past 2^24
     const c = i % cols;
     layout.$.out[c * rows + r] = layout.$.x[i]!;
   });

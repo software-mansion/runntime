@@ -1,42 +1,88 @@
 import { pending, Value } from '../../value.ts';
-import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from '../shared.ts';
+import {
+  MATMUL_QUANT_TILED_BK,
+  matmulQuantTiledEligible,
+} from '../../../kernels/matmul/matmulQuantTiled.ts';
+import { ACT_CODE, FLOAT_DTYPES, want2d, wantQuantW, type SlotAct } from '../shared.ts';
 
-/** Strided 1-D convolution over time-major [T_in, C_in], with w tap-major
- *  [kernelSize·C_in, C_out].
+/** Strided, dilated 1-D convolution over time-major [T_in, C_in], with w
+ *  tap-major [kernelSize·C_in, C_out]. Tap j reads frame j·dilation of the
+ *  window, so the window spans dilation·(kernelSize − 1) + 1 frames.
  *
  *  `padding` takes torch's number, 'valid' or 'same'; padLeft and padRight pad
- *  each side independently instead, and kernelSize−1 on the left is causal.
- *  Passing both is an error, and every pad must stay below kernelSize — an
+ *  each side independently instead, and span − 1 on the left is causal.
+ *  Passing both is an error, and every pad must stay below the span — an
  *  output frame computed from padding alone is a model bug.
  *
- *  `bias` and `activation` fold into the epilogue as act(conv + bias). */
+ *  `bias` and `activation` fold into the epilogue as act(conv + bias).
+ *
+ *  A quantW w takes f32 `scales`, `bits` and `groupSize`, with the scales of
+ *  the torch weight: one per groupSize values of a torch row. For a Conv1d,
+ *  torch rows are [C_out, C_in·kernelSize] and the scales are stored
+ *  [C_in·kernelSize / groupSize, C_out]. `transposedKernel` marks the weight
+ *  of a ConvTranspose1d with that kernel, run as this conv: torch rows are
+ *  [C_in, out·transposedKernel] with out = C_out·kernelSize /
+ *  transposedKernel a multiple of 4, and the scales are stored as is. */
 export function conv1d(
   x: Value,
   w: Value,
   opts: {
     kernelSize: number;
     stride: number;
+    dilation?: number;
     padding?: number | 'valid' | 'same';
     padLeft?: number;
     padRight?: number;
     bias?: Value;
     activation?: SlotAct;
+    scales?: Value;
+    bits?: 8 | 4;
+    groupSize?: number;
+    transposedKernel?: number;
   },
 ): Value {
-  const { kernelSize, stride, padding, bias, activation } = opts;
+  const { kernelSize, stride, padding, bias, activation, scales, bits, groupSize } = opts;
+  const transposedKernel = opts.transposedKernel ?? 0;
+  const dilation = opts.dilation ?? 1;
   if (padding !== undefined && (opts.padLeft !== undefined || opts.padRight !== undefined)) {
     throw new Error('conv1d: padding excludes padLeft/padRight — give one form or the other');
   }
   const [tIn, cIn, dtype] = want2d('conv1d', x, FLOAT_DTYPES);
-  const [wRows, cOut, wDtype] = want2d('conv1d.w', w, FLOAT_DTYPES);
-  if (wDtype !== dtype) {
-    throw new Error(`conv1d: weight dtype ${wDtype} must match the input's ${dtype}`);
+  const quant = w.shape.dtype === 'quantW';
+  let wRows: number;
+  let cOut: number;
+  if (quant) {
+    if (!scales || !bits || !groupSize) {
+      throw new Error('conv1d: quantW weights need scales, bits and groupSize');
+    }
+    [wRows, cOut] = wantQuantW('conv1d', w, scales, bits);
+    if (cIn % 4 !== 0 || !matmulQuantTiledEligible(kernelSize * cIn, cOut)) {
+      throw new Error(
+        `conv1d: a quantW weight needs C_in and C_out multiples of 4 and kernelSize·C_in of ${MATMUL_QUANT_TILED_BK}, got kernelSize ${kernelSize}, C_in ${cIn}, C_out ${cOut}`,
+      );
+    }
+    checkQuantScales(scales, groupSize, { cIn, cOut, kernelSize, transposedKernel });
+  } else {
+    if (scales || bits || groupSize || transposedKernel) {
+      throw new Error(
+        'conv1d: scales/bits/groupSize/transposedKernel apply to quantW weights only',
+      );
+    }
+    let wDtype: string;
+    [wRows, cOut, wDtype] = want2d('conv1d.w', w, FLOAT_DTYPES);
+    if (wDtype !== dtype) {
+      throw new Error(`conv1d: weight dtype ${wDtype} must match the input's ${dtype}`);
+    }
   }
   if (!Number.isInteger(kernelSize) || kernelSize < 1 || !Number.isInteger(stride) || stride < 1) {
     throw new Error(
       `conv1d: kernelSize ${kernelSize} and stride ${stride} must be positive integers`,
     );
   }
+  if (!Number.isInteger(dilation) || dilation < 1) {
+    throw new Error(`conv1d: dilation ${dilation} must be a positive integer`);
+  }
+  const span = dilation * (kernelSize - 1) + 1;
   let padLeft: number;
   let padRight: number;
   if (padding === 'valid') {
@@ -46,8 +92,8 @@ export function conv1d(
     if (stride !== 1) {
       throw new Error(`conv1d: padding 'same' requires stride 1, got ${stride}`);
     }
-    padLeft = Math.floor((kernelSize - 1) / 2);
-    padRight = kernelSize - 1 - padLeft;
+    padLeft = Math.floor((span - 1) / 2);
+    padRight = span - 1 - padLeft;
   } else {
     padLeft = padding ?? opts.padLeft ?? 0;
     padRight = padding ?? opts.padRight ?? 0;
@@ -56,17 +102,17 @@ export function conv1d(
     ['padLeft', padLeft],
     ['padRight', padRight],
   ] as const) {
-    if (!Number.isInteger(pad) || pad < 0 || pad >= kernelSize) {
+    if (!Number.isInteger(pad) || pad < 0 || pad >= span) {
       const given = typeof padding === 'number' ? `padding ${padding}` : `${name} ${pad}`;
-      throw new Error(`conv1d: ${given} must be an integer in [0, kernelSize)`);
+      throw new Error(`conv1d: ${given} must be an integer in [0, ${span}), the window span`);
     }
   }
   if (wRows !== kernelSize * cIn) {
     throw new Error(`conv1d: w rows ${wRows} != kernelSize·C_in = ${kernelSize}·${cIn}`);
   }
-  if (tIn + padLeft + padRight < kernelSize) {
+  if (tIn + padLeft + padRight < span) {
     throw new Error(
-      `conv1d: padded frames ${tIn}+${padLeft}+${padRight} < kernelSize ${kernelSize} — no output`,
+      `conv1d: padded frames ${tIn}+${padLeft}+${padRight} < window span ${span} — no output`,
     );
   }
   if (bias && (bias.shape.dtype !== dtype || bias.shape.elems !== cOut)) {
@@ -75,14 +121,56 @@ export function conv1d(
     );
   }
   const act = activation ? ACT_CODE[activation] : 0;
-  const tOut = Math.floor((tIn + padLeft + padRight - kernelSize) / stride) + 1;
+  const tOut = Math.floor((tIn + padLeft + padRight - span) / stride) + 1;
   return pending(
     { elems: tOut * cOut, dtype, dims: [tOut, cOut] },
     'conv1d',
-    [x, w, ...(bias ? [bias] : [])],
+    [x, w, ...(scales ? [scales] : []), ...(bias ? [bias] : [])],
     undefined,
-    [kernelSize, stride, padLeft, padRight, bias ? 1 : 0, act],
+    [
+      kernelSize,
+      stride,
+      padLeft,
+      padRight,
+      bias ? 1 : 0,
+      act,
+      dilation,
+      bits ?? 0,
+      groupSize ?? 0,
+      transposedKernel,
+    ],
   );
+}
+
+/** Throws unless `scales` hold one scale per groupSize values of each torch
+ *  row of a quantW conv1d weight, as conv1d describes. */
+function checkQuantScales(
+  scales: Value,
+  groupSize: number,
+  geom: { cIn: number; cOut: number; kernelSize: number; transposedKernel: number },
+): void {
+  const { cIn, cOut, kernelSize, transposedKernel } = geom;
+  let rows = cOut;
+  let cols = cIn * kernelSize;
+  if (transposedKernel > 0) {
+    const stride = transposedKernel / kernelSize;
+    if (!Number.isInteger(stride) || cOut % (4 * stride) !== 0) {
+      throw new Error(
+        `conv1d: transposedKernel ${transposedKernel} must be kernelSize ${kernelSize} times a stride s with C_out ${cOut} a multiple of 4·s`,
+      );
+    }
+    rows = cIn;
+    cols = (cOut / stride) * transposedKernel;
+  }
+  if (!Number.isInteger(groupSize) || groupSize < 1 || cols % groupSize !== 0) {
+    throw new Error(`conv1d: groupSize ${groupSize} must divide the torch row of ${cols} values`);
+  }
+  const elems = (rows * cols) / groupSize;
+  if (scales.shape.elems !== elems) {
+    throw new Error(
+      `conv1d: scales must be f32 with ${elems} elems, one per ${groupSize} values of ${rows} torch rows, got ${scales.shape.elems}`,
+    );
+  }
 }
 
 /** GLU then a causal depthwise conv over time, in one dispatch. x [T, 2C] is

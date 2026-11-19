@@ -3,17 +3,25 @@
  *  once warm. */
 import type { TgpuRoot } from 'typegpu';
 import { describe, expect, it } from 'vitest';
-import { tensor3d, toArray } from '../../src/core/index.ts';
+import { matrix, tensor3d, toArray } from '../../src/core/index.ts';
 import { tensor } from '../../src/core/gpu/buffers.ts';
 import { gpuExecutor } from '../../src/core/gpu/eval.ts';
 import { CpuParameter, type AnyModule } from '../../src/core/nn/module.ts';
 import { gpuUpload } from '../../src/core/nn/loadStateDict.ts';
 import { f32ArrayToF16Bits } from '../../src/core/weights/convert.ts';
+import { REVERB } from '../../src/zoo/reverb/config.ts';
+import { ReverbModel } from '../../src/zoo/reverb/model.ts';
+import { createReverbSpeaker, type Voice } from '../../src/zoo/reverb/speaker.ts';
+import { HIGGS_DECODER } from '../../src/zoo/higgs/config.ts';
+import { HiggsDecoder } from '../../src/zoo/higgs/decoder.ts';
+import { createHiggsEncodeCore } from '../../src/zoo/higgs/encodeCore.ts';
+import { HiggsEncoder } from '../../src/zoo/higgs/encoder.ts';
 import { MINILM_L6 } from '../../src/zoo/minilm/config.ts';
 import { createMinilmEmbedCore } from '../../src/zoo/minilm/embedCore.ts';
 import { MinilmModel } from '../../src/zoo/minilm/model.ts';
 import { MobileNetV4Model } from '../../src/zoo/mobilenetv4/model.ts';
 import { buffersSince, gpu, liveBuffers, randomF32, repeated, requireFeature } from '../gpu.ts';
+import { CFG as HIGGS_ENCODER_CFG } from './higgs/encoderCheckpoint.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
  *  call per shape records replays and fills the pool. */
@@ -71,6 +79,41 @@ const TINY_MNV4 = {
   numClasses: 10,
   inputSize: 32,
 } as const;
+
+/** The Higgs decoder with one upsampling block and 8 channels. */
+const TINY_HIGGS = {
+  ...HIGGS_DECODER,
+  codebooks: 3,
+  codebookSize: 5,
+  latent: 8,
+  channels: 8,
+  strides: [2],
+  kernel: 3,
+};
+
+/** Reverb with one layer of width 16 and two heads of 8. Codes stay
+ *  1024 + the mask, as the sampler expects. */
+const TINY_REVERB = {
+  ...REVERB,
+  layers: 1,
+  hidden: 16,
+  ffn: 16,
+  heads: 2,
+  kvHeads: 1,
+  headDim: 8,
+  vocab: 8,
+  embeddingRank: 4,
+};
+
+/** The small Higgs encoder with a hop of 12 samples: 8 at 16 kHz, which
+ *  HuBERT turns into one frame. Both branches give one frame per hop. */
+const TINY_HIGGS_ENCODER = {
+  ...HIGGS_ENCODER_CFG,
+  acoustic: { ...HIGGS_ENCODER_CFG.acoustic, strides: [3, 4] },
+};
+
+/** The codec decoder Reverb's codes need: 8 codebooks of 1024. */
+const REVERB_CODEC = { ...TINY_HIGGS, codebooks: 8, codebookSize: 1024 };
 
 /** The uploads one MiniLM batch call of 5 tokens never frees, in the order
  *  they are made: the [5, 2] segments from MinilmModel.forward, the [2, 5]
@@ -146,6 +189,61 @@ const CASES: LeakCase[] = [
     },
     // toArray keeps its 10-class result out of the pool.
     leftPerCall: ['40 B, usage 140'],
+  },
+  {
+    name: 'Higgs decoder',
+    build(root) {
+      const model = new HiggsDecoder(TINY_HIGGS);
+      loadRandomWeights(model, root);
+      const ex = gpuExecutor(root);
+      const frames = 4;
+      const codes = new Int32Array(TINY_HIGGS.codebooks * frames).fill(1);
+      const input = tensor(root, model.latents(codes, frames), matrix(frames, TINY_HIGGS.latent));
+      return {
+        call: () => toArray(model.forward(input), ex),
+        dispose: () => {
+          model.dispose();
+          ex.dispose();
+          input.buffer.destroy();
+        },
+      };
+    },
+    // toArray keeps its 8-sample result out of the pool.
+    leftPerCall: ['32 B, usage 140'],
+  },
+  {
+    name: 'Higgs encoder',
+    build(root) {
+      const encoder = new HiggsEncoder(TINY_HIGGS_ENCODER);
+      loadRandomWeights(encoder, root);
+      const core = createHiggsEncodeCore(root, encoder);
+      const samples = randomF32(4 * encoder.hop);
+      return { call: () => core.encode(samples), dispose: () => core.dispose() };
+    },
+  },
+  {
+    name: 'Reverb',
+    build(root) {
+      const model = new ReverbModel(TINY_REVERB);
+      const codec = new HiggsDecoder(REVERB_CODEC);
+      loadRandomWeights(model, root);
+      loadRandomWeights(codec, root);
+      const speaker = createReverbSpeaker(root, model, codec, { encode: () => [1, 2, 3] });
+      const frames = 4;
+      const voice: Voice = {
+        codes: new Int32Array(TINY_REVERB.codebooks * frames).fill(1),
+        frames,
+        transcript: 'abcd',
+        language: 'en',
+      };
+      return {
+        call: async () => {
+          const { tokens, frames } = await speaker.generate('ab', voice, { steps: 2 });
+          return speaker.decode(tokens, frames);
+        },
+        dispose: () => speaker.dispose(),
+      };
+    },
   },
 ];
 

@@ -128,10 +128,12 @@ export async function createSpeechToText(
 
     // Compiles the kernels, and turns a GPU error into one load error.
     throwIfAborted(opts.signal);
-    await warmUp(device, async () => {
-      const silence = new Float32Array(SPEECH_SAMPLE_RATE);
-      return Float32Array.from((await transcriber.transcribe(silence)).ids);
-    });
+    if (opts.warmUp !== false) {
+      await warmUp(device, async () => {
+        const silence = new Float32Array(SPEECH_SAMPLE_RATE);
+        return Float32Array.from((await transcriber.transcribe(silence)).ids);
+      });
+    }
 
     let disposed = false;
     // Calls run one after another: the model reuses its caches between clips.

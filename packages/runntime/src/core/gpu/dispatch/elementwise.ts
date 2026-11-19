@@ -14,6 +14,7 @@ import {
   createAddScalarPipeline,
   createAsinhPipeline,
   createClampScalarPipeline,
+  createEluPipeline,
   createGeluPipeline,
   createMulScalarPipeline,
   createRsqrtPipeline,
@@ -26,7 +27,8 @@ import {
   createSwigluChunkPipeline,
   swigluChunkHandle,
 } from '../../kernels/elementwise/swigluChunk.ts';
-import { defineSpec, narrowFloat } from './spec.ts';
+import { createSnakePipeline, snakeHandle } from '../../kernels/elementwise/snake.ts';
+import { defineSpec, narrow, narrowFloat } from './spec.ts';
 
 function binarySpec(
   name: string,
@@ -104,6 +106,7 @@ export const tanhSpec = unarySpec('tanh', createTanhPipeline, scalarOnly);
 export const geluSpec = unarySpec('gelu', createGeluPipeline, scalarOnly);
 export const siluSpec = unarySpec('silu', createSiluPipeline, scalarOnly);
 export const asinhSpec = unarySpec('asinh', createAsinhPipeline, scalarOnly);
+export const eluSpec = unarySpec('elu', createEluPipeline, scalarOnly);
 export const clampScalarSpec = unarySpec('clampScalar', createClampScalarPipeline, (p) => ({
   a: finite(p.attrs![0]!),
   b: finite(p.attrs![1]!),
@@ -121,6 +124,30 @@ export const swigluChunkSpec = defineSpec({
         pipeline,
         { total: node.shape.elems, half: node.shape.dims![1]! },
         { x: narrowFloat(inputs[0]!, dtype), out: narrowFloat(out, dtype) },
+        elemFor(dtype),
+      ),
+    ];
+  },
+});
+
+export const snakeSpec = defineSpec({
+  attrs: () => undefined,
+  cfg: () => undefined,
+  pipeline: (root, dtype) => createSnakePipeline(root, elemFor(dtype)),
+  encode: ({ node, pipeline, inputs, out, ctx }) => {
+    const dtype = node.shape.dtype;
+    const [rows, cols] = node.shape.dims as [number, number];
+    return [
+      snakeHandle(
+        ctx.root,
+        pipeline,
+        rows,
+        cols,
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          ab: narrow(inputs[1]!, 'f32'),
+          out: narrowFloat(out, dtype),
+        },
         elemFor(dtype),
       ),
     ];

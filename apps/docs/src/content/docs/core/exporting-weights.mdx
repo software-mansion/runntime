@@ -1,0 +1,165 @@
+---
+title: Exporting weights
+description: Run your own weights in ruNNtime, as float or quantized to int8 or int4.
+# Hidden until runntime core is published: no production build, no sidebar, no search.
+draft: true
+pagefind: false
+---
+
+import WeightsPath from '../../../components/WeightsPath.astro';
+import QuantFile from '../../../components/QuantFile.astro';
+
+Every model in the zoo loads its weights from one `.safetensors` file. Your
+own fine-tune or a quantized copy loads the same way as the hosted file.
+
+<WeightsPath />
+
+## Weights - model definition
+
+A trained model is a list of named weights. In PyTorch,
+`model.state_dict()` gives you that list, and a `.safetensors` file stores it
+on disk. For all-MiniLM-L6-v2 it starts like this:
+
+```text
+embeddings.word_embeddings.weight             [30522, 384]
+encoder.layer.0.attention.self.query.weight   [384, 384]
+encoder.layer.0.attention.self.query.bias     [384]
+...
+```
+
+ruNNtime builds these names the same way PyTorch does. A model is a tree of
+modules, like `nn.Module`: each layer is a field, and a weight's name is the
+path of field names from the top, joined with dots. A list of layers adds
+the index, like `layer.0`. These two models give the same names:
+
+```python
+
+# PyTorch
+class Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.query = nn.Linear(384, 384)
+
+class Encoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer = nn.ModuleList([Block() for _ in range(6)])
+
+# layer.0.query.weight, layer.0.query.bias, layer.1.query.weight, ...
+```
+
+```ts
+// ruNNtime
+class Block extends Module {
+  query = new Linear(384, 384);
+}
+
+class Encoder extends Module {
+  layer = new ModuleList(Array.from({ length: 6 }, () => new Block()));
+}
+
+// layer.0.query.weight, layer.0.query.bias, layer.1.query.weight, ...
+```
+
+When ruNNtime loads a file, it looks up each of its weights by that name and
+uploads it to the GPU. So a file saved straight from the PyTorch model
+works: no renaming, no reshaping, no conversion script.
+
+Weights can be stored as `F32`, `F16` or `BF16`. `F16` is half the download
+of `F32` and doesn't change how the model computes.
+
+If a weight is missing or has the wrong shape, loading stops with a
+`CHECKPOINT_MISMATCH` error that names it (see
+[Error handling](/zoo/error-handling/)).
+
+A tensor in the file that the model doesn't read, like the pooler in a plain
+Hugging Face checkpoint, is skipped with a console warning. Pass
+`{ strict: true }` to `loadStateDict` to make it the same error.
+
+## Getting a weights file
+
+Pick the case that fits:
+
+- **The model is on Hugging Face and has one `model.safetensors`.**
+  Download that file and load it. If a name doesn't match, the error says
+  which one.
+- **You fine-tuned it with `transformers`, or want a smaller `F16` copy.**
+  Save it with `save_pretrained`, as one file:
+
+  ```bash
+  uv run --with transformers --with torch python -c "
+  from transformers import AutoModel
+  import torch
+  model = AutoModel.from_pretrained('path/to/your-model', dtype=torch.float16)
+  model.save_pretrained('export', max_shard_size='100GB')  # one file, not shards
+  "
+  ```
+
+- **You trained it with your own PyTorch code.** Save the state dict:
+  `safetensors.torch.save_file(model.state_dict(), 'model.safetensors')`.
+
+## Loading it into your own model
+
+Write the model in ruNNtime so it gives the same names, like the `Encoder`
+above:
+
+- Name each field after the PyTorch attribute: `self.query = nn.Linear(...)`
+  becomes `query = new nn.Linear(...)`.
+- Use `nn.ModuleList` where PyTorch does. It adds the index to the name.
+- Give each layer the same sizes.
+
+Then load the file:
+
+```ts
+const model = new Encoder();
+await model.loadStateDict('/models/model.safetensors');
+```
+
+## Quantization (optional)
+
+Full / half-precision files work as is. Optionally, you can quantize your model which can reduce the download size, memory usage, and can make the inference faster.
+
+<QuantFile />
+
+**How the runtime recognizes it.** A quantized file has a `runntime.quant`
+entry in its header metadata. Each quantized weight is stored as `I8`
+(int8) or `U8` (two int4 values per byte), with its scales next to it under
+the same name plus `_scale`. The entry can set the bits and group size for
+the whole file; without them, each weight takes its bits from its dtype and
+its group size from the shape of its scales. Every other tensor
+is a normal float tensor. An int tensor in a file without `runntime.quant`
+fails to load.
+
+**Which layers are quantized.** `Linear`, `Conv1d` and `ConvTranspose1d`
+weights. Embedding tables, biases and norms stay float, because the model
+reads them as float. `runntime quantize` only quantizes 2D tensors, so
+today it covers Linear weights and leaves conv weights float.
+
+**Making a file.** `runntime quantize` lives in the repository under
+`tools/python` and runs with [uv](https://docs.astral.sh/uv/):
+
+```bash
+git clone https://github.com/software-mansion/runntime
+cd runntime/tools/python
+uv run --no-dev runntime quantize model.safetensors model.int8.safetensors --bits 8 --f16
+```
+
+- `--bits 8` or `--bits 4`. Required.
+- `--f16` stores the tensors that stay float as `F16`.
+- `--group-size N`: how many inputs share one scale. Default 32.
+- `--include` / `--exclude GLOB`: which tensors to quantize. The defaults
+  quantize `*.weight` and skip embeddings and `lm_head`.
+- `--drop GLOB`: tensors to leave out of the file, like a pooler the model
+  never reads.
+
+The tool prints one line per tensor with its error against the float
+weights, or why it was skipped.
+
+**Picking a setting.** On all-MiniLM-L6-v2, int8 keeps every embedding at
+cosine similarity 0.9998 or higher against the float model; int4 drops to
+0.94 and changes the top 3 search results for 8 of 20 queries. Use int8.
+Try int4 only when the download size matters more, and check it on your
+own data.
+
+A quantization-aware trained checkpoint quantizes the same way if it was
+trained on symmetric int8 or int4 with one scale per group of inputs.

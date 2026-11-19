@@ -8,7 +8,7 @@ import {
   MATMUL_QUANT_TILED_BK,
   matmulQuantTiledEligible,
 } from '../../kernels/matmul/matmulQuantTiled.ts';
-import { ACT_CODE, FLOAT_DTYPES, want2d, type SlotAct } from './shared.ts';
+import { ACT_CODE, FLOAT_DTYPES, want2d, wantQuantW, type SlotAct } from './shared.ts';
 
 /** Options for matmul. `bias` and `addend` are fused epilogue adds; on a
  *  quantW weight they need the whole weight, no baseRow or scaleBase view.
@@ -97,8 +97,8 @@ export function matmul(a: Value, b: Value, opts: MatmulOpts = {}): Value {
 }
 
 /** matmul's quantW path. The result takes a's dtype. An f16 a, a bias, an
- *  addend or an activation need the tiled kernel: the whole weight (baseRow
- *  and scaleBase 0) and a shape it supports. */
+ *  addend or an activation need the whole weight (baseRow and scaleBase 0)
+ *  and a shape the tiled kernel supports, since large inputs take it. */
 function matmulQuantW(
   a: Value,
   w: Value,
@@ -114,22 +114,8 @@ function matmulQuantW(
   },
 ): Value {
   const [m, k, dtype] = want2d('matmul', a, FLOAT_DTYPES);
-  const wd = w.shape.dims;
-  if (!wd || wd.length !== 2) {
-    throw new Error('matmul: quantW weight must be 2D');
-  }
-  if (scales.shape.dtype !== 'f32') throw new Error('matmul: scales must be f32');
-  const [r, n] = [wd[0]!, wd[1]!];
   const { baseRow, scaleBase, bits, groupSize } = opts;
-  if (bits !== 8 && bits !== 4) throw new Error(`matmul: bits must be 8 or 4, got ${bits}`);
-  const perU32 = bits === 8 ? 4 : 8;
-  if (n % perU32 !== 0)
-    throw new Error(`matmul: cols ${n} must be divisible by ${perU32} for int${bits} packing`);
-  if (w.shape.elems !== (r * n) / perU32) {
-    throw new Error(
-      `matmul: quantW weight elems ${w.shape.elems} != rows*cols/${perU32} = ${(r * n) / perU32} words`,
-    );
-  }
+  const [r, n] = wantQuantW('matmul', w, scales, bits);
   if (groupSize <= 0 || k % groupSize !== 0)
     throw new Error(`matmul: groupSize ${groupSize} must divide K ${k}`);
   if (k % 4 !== 0 || groupSize % 4 !== 0) {
@@ -147,6 +133,11 @@ function matmulQuantW(
   }
   if (!Number.isInteger(scaleBase) || scaleBase < 0)
     throw new Error(`matmul: bad scaleBase ${scaleBase}`);
+  if (scaleBase % 4 !== 0) {
+    throw new Error(
+      `matmul: scaleBase ${scaleBase} must be a multiple of 4 — scales are read as vec4`,
+    );
+  }
   const { bias, addend, activation } = opts;
   const whole = baseRow === 0 && scaleBase === 0 && r === k;
   if (whole && scales.shape.elems !== (k / groupSize) * n) {

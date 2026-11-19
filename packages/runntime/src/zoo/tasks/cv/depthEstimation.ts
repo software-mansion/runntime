@@ -115,9 +115,7 @@ export async function createDepthEstimator(
     });
 
     throwIfAborted(opts.signal);
-    const estimator = scope.track(
-      await createEstimator(sd, { variant, onProgress: opts.onProgress }),
-    );
+    const estimator = scope.track(await createEstimator(sd, { ...opts, variant }));
     const { inputSize } = estimator;
     const { mean, std } = DEPTHART_CONFIGS[estimator.variant];
     // (byte / 255 − mean) / std, per channel.
@@ -134,7 +132,7 @@ export async function createDepthEstimator(
     // One scratch array, rewritten each call; the estimator copies it to the GPU.
     const pixels = new Float32Array(3 * inputSize * inputSize);
     const root = defaultRoot();
-    const imageToChw = createImageToChw(root);
+    const imageToChw = scope.track(createImageToChw(root));
     const mapToTexture = scope.track(createMapToTexture(root));
     const schemas = {
       input: d.arrayOf(d.arrayOf(d.arrayOf(d.f32, inputSize), inputSize), 3),
