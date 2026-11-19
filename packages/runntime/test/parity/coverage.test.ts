@@ -14,6 +14,7 @@ const PENDING = [
   'privacyFilter.PRIVACY_FILTER',
   'speechToText.MOONSHINE',
   'speechToText.MOONSHINE_STREAMING',
+  'textToSpeech.REVERB',
   'objectDetection.YOLO26',
   'instanceSegmentation.YOLO26_SEG',
   'keypointDetection.YOLO26_POSE',
