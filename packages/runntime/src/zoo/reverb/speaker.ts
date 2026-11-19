@@ -47,8 +47,8 @@ export interface Voice {
   /** The language of the clip and of the text it speaks. */
   readonly language: ReverbLanguage;
   /** How many of those frames the speaker spends speaking: no silent edges,
-   *  pauses capped at 0.5 s (speechFrames() in text.ts). The target's length
-   *  follows it; without it, the whole clip. */
+   *  pauses capped at 0.5 s. The output's pace follows it; without it, the
+   *  whole clip. `fromRecording` sets it. */
   readonly speechFrames?: number;
 }
 

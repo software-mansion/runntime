@@ -87,6 +87,7 @@ interface Voice {
   readonly frames: number;
   readonly transcript: string;
   readonly language: ReverbLanguage;
+  readonly speechFrames?: number;
 }
 
 type ReverbLanguage = 'en' | 'de' | 'fr' | 'es' | 'it' | 'pl' | 'pt';
@@ -99,6 +100,11 @@ type ReverbLanguage = 'en' | 'de' | 'fr' | 'es' | 'it' | 'pl' | 'pt';
 - **transcript** - what is said in the clip, word for word.
 - **language** - the clip's language, an ISO 639-1 code. Any other value
   throws `INVALID_ARGUMENT`.
+- **speechFrames** - optional. How many of the clip's frames the speaker
+  spends speaking, with the silent edges dropped and pauses capped at 0.5 s.
+  The output's pace follows it; without it, the whole clip counts.
+  `fromRecording` sets it. Not an integer of at least 1 throws
+  `INVALID_ARGUMENT`.
 
 `createVoiceMaker` makes a voice from a recording. It takes the same model
 config as `createTextToSpeech` and reads only its `codecPath`: the codec's
