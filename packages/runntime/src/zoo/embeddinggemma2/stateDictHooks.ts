@@ -23,7 +23,7 @@ import {
   type LazyTensor,
 } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
-import { ropeOrder } from '../shared/stateDictHooks.ts';
+import { ropeOrder } from '../shared/rope.ts';
 import type {
   EmbeddingGemma2AudioConfig,
   EmbeddingGemma2Config,

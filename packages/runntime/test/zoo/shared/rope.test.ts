@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ropeTables } from '../../../src/zoo/shared/rope.ts';
+import { ropeOrder, ropeTables } from '../../../src/zoo/shared/rope.ts';
 
 const close = (want: number) => expect.closeTo(want, 6);
 
@@ -39,5 +39,12 @@ describe('ropeTables', () => {
         }
       }
     }
+  });
+});
+
+describe('ropeOrder', () => {
+  it('takes each block from half-split to interleaved pairs', () => {
+    // Rows (p, p + 2) of each block of 4 become (2p, 2p + 1).
+    expect(ropeOrder(8, 4)).toEqual([0, 2, 1, 3, 4, 6, 5, 7]);
   });
 });

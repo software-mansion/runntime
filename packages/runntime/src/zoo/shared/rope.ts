@@ -1,6 +1,16 @@
-/** Rope tables in the kernel's interleaved-pair layout: entries 2p and
- *  2p+1 hold pair p's angle. The hooks permute q and k at load (ropeOrder)
+/** Rope in the kernel's interleaved-pair layout: table entries 2p and 2p+1
+ *  hold pair p's angle, and the hooks permute q and k at load (ropeOrder)
  *  so these pairs are HF's half split. */
+
+/** Row order for permuteRows that takes each `block` rows from the
+ *  checkpoint's half-split rope layout to the kernel's interleaved pairs:
+ *  rows (p, p + block/2) become (2p, 2p + 1). */
+export function ropeOrder(rows: number, block: number): number[] {
+  return Array.from({ length: rows }, (_, r) => {
+    const i = r % block;
+    return r - i + (i % 2 ? (i - 1) / 2 + block / 2 : i / 2);
+  });
+}
 
 /** cos and sin [positions, headDim] for theta. Row t depends only on t. */
 export function ropeTables(positions: number, headDim: number, theta: number) {

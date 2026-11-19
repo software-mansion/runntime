@@ -1,5 +1,8 @@
-/** Maps a Reverb release checkpoint onto ReverbModel as lazy derived tensors;
- *  nothing is fetched here.
+/** Derives what a Reverb release checkpoint stores differently from
+ *  ReverbModel's parameters, as lazy tensors; nothing is fetched here. Every
+ *  other tensor binds under its own name, since the modules are named like
+ *  the checkpoint. `codebook_layer_offsets`, which the model never reads, is
+ *  dropped.
  *
  *  q and k rows go from the checkpoint's half-split rope layout to the
  *  kernel's interleaved pairs and fuse into one projection, as do up and
@@ -17,11 +20,10 @@ import {
   type LazyTensor,
 } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
-import { remap, ropeOrder } from '../shared/stateDictHooks.ts';
+import { ropeOrder } from '../shared/rope.ts';
 import { COARSE_CODEBOOKS, type ReverbConfig } from './config.ts';
 
 const WHAT = 'reverb state dict';
-const SOURCES = ['llm.', 'audio_embeddings.', 'audio_heads.', 'codebook_layer_offsets'] as const;
 
 /** Rows of a head over `books` codebooks, padded to a multiple of 4 for the
  *  vec4 matmul. */
@@ -56,19 +58,25 @@ function centeredHead(t: LazyTensor, from: number, books: number, cfg: ReverbCon
   );
 }
 
+const qualify = (prefix: string, name: string): string => (prefix ? `${prefix}.${name}` : name);
+
 export function transformReverbStateDict(
   sd: LazyStateDict,
   prefix: string,
   cfg: ReverbConfig,
 ): void {
-  const { take, put, done } = remap(sd, prefix, SOURCES, WHAT);
+  const q = (name: string) => qualify(prefix, name);
+  const take = (name: string): LazyTensor => {
+    const t = sd.tensors.get(q(name));
+    if (!t) throw checkpointMismatch(WHAT, `missing tensor '${q(name)}'`);
+    sd.tensors.delete(q(name));
+    return t;
+  };
+  const put = (name: string, t: LazyTensor) => sd.tensors.set(q(name), t);
   const { heads, kvHeads, headDim: d, codebooks, codes, hidden } = cfg;
 
-  put('text_table.weight', take('llm.embed_tokens.table.weight'));
-  put('text_project.weight', take('llm.embed_tokens.project.weight'));
-  put('audio_table.weight', take('audio_embeddings.weight'));
-  // Each codebook's offset into audio_table is fixed at codebook·codes.
-  take('codebook_layer_offsets');
+  // Each codebook's offset into audio_embeddings is fixed at codebook·codes.
+  sd.tensors.delete(q('codebook_layer_offsets'));
 
   const audioHeads = take('audio_heads.weight');
   if (audioHeads.shape.join() !== `${codebooks * codes},${hidden}`) {
@@ -77,36 +85,33 @@ export function transformReverbStateDict(
       `audio_heads.weight has shape [${audioHeads.shape.join(', ')}], expected [${codebooks * codes}, ${hidden}]`,
     );
   }
-  put('heads_coarse.weight', centeredHead(audioHeads, 0, COARSE_CODEBOOKS, cfg));
+  put('audio_heads.coarse.weight', centeredHead(audioHeads, 0, COARSE_CODEBOOKS, cfg));
   put(
-    'heads_fine.weight',
+    'audio_heads.fine.weight',
     centeredHead(audioHeads, COARSE_CODEBOOKS, codebooks - COARSE_CODEBOOKS, cfg),
   );
-  put('norm.weight', take('llm.norm.weight'));
 
   const rope = (w: LazyTensor) => permuteRows(w, ropeOrder(w.shape[0]!, d));
   for (let i = 0; i < cfg.layers; i++) {
-    const S = `llm.layers.${i}`;
-    const L = `layers.${i}`;
-    const attn = (n: string) => take(`${S}.self_attn.${n}.weight`);
-    const mlp = (n: string) => take(`${S}.mlp.${n}.weight`);
-    put(`${L}.qk.weight`, concatRows([rope(attn('q_proj')), rope(attn('k_proj'))]));
-    const qn = attn('q_norm');
-    const kn = attn('k_norm');
-    const q = scaleWeight(rope(qn), d ** -0.5);
+    const attn = `llm.layers.${i}.self_attn`;
+    const mlp = `llm.layers.${i}.mlp`;
+    put(
+      `${attn}.qk.weight`,
+      concatRows([rope(take(`${attn}.q_proj.weight`)), rope(take(`${attn}.k_proj.weight`))]),
+    );
+    const qn = take(`${attn}.q_norm.weight`);
+    const kn = take(`${attn}.k_norm.weight`);
+    const qScaled = scaleWeight(rope(qn), d ** -0.5);
     const k = rope(kn);
     const norms = concatRows([
-      ...Array<LazyTensor>(heads).fill(q),
+      ...Array<LazyTensor>(heads).fill(qScaled),
       ...Array<LazyTensor>(kvHeads).fill(k),
     ]);
     // concatRows reads a part listed several times once.
-    put(`${L}.qk_norm`, { ...norms, byteLength: qn.byteLength + kn.byteLength });
-    put(`${L}.v.weight`, attn('v_proj'));
-    put(`${L}.o.weight`, attn('o_proj'));
-    put(`${L}.up_gate.weight`, concatRows([mlp('up_proj'), mlp('gate_proj')]));
-    put(`${L}.down.weight`, mlp('down_proj'));
-    put(`${L}.input_norm.weight`, take(`${S}.input_layernorm.weight`));
-    put(`${L}.post_norm.weight`, take(`${S}.post_attention_layernorm.weight`));
+    put(`${attn}.qk_norm`, { ...norms, byteLength: qn.byteLength + kn.byteLength });
+    put(
+      `${mlp}.up_gate.weight`,
+      concatRows([take(`${mlp}.up_proj.weight`), take(`${mlp}.gate_proj.weight`)]),
+    );
   }
-  done();
 }

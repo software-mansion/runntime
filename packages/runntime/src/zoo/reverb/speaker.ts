@@ -91,7 +91,7 @@ export function createReverbSpeaker(
   tokenizer: ReverbTokenizer,
 ): ReverbSpeaker {
   const { heads, kvHeads, headDim, ffn, codebooks, codes, ropeTheta } = model.cfg;
-  const act = model.norm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
+  const act = model.llm.norm.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
   // Read off the bias: a quantized conv weight is typed quantW.
   const codecAct = codec.acoustic_decoder.conv1.bias!.shape.dtype === 'f16' ? 'f16' : 'f32';
   // A pass's widest buffer has one row per input row: the fine logits, the
@@ -162,7 +162,7 @@ export function createReverbSpeaker(
         owned.push(v);
         return v;
       };
-      const cache = Array.from({ length: model.layers.items.length }, () => ({
+      const cache = Array.from({ length: model.llm.layers.items.length }, () => ({
         k: empty(),
         v: empty(),
       }));
@@ -173,10 +173,10 @@ export function createReverbSpeaker(
       });
 
       // Prefix: prompt rows, then reference frames. Only its cache writes run.
-      const textRows = upload(model.text_table.gather(promptIds), promptIds.length);
+      const textRows = upload(model.llm.embed_tokens.table.gather(promptIds), promptIds.length);
       const x0 = cat(
         [
-          model.text_project.forward(textRows),
+          model.llm.embed_tokens.project.forward(textRows),
           model.audioRows(upload(model.audioIds(voice.codes, refFrames), refFrames, 'f32')),
         ],
         0,
@@ -202,7 +202,7 @@ export function createReverbSpeaker(
           const ids = tensor(root, model.audioIds(tokens, T), [T * codebooks, 1]);
           try {
             const h = model.forward(model.audioRows(ids), call);
-            const logits = (fine ? model.heads_fine : model.heads_coarse).forward(h);
+            const logits = (fine ? model.audio_heads.fine : model.audio_heads.coarse).forward(h);
             const guide = fine && guided ? lastFine : undefined;
             const stats = logitStats(logits, {
               blocks: booksOf(fine),

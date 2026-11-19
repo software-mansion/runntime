@@ -97,25 +97,25 @@ function quantRelease(bits: 4 | 8, groupSize: number, cfg = CFG) {
   return { quant, sd: () => fromSafetensors(bufferSource(file), { chunkBytes: 0 }) };
 }
 
-/** Tensors the hook only renames, release name → model name. */
-const RENAMED = {
-  'audio_embeddings.weight': 'audio_table.weight',
-  'llm.embed_tokens.table.weight': 'text_table.weight',
-  'llm.embed_tokens.project.weight': 'text_project.weight',
-  'llm.norm.weight': 'norm.weight',
-  'llm.layers.0.input_layernorm.weight': 'layers.0.input_norm.weight',
-  'llm.layers.0.post_attention_layernorm.weight': 'layers.0.post_norm.weight',
-  'llm.layers.0.self_attn.v_proj.weight': 'layers.0.v.weight',
-  'llm.layers.0.self_attn.o_proj.weight': 'layers.0.o.weight',
-  'llm.layers.0.mlp.down_proj.weight': 'layers.0.down.weight',
-};
+/** Tensors that bind under their release name, untouched by the hook. */
+const KEPT = [
+  'audio_embeddings.weight',
+  'llm.embed_tokens.table.weight',
+  'llm.embed_tokens.project.weight',
+  'llm.norm.weight',
+  'llm.layers.0.input_layernorm.weight',
+  'llm.layers.0.post_attention_layernorm.weight',
+  'llm.layers.0.self_attn.v_proj.weight',
+  'llm.layers.0.self_attn.o_proj.weight',
+  'llm.layers.0.mlp.down_proj.weight',
+];
 
 const MAPPED = [
-  'heads_coarse.weight',
-  'heads_fine.weight',
-  'layers.0.qk.weight',
-  'layers.0.qk_norm',
-  'layers.0.up_gate.weight',
+  'audio_heads.coarse.weight',
+  'audio_heads.fine.weight',
+  'llm.layers.0.self_attn.qk.weight',
+  'llm.layers.0.self_attn.qk_norm',
+  'llm.layers.0.mlp.up_gate.weight',
 ];
 
 /** Each head row of grid(0, 9, 4) minus its codebook's mean row: −10, 0, 10. */
@@ -131,32 +131,30 @@ describe('transformReverbStateDict', () => {
     const sd = await checkpoint(dtype, release());
     const before = new Map(sd.tensors);
     transformReverbStateDict(sd, '', CFG);
-    expect([...sd.tensors.keys()].sort()).toEqual([...Object.values(RENAMED), ...MAPPED].sort());
-    for (const [from, to] of Object.entries(RENAMED)) {
-      expect(sd.tensors.get(to)).toBe(before.get(from));
-    }
+    expect([...sd.tensors.keys()].sort()).toEqual([...KEPT, ...MAPPED].sort());
+    for (const name of KEPT) expect(sd.tensors.get(name)).toBe(before.get(name));
     const get = (name: string) => contents(sd.tensors.get(name)!);
 
     // Each 4-row head goes from the half split to interleaved pairs.
     const rope = [0, 2, 1, 3];
-    expect(await get('layers.0.qk.weight')).toEqual({
+    expect(await get('llm.layers.0.self_attn.qk.weight')).toEqual({
       type,
       values: [
         ...gridRows(100, [...rope, ...rope.map((r) => r + 4)], 4),
         ...gridRows(200, rope, 4),
       ],
     });
-    expect(await get('layers.0.qk_norm')).toEqual({
+    expect(await get('llm.layers.0.self_attn.qk_norm')).toEqual({
       type: 'f32',
       values: [0.5, 1.5, 1, 2, 0.5, 1.5, 1, 2, 5, 7, 6, 8],
     });
-    expect(await get('layers.0.up_gate.weight')).toEqual({
+    expect(await get('llm.layers.0.mlp.up_gate.weight')).toEqual({
       type,
       values: [...gridRows(500, [0, 1], 4), ...gridRows(600, [0, 1], 4)],
     });
     // Two coarse codebooks: 6 rows padded to 8. One fine: 3 padded to 4.
-    expect(await get('heads_coarse.weight')).toEqual({ type: 'f32', values: centered(2, 2) });
-    expect(await get('heads_fine.weight')).toEqual({ type: 'f32', values: centered(1, 1) });
+    expect(await get('audio_heads.coarse.weight')).toEqual({ type: 'f32', values: centered(2, 2) });
+    expect(await get('audio_heads.fine.weight')).toEqual({ type: 'f32', values: centered(1, 1) });
   });
 
   it.each([8, 4] as const)('maps an int%i release checkpoint', async (bits) => {
@@ -166,9 +164,7 @@ describe('transformReverbStateDict', () => {
     const sd = await load();
     const before = new Map(sd.tensors);
     transformReverbStateDict(sd, '', CFG);
-    for (const [from, to] of Object.entries(RENAMED)) {
-      expect(sd.tensors.get(to)).toBe(before.get(from));
-    }
+    for (const name of KEPT) expect(sd.tensors.get(name)).toBe(before.get(name));
 
     /** The ints and scales of `entry`'s rows in `order`. */
     const rows = ({ ints, scales, shape }: QuantEntry, order: number[]) => {
@@ -186,19 +182,18 @@ describe('transformReverbStateDict', () => {
     const rope = [0, 2, 1, 3];
     const q = quant[`${S}.self_attn.q_proj.weight`]!;
     const k = quant[`${S}.self_attn.k_proj.weight`]!;
-    expect(await quantContents(sd.tensors.get('layers.0.qk.weight')!)).toEqual(
+    expect(await quantContents(sd.tensors.get('llm.layers.0.self_attn.qk.weight')!)).toEqual(
       joined(rows(q, [...rope, ...rope.map((r) => r + 4)]), rows(k, rope)),
     );
     const up = quant[`${S}.mlp.up_proj.weight`]!;
     const gate = quant[`${S}.mlp.gate_proj.weight`]!;
-    expect(await quantContents(sd.tensors.get('layers.0.up_gate.weight')!)).toEqual(
+    expect(await quantContents(sd.tensors.get('llm.layers.0.mlp.up_gate.weight')!)).toEqual(
       joined(rows(up, [0, 1]), rows(gate, [0, 1])),
     );
   });
 
   it.each<[string, (sd: LazyStateDict) => void]>([
     ['a missing tensor', (sd) => sd.tensors.delete('llm.layers.0.mlp.up_proj.weight')],
-    ['an unused tensor', (sd) => sd.tensors.set('llm.extra', sd.tensors.get('llm.norm.weight')!)],
     [
       'audio heads of another shape',
       (sd) => {
@@ -222,7 +217,7 @@ describe('ReverbModel', () => {
     await model.loadStateDict(sd, {
       upload: (_data, shape: ValueMeta) => pending(shape, 'reshape', []),
     });
-    expect(model.text_table.gather([4])).toEqual(new Float32Array([40, 41]));
+    expect(model.llm.embed_tokens.table.gather([4])).toEqual(new Float32Array([40, 41]));
   });
 
   // Wide enough for int4, which packs 8 outputs to a word.
@@ -239,7 +234,13 @@ describe('ReverbModel', () => {
         .map(([name]) => name)
         .filter((name) => name.endsWith('weightScale'));
       expect(scales).toEqual(
-        ['qk', 'v', 'o', 'up_gate', 'down'].map((m) => `layers.0.${m}.weightScale`),
+        [
+          'self_attn.qk',
+          'self_attn.v_proj',
+          'self_attn.o_proj',
+          'mlp.up_gate',
+          'mlp.down_proj',
+        ].map((m) => `llm.layers.0.${m}.weightScale`),
       );
     },
   );
