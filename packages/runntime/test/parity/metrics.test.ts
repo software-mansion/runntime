@@ -2,12 +2,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   cosine,
+  editDistance,
   maxAbsError,
   missing,
   rankingDifferences,
   rankMismatches,
   summarize,
   topK,
+  wer,
+  words,
 } from './metrics.ts';
 
 describe('cosine', () => {
@@ -178,5 +181,67 @@ describe('rankingDifferences', () => {
       positions: { count: 2, nearTies: 4 },
       items: { count: 2, nearTies: 0 },
     });
+  });
+});
+
+describe('words', () => {
+  it('lowers the case, drops punctuation and keeps apostrophes', () => {
+    expect(words("Eleven o'clock had struck. It was fine, clear!")).toEqual([
+      'eleven',
+      "o'clock",
+      'had',
+      'struck',
+      'it',
+      'was',
+      'fine',
+      'clear',
+    ]);
+  });
+
+  it('splits a hyphenated word', () => {
+    expect(words('thirty-six  members')).toEqual(['thirty', 'six', 'members']);
+  });
+});
+
+describe('editDistance', () => {
+  it.each([
+    { name: 'equal lists', a: ['a', 'b', 'c'], b: ['a', 'b', 'c'], want: 0 },
+    { name: 'one substitution', a: ['a', 'x', 'c'], b: ['a', 'b', 'c'], want: 1 },
+    { name: 'one insertion', a: ['a', 'b', 'x', 'c'], b: ['a', 'b', 'c'], want: 1 },
+    { name: 'one deletion', a: ['a', 'c'], b: ['a', 'b', 'c'], want: 1 },
+    { name: 'an empty list', a: [], b: ['a', 'b', 'c'], want: 3 },
+    // kitten to sitting: two substitutions and one insertion.
+    { name: 'a mix', a: [...'kitten'], b: [...'sitting'], want: 3 },
+  ])('is $want for $name', ({ a, b, want }) => {
+    expect(editDistance(a, b)).toBe(want);
+  });
+});
+
+describe('wer', () => {
+  it('is 0 for the same words in another case and punctuation', () => {
+    expect(wer(['The cat sat.'], ['THE CAT SAT'])).toBe(0);
+  });
+
+  it('sums the edits and the reference words over the texts', () => {
+    // One substitution in four words, one deletion in six: 2 / 10.
+    expect(
+      wer(['the cat sat here', 'a dog ran to the'], ['the cat sat there', 'a dog ran to the park']),
+    ).toBe(0.2);
+  });
+
+  it('counts every reference word for an empty hypothesis', () => {
+    expect(wer([''], ['one two three'])).toBe(1);
+  });
+
+  it('throws for another number of hypotheses than references', () => {
+    expect(() => wer(['one'], ['one', 'two'])).toThrow('1 hypotheses for 2 references');
+  });
+
+  it('is NaN when neither side holds a word', () => {
+    expect(wer([''], [''])).toBeNaN();
+  });
+
+  it('is Infinity for words against references that hold none', () => {
+    expect(wer(['one'], [''])).toBe(Infinity);
   });
 });
