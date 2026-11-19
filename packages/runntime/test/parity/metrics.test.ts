@@ -1,6 +1,14 @@
 /** The parity metrics on numbers worked out by hand. */
 import { describe, expect, it } from 'vitest';
-import { cosine, maxAbsError, missing, rankMismatches, summarize, topK } from './metrics.ts';
+import {
+  cosine,
+  maxAbsError,
+  missing,
+  rankingDifferences,
+  rankMismatches,
+  summarize,
+  topK,
+} from './metrics.ts';
 
 describe('cosine', () => {
   it.each([
@@ -98,5 +106,77 @@ describe('ranking differences', () => {
     const broken = [1, 0.75, 0.5, NaN];
     expect(rankMismatches([0, 1, 3], want, broken, 1)).toEqual({ count: 1, nearTies: 0 });
     expect(missing([0, 1, 3], want, broken, 1)).toEqual({ count: 1, nearTies: 0 });
+  });
+});
+
+describe('rankingDifferences', () => {
+  // Two asking vectors, each along one axis, so an item's score is its
+  // value on that axis. Reference scores: 1, 0.75, 0.5, 0.375 for the first,
+  // 0.375, 0.5, 0.75, 1 for the second.
+  const want = {
+    asking: [
+      [1, 0],
+      [0, 1],
+    ],
+    ranked: [
+      [1, 0.375],
+      [0.75, 0.5],
+      [0.5, 0.75],
+      [0.375, 1],
+    ],
+  };
+  const ranking = [0, 1, 2, 3, 2, 1];
+  const none = { count: 0, nearTies: 0 };
+
+  it('finds none between the same vectors', () => {
+    expect(rankingDifferences(want, want, ranking, 3, 0)).toEqual({ positions: none, items: none });
+  });
+
+  // The first asking vector now ranks 0, 1, 3: item 3 replaces item 2, which
+  // the reference scores 0.125 higher. The second ranks 3, 1, 2: items 1 and
+  // 2, 0.25 apart, swap places.
+  const got = {
+    asking: want.asking,
+    ranked: [
+      [1, 0.375],
+      [0.75, 0.75],
+      [0.25, 0.5],
+      [0.375, 1],
+    ],
+  };
+
+  it.each([
+    {
+      name: 'a margin below every gap',
+      margin: 0.0625,
+      positions: { count: 3, nearTies: 0 },
+      items: { count: 1, nearTies: 0 },
+    },
+    {
+      name: 'a margin at the smaller gap',
+      margin: 0.125,
+      positions: { count: 2, nearTies: 1 },
+      items: { count: 0, nearTies: 1 },
+    },
+    {
+      name: 'a margin at the larger gap',
+      margin: 0.25,
+      positions: { count: 0, nearTies: 3 },
+      items: { count: 0, nearTies: 1 },
+    },
+  ])('sums the differences of every asking vector with $name', ({ margin, positions, items }) => {
+    expect(rankingDifferences(got, want, ranking, 3, margin)).toEqual({ positions, items });
+  });
+
+  it('takes the gaps from the reference asking vectors', () => {
+    // Each asking vector reads the other axis, so its top 3 is the
+    // reference's reversed and misses the reference's best item. That item
+    // is 0.625 above the one in its place by the reference scores, and
+    // 0.625 below it by the scores of `got`.
+    const swapped = { asking: [want.asking[1]!, want.asking[0]!], ranked: want.ranked };
+    expect(rankingDifferences(swapped, want, ranking, 3, 0.5)).toEqual({
+      positions: { count: 2, nearTies: 4 },
+      items: { count: 2, nearTies: 0 },
+    });
   });
 });
