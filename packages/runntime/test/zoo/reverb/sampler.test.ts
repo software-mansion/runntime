@@ -10,11 +10,17 @@ import {
 const CODEBOOKS = 8;
 
 /** Coarse stats over [2, frames]: code 100 + slot everywhere, confidence
- *  from `confidence`. */
-function stats(frames: number, confidence: (slot: number) => number) {
+ *  from `confidence`, the held code's log-probability from `held`, by
+ *  default the same. */
+function stats(
+  frames: number,
+  confidence: (slot: number) => number,
+  held: (slot: number) => number = confidence,
+) {
   return {
     best: Int32Array.from({ length: 2 * frames }, (_, i) => 100 + i),
     confidence: Float32Array.from({ length: 2 * frames }, (_, i) => confidence(i)),
+    heldConfidence: Float32Array.from({ length: 2 * frames }, (_, i) => held(i)),
   };
 }
 
@@ -50,15 +56,20 @@ describe('mainPassUpdate', () => {
     expect(tokens.subarray(2 * frames).every((c) => c === MASK)).toBe(true);
   });
 
-  it('re-masks the least confident earlier commits, a quarter as many as it makes', () => {
+  it('re-masks the earlier commits whose code is least likely, a quarter as many as it makes', () => {
     const frames = 20;
     const tokens = masked(frames);
-    // Slots 0–9 committed earlier, slot i at confidence i.
+    // Slots 0–9 committed earlier, slot i's code at log-probability i and
+    // its best code at −i, so the best codes alone would point at slot 9.
     for (let i = 0; i < 10; i++) tokens[i] = 7;
     mainPassUpdate(
       tokens,
       frames,
-      stats(frames, (i) => i),
+      stats(
+        frames,
+        (i) => -i,
+        (i) => i,
+      ),
       4,
       8,
       seededRandom(1),
@@ -68,6 +79,28 @@ describe('mainPassUpdate', () => {
     const k = 3;
     expect(slotsWhere(tokens, frames, (c) => c === 7)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(slotsWhere(tokens, frames, (c) => c !== MASK && c !== 7)).toHaveLength(k);
+  });
+
+  // Masked slots, and so the slots this pass commits, are set lowest here;
+  // only earlier commits are re-masked.
+  it('re-masks only commits made before the pass', () => {
+    const frames = 20;
+    const tokens = masked(frames);
+    for (let i = 0; i < 10; i++) tokens[i] = 7;
+    mainPassUpdate(
+      tokens,
+      frames,
+      stats(
+        frames,
+        () => 0,
+        (i) => (i < 10 ? i : -100),
+      ),
+      4,
+      8,
+      seededRandom(1),
+    );
+    expect(slotsWhere(tokens, frames, (c) => c === 7)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(slotsWhere(tokens, frames, (c) => c !== MASK && c !== 7)).toHaveLength(3);
   });
 
   it('rounds half a re-mask to even', () => {
@@ -90,7 +123,7 @@ describe('mainPassUpdate', () => {
   it('rounds 1.5 re-masks to 2', () => {
     const frames = 77;
     const tokens = masked(frames);
-    // Slots 0–3 committed earlier, slot i at confidence i.
+    // Slots 0–3 committed earlier, slot i's code at log-probability i.
     for (let i = 0; i < 4; i++) tokens[i] = 7;
     mainPassUpdate(
       tokens,

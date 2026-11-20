@@ -216,7 +216,7 @@ describe('logitStats', () => {
   it('gives an argmax and a log-probability per block of each row, block-major, as f32', () => {
     const y = logitStats(input([3, 12], 'f16'), opts);
     expect(y.shape).toEqual(meta([6, 2]));
-    expect(y.pending?.attrs).toEqual([2, 5, 4, 0, 0]);
+    expect(y.pending?.attrs).toEqual([2, 5, 4, 0, 0, 0]);
   });
 
   it('takes a guide as a second input', () => {
@@ -224,7 +224,26 @@ describe('logitStats', () => {
     const guide = input([3, 10]);
     const y = logitStats(x, { ...opts, guide, guideWeight: 0.5 });
     expect(y.pending?.inputs).toEqual([x, guide]);
-    expect(y.pending?.attrs).toEqual([2, 5, 4, 1, 0.5]);
+    expect(y.pending?.attrs).toEqual([2, 5, 4, 1, 0.5, 0]);
+  });
+
+  it('takes held columns as a second input and gives a third column', () => {
+    const x = input([3, 10]);
+    const held = input([6, 1]);
+    const y = logitStats(x, { ...opts, held });
+    expect(y.pending?.inputs).toEqual([x, held]);
+    expect(y.pending?.attrs).toEqual([2, 5, 4, 0, 0, 1]);
+    expect(y.shape).toEqual(meta([6, 3]));
+  });
+
+  it('takes held columns after the guide', () => {
+    const x = input([3, 10]);
+    const guide = input([3, 10]);
+    const held = input([6, 1]);
+    const y = logitStats(x, { ...opts, guide, guideWeight: 0.5, held });
+    expect(y.pending?.inputs).toEqual([x, guide, held]);
+    expect(y.pending?.attrs).toEqual([2, 5, 4, 1, 0.5, 1]);
+    expect(y.shape).toEqual(meta([6, 3]));
   });
 
   it.each([
@@ -243,6 +262,16 @@ describe('logitStats', () => {
       error: /guide must be f32 \[3, 12\] like x/,
     },
     { name: 'a guide weight that is not finite', o: { guideWeight: Infinity }, error: /finite/ },
+    {
+      name: 'held of another size',
+      o: { held: input([5, 1]) },
+      error: /held must be f32 with 6 elements/,
+    },
+    {
+      name: 'held that is not f32',
+      o: { held: input([6, 1], 'f16') },
+      error: /held must be f32 with 6 elements/,
+    },
   ])('rejects $name', ({ o, error }) => {
     expect(() => logitStats(input([3, 12]), { ...opts, ...o })).toThrow(error);
   });

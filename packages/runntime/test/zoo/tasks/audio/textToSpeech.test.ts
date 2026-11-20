@@ -7,6 +7,7 @@ const voice: Voice = {
   frames: 1,
   transcript: 'Mam 3 psy.',
   language: 'pl',
+  speechFrames: 1,
 };
 
 describe('spokenInput', () => {

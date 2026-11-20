@@ -14,15 +14,24 @@ interface StatsCase {
   block: number;
   argmaxCols: number;
   guideWeight?: number;
+  /** Ask for the log-probability of a column per block. */
+  held?: boolean;
 }
 
-/** For block b of row r, at (b·rows + r)·2: the lowest column of the largest
- *  x, or (1 + w)·x − w·guide with a guide, among the block's first argmaxCols,
- *  then that column's x minus the logsumexp of the whole block. In f64. */
-function logitStatsRef(x: Float32Array, c: StatsCase, guide?: Float32Array): Float64Array {
+/** For block b of row r, at (b·rows + r)·width: the lowest column of the
+ *  largest x, or (1 + w)·x − w·guide with a guide, among the block's first
+ *  argmaxCols, then that column's x minus the logsumexp of the whole block,
+ *  then with `held` column held[b·rows + r]'s the same way. In f64. */
+function logitStatsRef(
+  x: Float32Array,
+  c: StatsCase,
+  guide?: Float32Array,
+  held?: Float32Array,
+): Float64Array {
   const { rows, cols, blocks, block, argmaxCols } = c;
   const w = c.guideWeight ?? 0;
-  const out = new Float64Array(blocks * rows * 2);
+  const width = held ? 3 : 2;
+  const out = new Float64Array(blocks * rows * width);
   for (let b = 0; b < blocks; b++) {
     for (let r = 0; r < rows; r++) {
       const base = r * cols + b * block;
@@ -39,8 +48,10 @@ function logitStatsRef(x: Float32Array, c: StatsCase, guide?: Float32Array): Flo
       for (let j = 0; j < block; j++) max = Math.max(max, x[base + j]!);
       let sum = 0;
       for (let j = 0; j < block; j++) sum += Math.exp(x[base + j]! - max);
-      out[(b * rows + r) * 2] = top;
-      out[(b * rows + r) * 2 + 1] = x[base + top]! - max - Math.log(sum);
+      const slot = (b * rows + r) * width;
+      out[slot] = top;
+      out[slot + 1] = x[base + top]! - max - Math.log(sum);
+      if (held) out[slot + 2] = x[base + held[b * rows + r]!]! - max - Math.log(sum);
     }
   }
   return out;
@@ -50,7 +61,8 @@ function logitStatsRef(x: Float32Array, c: StatsCase, guide?: Float32Array): Flo
  *  sums stay f32. */
 const TOLERANCE = { atol: 1e-5, rtol: 1e-5 };
 
-/** Random logits, and a random guide when the case has a guideWeight. */
+/** Random logits, a random guide when the case has a guideWeight, and
+ *  random held columns, the last column among them, when it asks for them. */
 async function checkStats(c: StatsCase, dtype: 'f32' | 'f16') {
   const round = dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
   const x = round(randomF32(c.rows * c.cols, 1).map((v) => 6 * v));
@@ -58,6 +70,12 @@ async function checkStats(c: StatsCase, dtype: 'f32' | 'f16') {
     c.guideWeight !== undefined
       ? round(randomF32(c.rows * c.cols, 2).map((v) => 6 * v))
       : undefined;
+  const slots = c.blocks * c.rows;
+  const held = c.held
+    ? Float32Array.from(randomF32(slots, 3), (v, i) =>
+        i === 0 ? c.block - 1 : Math.floor(Math.abs(v) * c.block) % c.block,
+      )
+    : undefined;
   const shape = { ...matrix(c.rows, c.cols), dtype };
   const y = logitStats(upload(root, x, shape), {
     blocks: c.blocks,
@@ -65,8 +83,9 @@ async function checkStats(c: StatsCase, dtype: 'f32' | 'f16') {
     argmaxCols: c.argmaxCols,
     guide: guide && upload(root, guide, shape),
     guideWeight: c.guideWeight,
+    held: held && upload(root, held, matrix(slots, 1)),
   });
-  expectClose(await toArray(y, ex), logitStatsRef(x, c, guide), TOLERANCE);
+  expectClose(await toArray(y, ex), logitStatsRef(x, c, guide, held), TOLERANCE);
 }
 
 describe('logitStats kernel', () => {
@@ -86,6 +105,15 @@ describe('logitStats kernel', () => {
         // Columns past blocks·block are padding the kernel never reads.
         { name: 'padded rows', rows: 3, cols: 50, blocks: 2, block: 20, argmaxCols: 20 },
         {
+          name: 'held columns under a workgroup',
+          rows: 5,
+          cols: 30,
+          blocks: 3,
+          block: 10,
+          argmaxCols: 9,
+          held: true,
+        },
+        {
           name: 'blocks past a workgroup',
           rows: 4,
           cols: 3080,
@@ -101,6 +129,25 @@ describe('logitStats kernel', () => {
           block: 1025,
           argmaxCols: 1024,
           guideWeight: 0.75,
+        },
+        {
+          name: 'held columns',
+          rows: 6,
+          cols: 2050,
+          blocks: 2,
+          block: 1025,
+          argmaxCols: 1024,
+          held: true,
+        },
+        {
+          name: 'a guide and held columns',
+          rows: 3,
+          cols: 2050,
+          blocks: 2,
+          block: 1025,
+          argmaxCols: 1024,
+          guideWeight: 0.5,
+          held: true,
         },
       ].map((c) => ({ dtype, ...c })),
     ),
