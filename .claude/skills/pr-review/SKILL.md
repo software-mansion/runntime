@@ -32,7 +32,7 @@ that breaks it.
 5. **Hold the author to the house rules.** Anything that breaks `AGENTS.md`,
    `code-style` or `testing` is a finding. Quote the rule. "It matches the
    file around it" doesn't excuse breaking one.
-6. **Three nits at most.** They go after the real findings and are labelled
+6. **Label nits.** They go after the real findings and are labelled
    `nit`. Skip anything Prettier, ESLint or tsc already catch.
 7. **Run what CI runs:** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`,
    `pnpm --filter runntime test:unit`. For changes in `src/core/kernels` or
