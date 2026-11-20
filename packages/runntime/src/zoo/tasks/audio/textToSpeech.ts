@@ -92,6 +92,11 @@ export interface TextToSpeech {
 const cacheId = (path: ModelPath) =>
   typeof path === 'string' ? `reverb-v1/${path.replace(/^https?:\/\//, '')}` : undefined;
 
+const REVERB_HUB = 'https://huggingface.co/software-mansion/Reverb-TTS/';
+/** Hugging Face counts a repo's downloads by requests for this file, and
+ *  the runner reads model.safetensors instead. */
+const REVERB_DOWNLOAD_COUNTER = `${REVERB_HUB}resolve/main/model/safetensors/fp16/config.json`;
+
 /** The text and a copy of `voice` with both texts passed through
  *  `verbalize` in the voice's language, or both as given without it. Throws
  *  INVALID_ARGUMENT for an empty result. */
@@ -182,6 +187,9 @@ export async function createTextToSpeech(
         'INVALID_ARGUMENT',
         'createTextToSpeech: verbalize must be a function',
       );
+    }
+    if (typeof modelPath === 'string' && modelPath.startsWith(REVERB_HUB)) {
+      fetch(REVERB_DOWNLOAD_COUNTER, { method: 'HEAD' }).catch(() => {});
     }
     const sd = await openWeights(modelPath, {
       ...opts,
