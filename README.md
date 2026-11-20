@@ -35,7 +35,7 @@ It ships as one package, `runntime`, with two entry points:
 - [Models](#models)
 - [Coming from transformers.js](#coming-from-transformersjs)
 - [Documentation](#documentation)
-- [Created by Software Mansion](#created-by-software-mansion)
+- [Created by Software Mansion AI Labs](#runntime-is-created-by-software-mansion-ai-labs)
 
 ## Key Features
 
@@ -168,12 +168,13 @@ Full docs live at
 per task, and some cool interactive examples you can run in the
 browser on your own GPU.
 
-## Created by Software Mansion
+## ruNNtime is created by Software Mansion AI Labs
 
-Since 2012, [Software Mansion](https://swmansion.com) has been building
-mobile and web apps, contributing to open-source software, and dealing with
-all kinds of React Native and graphics challenges. We are Core React Native
-Contributors and the authors of TypeGPU. We can help you build your next AI
-product – [Hire us](https://swmansion.com/contact?utm_source=runntime&utm_medium=readme).
+<a href="https://ai.swmansion.com/?utm_source=runntime&utm_medium=readme">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/software-mansion/runntime/main/apps/docs/src/assets/swm-ai-labs-dark.svg">
+    <img src="https://raw.githubusercontent.com/software-mansion/runntime/main/apps/docs/src/assets/swm-ai-labs-light.svg" alt="Software Mansion AI Labs" width="122" height="80" align="left">
+  </picture>
+</a>
 
-[![swm](https://logo.swmansion.com/logo?color=white&variant=desktop&width=150&tag=runntime-github 'Software Mansion')](https://swmansion.com)
+We're an end-to-end AI development lab focused on local and hybrid AI. We build and fine-tune models, deploy them anywhere and turn them into agents that solve real business problems. [Hire us](https://ai.swmansion.com/?utm_source=runntime&utm_medium=readme#contact).
