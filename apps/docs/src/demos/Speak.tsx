@@ -240,7 +240,8 @@ function VoiceRecorder({
   );
 }
 
-/** The "Your voice" area: loads the voice encoder when asked, then records. */
+/** The "Your voice" button under the speaker: loads the voice encoder when
+ *  clicked, then records. Hovering it tells what the click downloads. */
 function OwnVoice(props: {
   initialLanguage: ReverbLanguage;
   onVoice: (voice: Voice) => void;
@@ -255,15 +256,44 @@ function OwnVoice(props: {
     return () => maker.dispose();
   }, [state]);
 
+  if (state.status === 'ready') {
+    return (
+      <div className="demo-own-voice">
+        <VoiceRecorder maker={state.model} {...props} />
+      </div>
+    );
+  }
+
+  const loading = state.status === 'loading';
   return (
-    <WeightsGate
-      state={state}
-      onStart={start}
-      controls={<strong>Your voice</strong>}
-      note="Reverb's codec encoder, about 170 MB of safetensors from the Hugging Face Hub, cached in OPFS after the first load. It clones your voice from the microphone; the recording never leaves the browser."
-    >
-      {(maker) => <VoiceRecorder maker={maker} {...props} />}
-    </WeightsGate>
+    <div className="demo-own-voice">
+      <div className="demo-row">
+        <span className="demo-tip">
+          <button
+            className="demo-button demo-button-quiet"
+            onClick={start}
+            disabled={loading}
+            aria-describedby="own-voice-tip"
+          >
+            {loading ? `Downloading… ${Math.round(state.percent * 100)}%` : '● Your voice'}
+          </button>
+          <span id="own-voice-tip" role="tooltip" className="demo-tip-text">
+            Downloads Reverb's voice encoder, about 170 MB, once: after that it is cached in the
+            browser. Then record yourself and Reverb speaks in your voice. The recording never
+            leaves the browser.
+          </span>
+        </span>
+        {loading && (
+          <div className="progress">
+            <div
+              className="progress-fill"
+              style={{ width: `${Math.round(state.percent * 100)}%` }}
+            />
+          </div>
+        )}
+      </div>
+      {state.status === 'error' && <p className="demo-error">{state.message}</p>}
+    </div>
   );
 }
 
@@ -355,8 +385,6 @@ function Speaker({ tts }: { tts: TextToSpeech }) {
         {ownVoice && <option value={VOICES.length}>Your voice</option>}
       </select>
 
-      <OwnVoice initialLanguage={voice.language} onVoice={pickOwnVoice} onError={setError} />
-
       <textarea
         className="demo-input demo-textarea demo-row-actions"
         value={text}
@@ -383,6 +411,8 @@ function Speaker({ tts }: { tts: TextToSpeech }) {
       </div>
 
       {error && <p className="demo-error">{error}</p>}
+
+      <OwnVoice initialLanguage={voice.language} onVoice={pickOwnVoice} onError={setError} />
 
       <div className="demo-stats">
         <span>reverb int4</span>
