@@ -18,7 +18,8 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
   ends (`upload`), feature skips (`requireFeature`), the float check
   (`expectClose`), seeded inputs (`randomF32`) and f16 rounding for
   references (`roundF16`). CI runners have no GPU, so the GPU tests run
-  locally: run them before pushing a change to a kernel or its dispatch.
+  locally: run `test:gpu` before pushing any change to code that has a
+  `*.gpu.test.ts` (kernels, dispatch, layers, task runners).
 - Write the test once and put the cases in a list that `it.each` runs.
   Adding a case should be one line.
 - Expected values come from the math, worked out by hand or from Hugging

@@ -34,9 +34,9 @@ that breaks it.
    file around it" doesn't excuse breaking one.
 6. **Label nits.** They go after the real findings and are labelled
    `nit`. Skip anything Prettier, ESLint or tsc already catch.
-7. **Run what CI runs:** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`,
-   `pnpm --filter runntime test:unit`. For changes in `src/core/kernels` or
-   `src/core/gpu`, also run `test:gpu`. CI has no GPU, so nobody else will.
+7. **Run what CI runs, plus the GPU tests:** `pnpm typecheck`, `pnpm lint`,
+   `pnpm format:check`, and the tests the `testing` skill says to run for
+   the touched files. CI has no GPU, so nobody else runs `test:gpu`.
 8. **Flag assumptions about the data format.** Code that only works for
    one tensor layout, dtype, key name or file format, with no check that
    the data matches, is a finding. So is any `core` API that makes the
