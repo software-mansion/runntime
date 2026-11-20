@@ -1,6 +1,7 @@
 /** Streaming Moonshine transcriber: the v1 decode loop over the v2 frontend,
  *  encoder and adapter. Long clips split on quiet points into per-utterance
- *  chunks; each utterance is zero-padded to whole 80-sample frames.
+ *  chunks; each utterance runs as whole 80-sample frames, a partial last
+ *  frame as zeros.
  *
  *  Decoding runs in bursts: within a burst each step's argmax id feeds the next
  *  step's embedding on device, so the GPU runs the whole burst with no CPU
@@ -38,9 +39,20 @@ export type { TranscribeResult, Transcriber };
 const SAMPLE_RATE = 16_000;
 const TOKENS_PER_SECOND = 6.5;
 const BURST = 8;
-const DECODE_POSITIONS = 256;
+export const DECODE_POSITIONS = 256;
 const MAX_CHUNK_SECONDS = 30;
 const SPLIT_SEARCH_SECONDS = 5;
+
+/** `audio` as whole frames of `frameLen` samples. A partial last frame
+ *  becomes a frame of zeros, which the embedder turns into zero features. */
+export function padToFrames(audio: Float32Array, frameLen: number): Float32Array {
+  if (audio.length === 0) throw new RunntimeError('INVALID_ARGUMENT', 'transcribe: empty audio');
+  const whole = Math.floor(audio.length / frameLen);
+  if (whole * frameLen === audio.length) return audio;
+  const padded = new Float32Array((whole + 1) * frameLen);
+  padded.set(audio.subarray(0, whole * frameLen));
+  return padded;
+}
 
 export async function createTranscriber(
   sd: LazyStateDict,
@@ -94,22 +106,13 @@ export async function createTranscriber(
   // Per-position greedy ids, read back once per burst.
   const idsBuf = tensor(root, new Float32Array(DECODE_POSITIONS), [DECODE_POSITIONS, 1]);
 
-  const padToFrames = (audio: Float32Array): Float32Array => {
-    if (audio.length === 0) throw new RunntimeError('INVALID_ARGUMENT', 'transcribe: empty audio');
-    const frames = Math.ceil(audio.length / cfg.frameLen);
-    if (frames * cfg.frameLen === audio.length) return audio;
-    const padded = new Float32Array(frames * cfg.frameLen);
-    padded.set(audio);
-    return padded;
-  };
-
   const transcribeUtterance = async (
     rawAudio: Float32Array,
     tokensPerSecond: number,
   ): Promise<TranscribeResult> => {
     perf?.onPhase?.('encode');
     const t0 = performance.now();
-    const audio = padToFrames(rawAudio);
+    const audio = padToFrames(rawAudio, cfg.frameLen);
     const frames = frontendFrames(audio.length, cfg.frameLen);
     const x = actTensor(audio, [frames.input, cfg.frameLen]);
 
