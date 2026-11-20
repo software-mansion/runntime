@@ -8,6 +8,11 @@ description: How to review a change in this repo, as a reviewer or before openin
 Find what breaks. Each finding names the line that breaks and the input
 that breaks it.
 
+Before you start, read `AGENTS.md`,
+[`code-style`](../code-style/SKILL.md) and
+[`testing`](../testing/SKILL.md). Every rule in them applies to the
+change under review, including the testing and benchmark rules.
+
 ## Rules
 
 1. **Evidence is `file:line`.** Open the code before you say anything about
@@ -29,9 +34,11 @@ that breaks it.
    a malformed file nobody ships, a buffer past what any model uses). Put
    it on the finding's first line, so a `practically never` can be skipped
    at a glance.
-5. **Hold the author to the house rules.** Anything that breaks `AGENTS.md`,
-   `code-style` or `testing` is a finding. Quote the rule. "It matches the
-   file around it" doesn't excuse breaking one.
+5. **Flag every broken house rule.** Each rule in `AGENTS.md`,
+   `code-style` or `testing` that the change breaks is a `rule` finding:
+   a missing test, a missing A/B report, a GPU test not run, a name or
+   comment against the style guide. Quote the rule and its file. "It
+   matches the file around it" doesn't excuse breaking one.
 6. **Label nits.** They go after the real findings and are labelled
    `nit`. Skip anything Prettier, ESLint or tsc already catch.
 7. **Run what CI runs, plus the GPU tests:** `pnpm typecheck`, `pnpm lint`,
