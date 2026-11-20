@@ -1,13 +1,15 @@
 /** Argmax and log-probability per block of logit rows, so a sampler reads
- *  back two numbers per block instead of the logits.
+ *  back two or three numbers per block instead of the logits.
  *
  *  Row r of x holds `blocks` blocks of `block` logits from column 0. For
- *  block b of row r the kernel writes, at out[(b·rows + r)·2]:
+ *  block b of row r the kernel writes, at out[(b·rows + r)·width]:
  *  - the argmax over the block's first argmaxCols columns, of x or of
  *    (1 + w)·x − w·guide; ties take the lowest column;
- *  - that column's x minus the block's logsumexp.
- *  One workgroup per block of a row, merged as a tree in workgroup memory.
- *  Sums in f32. */
+ *  - that column's x minus the block's logsumexp;
+ *  - with `held` (f32 column indices), the log-probability of column
+ *    held[b·rows + r] the same way.
+ *  width is 3 with `held`, else 2. One workgroup per block of a row, merged
+ *  as a tree in workgroup memory. Sums in f32. */
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
@@ -32,7 +34,8 @@ const makeLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
     x: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
     guide: { storage: d.arrayOf(elem.scalar), access: 'readonly' }, // like x; dead when guided=0
-    out: { storage: d.arrayOf(d.f32), access: 'mutable' }, // [blocks·rows, 2]
+    held: { storage: d.arrayOf(d.f32), access: 'readonly' }, // [blocks·rows]; dead when held=0
+    out: { storage: d.arrayOf(d.f32), access: 'mutable' }, // [blocks·rows, width]
     dims: { uniform: Dims },
   });
 
@@ -51,10 +54,12 @@ export interface LogitStatsCfg {
   block: number;
   argmaxCols: number;
   guided: number;
+  held: number;
 }
 
 function makeLogitStatsKernel(cfg: LogitStatsCfg, elem: Elem) {
-  const { blocks, block, argmaxCols, guided } = cfg;
+  const { blocks, block, argmaxCols, guided, held } = cfg;
+  const width = held > 0 ? 3 : 2;
   const L = layoutFor(elem);
   return tgpu.computeFn({
     in: { wid: d.builtin.workgroupId, lid: d.builtin.localInvocationIndex },
@@ -107,13 +112,18 @@ function makeLogitStatsKernel(cfg: LogitStatsCfg, elem: Elem) {
     }
     if (lid === 0) {
       const top = partialArg.$[0]!;
-      L.$.out[slot * 2] = d.f32(top);
-      L.$.out[slot * 2 + 1] = d.f32(L.$.x[base + top]!) - maxSum.x - std.log(maxSum.y);
+      const logSum = maxSum.x + std.log(maxSum.y);
+      L.$.out[slot * width] = d.f32(top);
+      L.$.out[slot * width + 1] = d.f32(L.$.x[base + top]!) - logSum;
+      if (held > 0) {
+        const column = d.u32(L.$.held[slot]!);
+        L.$.out[slot * width + 2] = d.f32(L.$.x[base + column]!) - logSum;
+      }
     }
   });
 }
 
-/** One pipeline per dtype and block geometry. */
+/** One pipeline per dtype, block geometry and inputs. */
 export function createLogitStatsPipeline(
   root: TgpuRoot,
   cfg: LogitStatsCfg,
@@ -127,7 +137,7 @@ export function logitStatsHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createLogitStatsPipeline>,
   args: { rows: number; rowStride: number; blocks: number; weight: number },
-  buffers: { x: FloatBuffer; guide?: FloatBuffer; out: F32Buffer },
+  buffers: { x: FloatBuffer; guide?: FloatBuffer; held: F32Buffer; out: F32Buffer },
   elem: Elem = F32_ELEM,
 ): KernelHandle {
   const dims = cachedUniform(root, Dims, {

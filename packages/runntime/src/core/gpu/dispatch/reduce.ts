@@ -157,20 +157,22 @@ export const topkSpec = defineSpec({
 
 export const logitStatsSpec = defineSpec({
   attrs: (p) => {
-    const [blocks, block, argmaxCols, guided, weight] = p.attrs as [
+    const [blocks, block, argmaxCols, guided, weight, held] = p.attrs as [
+      number,
       number,
       number,
       number,
       number,
       number,
     ];
-    return { blocks, block, argmaxCols, guided, weight };
+    return { blocks, block, argmaxCols, guided, weight, held };
   },
   cfg: (node, attrs) => ({
     blocks: attrs.blocks,
     block: attrs.block,
     argmaxCols: attrs.argmaxCols,
     guided: attrs.guided,
+    held: attrs.held,
     inDtype: node.pending!.inputs[0]!.shape.dtype,
   }),
   pipeline: (root, _dtype, cfg) => createLogitStatsPipeline(root, cfg, elemFor(cfg.inDtype)),
@@ -184,6 +186,8 @@ export const logitStatsSpec = defineSpec({
         {
           x: narrowFloat(inputs[0]!, cfg.inDtype),
           guide: attrs.guided === 1 ? narrowFloat(inputs[1]!, cfg.inDtype) : undefined,
+          // After the guide, when there is one; pipelines without held never read the filler.
+          held: attrs.held === 1 ? narrow(inputs[1 + attrs.guided]!, 'f32') : ctx.dummy('f32'),
           out: narrow(out, 'f32'),
         },
         elemFor(cfg.inDtype),
