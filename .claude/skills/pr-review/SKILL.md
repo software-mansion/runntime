@@ -37,6 +37,12 @@ that breaks it.
 7. **Run what CI runs:** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`,
    `pnpm --filter runntime test:unit`. For changes in `src/core/kernels` or
    `src/core/gpu`, also run `test:gpu`. CI has no GPU, so nobody else will.
+8. **Flag assumptions about the data format.** Code that only works for
+   one tensor layout, dtype, key name or file format, with no check that
+   the data matches, is a finding. So is any `core` API that makes the
+   user know how the weights are laid out: if a `core` user has to write
+   their own `transformStateDict` to load a normal checkpoint, the layer
+   should adapt the layout itself.
 
 ## What matters, by area
 
@@ -58,6 +64,12 @@ Failure: a crash on a device without subgroups. Wrong output past 2^24
 elements. A dispatch count that goes up with no reason in the PR. A
 nonzero last A/B column on a kernel the change didn't mean to touch.
 
+**`src/core/nn`**: built-in layers load the checkpoint's own layout. Any
+reshape, transpose, split or fuse happens in the layer's
+`transformStateDict`, not in the caller.
+Failure: a docs sample or test that has to rewrite the state dict before
+`loadStateDict` works.
+
 **`src/core/weights`**: data that arrives as `unknown` is checked, not cast.
 Failure: a bad header throws a `TypeError` instead of `CHECKPOINT_MISMATCH`.
 
@@ -65,7 +77,11 @@ Failure: a bad header throws a `TypeError` instead of `CHECKPOINT_MISMATCH`.
 `dispose()` frees everything, even after a half-finished build
 (`createResourceScope`). Variable-length runners call `trim()`. User-facing
 throws are `RunntimeError` with a code. A new model has a parity manifest.
-Failure: two overlapping calls corrupt each other. Buffers survive
+Module and field names match the checkpoint's tensor names, so keys load
+as they are, with no renaming.
+Failure: two overlapping calls corrupt each other. A key-renaming map or
+`transformStateDict` that only exists because a module is named
+differently from the checkpoint. Buffers survive
 `dispose()`. A plain `Error` reaches the app. `coverage.test.ts` fails.
 
 **`test/`**: expected values come from the math or PyTorch, never from our
