@@ -120,7 +120,7 @@ function makeMatmulTiledVec4Kernel(cfg: MatmulTiledVec4Cfg, elem: Elem) {
     'use gpu';
     const m = layout.$.dims.m;
     const tx = lid % WGC;
-    const ty = d.u32(lid / WGC);
+    const ty = std.intdiv(lid, WGC);
     const mBase = wid.y * BM;
     const nBase4 = wid.x * bn4;
 

@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type F32Buffer,
@@ -49,12 +49,12 @@ function makeRopeVariant(elem: Elem) {
     'use gpu';
     const D = layout.$.dims;
     const C = config.$;
-    const pairs = d.u32(C.cols / 2);
+    const pairs = std.intdiv(C.cols, 2);
     const idx = flatIndex(gid);
     if (idx >= D.rows * pairs) {
       return;
     }
-    const row = d.u32(idx / pairs);
+    const row = std.intdiv(idx, pairs);
     const col0 = (idx % pairs) * 2;
     const dcol = col0 % C.headDim; // table column (pair-duplicated: d == d+1)
     const c = layout.$.cos[row * C.headDim + dcol]!;

@@ -112,11 +112,9 @@ describe('columns kernels', () => {
     await sliceAndCat(2048, 4097);
   });
 
-  // Known bug: the kernels split the flat index into row and column with
-  // d.u32(i / cols), which TypeGPU compiles to u32(f32(i) / f32(cols)). f32
-  // counts exactly only up to 2^24, so past it rows and columns come out
-  // wrong. Turn into a plain `it` with the fix.
-  it.fails('runs past 2^24 elements', async () => {
+  // f32 counts exactly only up to 2^24, so the flat index past it must be
+  // split with integer division or rows and columns come out wrong.
+  it('runs past 2^24 elements', async () => {
     expect(4100 * 4096).toBeGreaterThan(2 ** 24);
     await sliceAndCat(4100, 4097);
   });

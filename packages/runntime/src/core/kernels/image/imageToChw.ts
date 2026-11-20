@@ -103,7 +103,7 @@ const makeImageToChwKernel = (source: typeof textureSource) =>
       offset = ((side - img) / 2) * scale;
     }
 
-    const o = d.vec2f(d.f32(idx % P.outW), d.f32(d.u32(idx / P.outW)));
+    const o = d.vec2f(d.f32(idx % P.outW), d.f32(std.intdiv(idx, P.outW)));
     // Image coordinate of this input pixel's center, in image pixels.
     const s = (o + 0.5 - offset) / scale;
     let v = d.vec3f(P.padR, P.padG, P.padB);

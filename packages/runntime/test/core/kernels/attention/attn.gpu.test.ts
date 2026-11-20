@@ -253,14 +253,17 @@ describe('attn kernels', () => {
     await checkSdpa(deviceFor(ctx, device, dtype, subgroups), c, dtype);
   });
 
-  // Known bug: the batch kernel splits its flat index into row and head with
-  // d.u32(idx / qHeads), which TypeGPU compiles to u32(f32(idx) /
-  // f32(qHeads)). f32 counts exactly only up to 2^24, so past 2^24 row-heads
-  // rows come out wrong. Turn into a plain `it` with the fix.
+  // f32 counts exactly only up to 2^24, so the flat row-head index past it
+  // must be split with integer division or rows come out wrong.
   // batch: past GRID_Y_STRIDE row-heads
-  it.fails('past 2^24 row-heads (batch)', () =>
-    checkSdpa(withoutSubgroups, { qLen: 2 ** 24 + 3, kvLen: 2, qHeads: 1, kvHeads: 1, headDim: 1 }),
-  );
+  it('past 2^24 row-heads (batch)', () =>
+    checkSdpa(withoutSubgroups, {
+      qLen: 2 ** 24 + 3,
+      kvLen: 2,
+      qHeads: 1,
+      kvHeads: 1,
+      headDim: 1,
+    }));
 
   it('rejects qLen = 0 with an INVALID_ARGUMENT', () => {
     expect(() => upload(root, new Float32Array(0), [0, 8])).toThrow(
