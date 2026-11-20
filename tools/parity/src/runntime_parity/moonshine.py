@@ -7,11 +7,13 @@ every teacher-forced step and the text from transformers, in f32.
 
 import gc
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import torch
 from numpy.typing import NDArray
-from transformers import AutoProcessor, MoonshineForConditionalGeneration
+from transformers import AutoProcessor, MoonshineForConditionalGeneration, PreTrainedModel
 
 from . import librispeech
 from .common import cosine_noise, noise, save
@@ -29,17 +31,24 @@ MAX_SECONDS = 26
 TOKENS_PER_SECOND = 6.5
 
 Outputs = list[tuple[NDArray[np.floating], NDArray[np.floating]]]
+TeacherForced = Callable[[PreTrainedModel, list[dict[str, torch.Tensor]], list[torch.Tensor]], Outputs]
 
 
-def repo(size: str) -> str:
-    return f"UsefulSensors/moonshine-{size}"
+@dataclass(frozen=True)
+class Reference:
+    """A released model and the family its reference is saved as."""
+
+    family: str
+    repo: str
+    revision: str
+    model: type[PreTrainedModel]
+    # runntime's chunk length: it splits a longer clip.
+    max_seconds: int
 
 
-def load(size: str, double: bool = False) -> MoonshineForConditionalGeneration:
+def load(reference: Reference, double: bool = False) -> PreTrainedModel:
     """The model on the CPU: in f32, or in f64 with `double`."""
-    model = MoonshineForConditionalGeneration.from_pretrained(
-        repo(size), revision=REVISIONS[size], dtype=torch.float32
-    ).eval()
+    model = reference.model.from_pretrained(reference.repo, revision=reference.revision, dtype=torch.float32).eval()
     return model.double() if double else model
 
 
@@ -82,14 +91,15 @@ def noises(reference: Outputs, double: Outputs) -> dict[str, float]:
     }
 
 
-def main() -> None:
-    size = sys.argv[1]
-    clip_ids, clips, transcripts = librispeech.librispeech_clips(CLIPS, MAX_SECONDS)
-    processor = AutoProcessor.from_pretrained(repo(size), revision=REVISIONS[size])
+def save_reference(reference: Reference, teacher_forced: TeacherForced) -> None:
+    """Runs the model of `reference` on the speech and saves its outputs:
+    `teacher_forced` gives the encoder states and the logits of a model."""
+    clip_ids, clips, transcripts = librispeech.librispeech_clips(CLIPS, reference.max_seconds)
+    processor = AutoProcessor.from_pretrained(reference.repo, revision=reference.revision)
     rate = librispeech.SAMPLE_RATE
     inputs = [processor(clip, sampling_rate=rate, return_tensors="pt") for clip in clips]
 
-    model = load(size)
+    model = load(reference)
     tokens = []
     for clip_id, clip, features in zip(clip_ids, clips, inputs, strict=True):
         with torch.inference_mode():
@@ -98,8 +108,8 @@ def main() -> None:
         if generated[-1] != model.config.eos_token_id:
             raise RuntimeError(f"{clip_id} reaches the token cap")
         tokens.append(generated)
-    reference = teacher_forced(model, inputs, tokens)
-    for clip_id, ids, (_, logits) in zip(clip_ids, tokens, reference, strict=True):
+    outputs = teacher_forced(model, inputs, tokens)
+    for clip_id, ids, (_, logits) in zip(clip_ids, tokens, outputs, strict=True):
         if not np.array_equal(logits.argmax(axis=1), ids[1:].numpy()):
             raise RuntimeError(f"{clip_id}: teacher forcing picks other tokens than the greedy run")
     texts = [processor.decode(ids, skip_special_tokens=True) for ids in tokens]
@@ -107,28 +117,42 @@ def main() -> None:
     # RoPE in f32, so the noise is f32 against mostly f64.
     del model
     gc.collect()
-    double = teacher_forced(load(size, double=True), inputs, tokens)
+    double = teacher_forced(load(reference, double=True), inputs, tokens)
 
     tensors: dict[str, NDArray] = {}
-    for i, (clip, ids, (states, logits)) in enumerate(zip(clips, tokens, reference, strict=True)):
+    for i, (clip, ids, (states, logits)) in enumerate(zip(clips, tokens, outputs, strict=True)):
         tensors[f"samples.{i}"] = clip
         tensors[f"tokens.{i}"] = ids.numpy().astype(np.int32)
         tensors[f"encoder.{i}"] = states
         tensors[f"logits.{i}"] = logits
     save(
-        f"moonshine-{size}",
+        reference.family,
         {"clips": clip_ids, "transcripts": transcripts},
         tensors,
         {
-            "repo": repo(size),
-            "revision": REVISIONS[size],
+            "repo": reference.repo,
+            "revision": reference.revision,
             "dtype": "f32",
             "inputs": librispeech.ATTRIBUTION | {"count": len(clips)},
-            "settings": {"maxSeconds": MAX_SECONDS, "tokensPerSecond": TOKENS_PER_SECOND},
-            "noise": noises(reference, double),
+            "settings": {"maxSeconds": reference.max_seconds, "tokensPerSecond": TOKENS_PER_SECOND},
+            "noise": noises(outputs, double),
         },
         ["torch", "transformers"],
         outputs={"texts": texts},
+    )
+
+
+def main() -> None:
+    size = sys.argv[1]
+    save_reference(
+        Reference(
+            family=f"moonshine-{size}",
+            repo=f"UsefulSensors/moonshine-{size}",
+            revision=REVISIONS[size],
+            model=MoonshineForConditionalGeneration,
+            max_seconds=MAX_SECONDS,
+        ),
+        teacher_forced,
     )
 
 
