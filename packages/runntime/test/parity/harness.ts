@@ -121,12 +121,15 @@ export const summaryCell = ({ mean, p99, max }: Summary) =>
   [mean, p99, max].map((v) => v.toExponential(1)).join(' / ');
 
 /** Writes `rows` as a markdown table to `.parity/results/<family>.md`, the
- *  table a pull request carries. Columns follow the first row's keys. */
+ *  table a pull request carries. Columns follow the first row's keys. A
+ *  family with no row, as in a run filtered to other families, keeps the
+ *  table it has. */
 async function writeReport(
   family: string,
   rows: readonly Readonly<Record<string, string>>[],
 ): Promise<void> {
-  const columns = Object.keys(rows[0] ?? {});
+  if (rows.length === 0) return;
+  const columns = Object.keys(rows[0]!);
   const line = (cells: readonly string[]) => `| ${cells.join(' | ')} |`;
   const table = [
     line(columns),
