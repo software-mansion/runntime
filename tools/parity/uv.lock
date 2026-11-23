@@ -1389,6 +1389,26 @@ wheels = [
 ]
 
 [[package]]
+name = "reverb-tts"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "safetensors" },
+    { name = "soundfile" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "transformers" },
+    { name = "verbalis" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/c8/d1b16ff6c8ba9dfb04228b7a4d784d19678117174759fd263ab16f42155c/reverb_tts-1.0.0.tar.gz", hash = "sha256:2425539dc34983544ddb1482bcd4284b5afa8b894b464e967e6d40bdc7fff582", size = 1082326, upload-time = "2026-11-19T12:35:47.273Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/47/4d2e17ab7c5e7e406be2208ce53789f2ea3aab3be1c118509f59dbee3e88/reverb_tts-1.0.0-py3-none-any.whl", hash = "sha256:f8257e7889211838da894e5cd5afd8abc69670beef8cb7e6834992ae077c7191", size = 22930, upload-time = "2026-11-19T12:35:46.004Z" },
+]
+
+[[package]]
 name = "rich"
 version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1436,6 +1456,7 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pillow" },
     { name = "pyarrow" },
+    { name = "reverb-tts" },
     { name = "safetensors" },
     { name = "sentence-transformers" },
     { name = "soundfile" },
@@ -1455,6 +1476,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "pyarrow", specifier = ">=26.0.1" },
+    { name = "reverb-tts", specifier = "==1.0.0" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "sentence-transformers", specifier = ">=6.1" },
     { name = "soundfile", specifier = ">=0.14.0" },
@@ -1883,6 +1905,20 @@ wheels = [
 ]
 
 [[package]]
+name = "torchaudio"
+version = "2.11.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/2a/c2b0f44906f8a4e8d90facdf68bc76bb14e72a0cbb9cc0457ca1c2fcd101/torchaudio-2.11.1-py3-none-macosx_14_0_arm64.whl", hash = "sha256:917667ab3e357d286b0e2405a33dc538e4344d554b72e1b2b03382a4352ca857", size = 699189, upload-time = "2026-10-28T15:21:42.129Z" },
+    { url = "https://files.pythonhosted.org/packages/90/c7/e352c0a0f34653f3f6a581b580352ab1c83e5d04019826ade4dfc26cf664/torchaudio-2.11.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:ad1175202b5cdb7585a38c1330845430e128c4ed8ceb770639318aa40fc1994b", size = 1678033, upload-time = "2026-10-28T15:21:43.28Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/ad/b0bf9bfa9db80acf0ce660e01a67b3b735343ab51ce1410b18d2aaed254c/torchaudio-2.11.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:0173b5b51e1368aa88de3cbe4e98508b5e9df4d8d59356c4e1fbc830c96191ef", size = 1816417, upload-time = "2026-10-28T15:21:45.007Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/9e/549c9bb2d139fe78c90c9381f9ffbfc87232336df4537a65ea31d51fcdee/torchaudio-2.11.1-py3-none-win_amd64.whl", hash = "sha256:46ea71634d181f797370f046075ea982043c228b38d674fd7d9fc1c855a37b6a", size = 334360, upload-time = "2026-10-28T15:21:40.715Z" },
+]
+
+[[package]]
 name = "torchvision"
 version = "0.29.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1991,4 +2027,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ff/50/0195198eb1d75bab716bb0a813abea4cc394bfa17a92a189f021a34859af/typing_inspection-0.4.5.tar.gz", hash = "sha256:7f16c411e7930dc79596d42ab44672a3fe5f60eb34b781a1647e7872363120c7", size = 81194, upload-time = "2026-11-04T14:13:23.774Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/de/0c/ea2544850a7c135e15033a5c7a8e7211136184b7ae63e2239d557c2b3019/typing_inspection-0.4.5-py3-none-any.whl", hash = "sha256:bc210535442b39e1bf2805e0c7a17dfd6a4ace760c84c7f7d16245d23a6b1c39", size = 14874, upload-time = "2026-11-04T14:13:22.616Z" },
+]
+
+[[package]]
+name = "verbalis"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/2b/0c9b12e93d5de32b1b2297aeec7265bfcae37657d7f4d4e32a89eaedf34e/verbalis-0.1.1.tar.gz", hash = "sha256:d38f5a6c4f2fd5192b50a7818fed9570a7515ff04b00f1ed5877d3d46af63fcd", size = 239274, upload-time = "2026-11-03T12:39:42.398Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/88/9d35b8cd0e130e27edfb18ed76fb0b620c381d52b61f3bcc956aa0cf6b00/verbalis-0.1.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:2a69192012ce8db185976f4ffc012c653938b984a6468a0d1dc4ec36969a8efc", size = 1160390, upload-time = "2026-11-03T12:39:19.143Z" },
+    { url = "https://files.pythonhosted.org/packages/29/6b/0c00a87f1e085ffb313a12dcf6ed07bf48367b2a344d4f3acd59bcc90251/verbalis-0.1.1-cp311-cp311-macosx_11_0_x86_64.whl", hash = "sha256:b00e8f8853ca4f659e5f5aa8caa11cff1053761183d71c95f5e32ab44911d6ca", size = 1233612, upload-time = "2026-11-03T12:39:20.626Z" },
+    { url = "https://files.pythonhosted.org/packages/65/ab/dab39876fc6265b0de21e9f319ab58d9d366bf3bd10a7a13cf65f4202839/verbalis-0.1.1-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0832348dabd0456f3094db9210a6bb72c6ec21fbebde7108688854aa0b3331d0", size = 1013680, upload-time = "2026-11-03T12:39:22.444Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/aa/8d1c7991a9a37833ef6cfc66baaca40585c41ae1b593038fb4bb46ebaf56/verbalis-0.1.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3245b36e13bd4c33065995b7fc061e091678430694062a8f198a2b0e28c3d431", size = 1134509, upload-time = "2026-11-03T12:39:24.141Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/26/c37da3af81ee95706e307cab561499659ca8fd29d77d3d0231f8c0ddc359/verbalis-0.1.1-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:11765f8765515588cb4edc3504edfaa7a862ce0836b12d37a1fad2ac59ff92cd", size = 1154794, upload-time = "2026-11-03T12:39:25.621Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/c3/cf4a61a3b1edd2ac24bc813d30ed08c58318669319a8b0920375e5a87022/verbalis-0.1.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:afc875c7152c9b60071a167e1ec09cf94ee11f7a8ca831470a267a77e4e6901d", size = 1258052, upload-time = "2026-11-03T12:39:27.567Z" },
+    { url = "https://files.pythonhosted.org/packages/89/f8/66906fdfc8a3e51f721db6fcfe906240f6854b6fbfe9c7531b2525c1ecda/verbalis-0.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:08483de1b38c030ec9e831e27a96153f45ce05c221efcde5404338adf5efcc0e", size = 1159813, upload-time = "2026-11-03T12:39:28.96Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/56/237ce55ceaad804190a064a05e2ff928c6ff8a44de0185389b1f2383d9a2/verbalis-0.1.1-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:4d384ba410e3c9065c1decfa9431d02ff38f071b1e646075c9cda04595777ea9", size = 1158848, upload-time = "2026-11-03T12:39:30.907Z" },
+    { url = "https://files.pythonhosted.org/packages/33/b4/1162b9bf70bd2cb0a746101b7645314e0dafe3fa746e4332b7264109fbbb/verbalis-0.1.1-cp312-abi3-macosx_11_0_x86_64.whl", hash = "sha256:0afeaa4b4c91db8f864097d342347c44e2ae00034cf7090598c52c7f97f5d911", size = 1232922, upload-time = "2026-11-03T12:39:32.487Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/e7/f3342b33cafe0e690d6ad0451d50db7ea3728ad14882da52f41fd29a8137/verbalis-0.1.1-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4d0f0ec4d81d5ee85330fc5f822ee38249f912d0512087e62007fae7e7b5bf68", size = 1010724, upload-time = "2026-11-03T12:39:34.152Z" },
+    { url = "https://files.pythonhosted.org/packages/22/90/ddbf4f8ad044fa5f77e8c73aaa2dd7bf5532d95fc433fd8b96445093c323/verbalis-0.1.1-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f6ef20c12c1776cb174cd942b468d2aefbf84578a570671a79ba67ab7cca67cd", size = 1130355, upload-time = "2026-11-03T12:39:35.732Z" },
+    { url = "https://files.pythonhosted.org/packages/37/b5/504623963057bdb7ed7eb3da90afdc51893cbb2971ae1c74b47572203d6d/verbalis-0.1.1-cp312-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:5cc3d38bb2006c4befad7efe8bc4b722636e1bd684a9e32c3f918dd32ff399fa", size = 1150873, upload-time = "2026-11-03T12:39:37.357Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/a6/dc0ab98999a617c3af3e07705878924601d5f10977a9da7574d9f3f34b47/verbalis-0.1.1-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:29c5855a50b34bcc01bdb9df5b71c893cb45a834ac2c403b3f8d5d7e9d4790ed", size = 1254596, upload-time = "2026-11-03T12:39:39.097Z" },
+    { url = "https://files.pythonhosted.org/packages/de/7a/f0c843f2c3331ae43a3697c3ffad4337bb2502f02467ebd021fc3dd77569/verbalis-0.1.1-cp312-abi3-win_amd64.whl", hash = "sha256:c76b2a7b77e0a574593dfcc8ecf4df38b9e8801cf3bd07dac3acd15ee07ca3a7", size = 1159078, upload-time = "2026-11-03T12:39:40.957Z" },
 ]

@@ -133,6 +133,9 @@ importers:
       unplugin-typegpu:
         specifier: ^0.12.3
         version: 0.12.3(esbuild@0.28.2)(rolldown@1.2.8)(typegpu@0.12.5)(vite@8.3.0(@types/node@25.9.6)(esbuild@0.28.2)(jiti@2.6.1)(yaml@2.9.1))
+      verbalis:
+        specifier: 0.1.1
+        version: 0.1.1
       vitest:
         specifier: ^5.0.4
         version: 5.0.4(@types/node@25.9.6)(@vitest/browser-playwright@5.0.4)(@vitest/ui@5.0.4)(vite@8.3.0(@types/node@25.9.6)(esbuild@0.28.2)(jiti@2.6.1)(yaml@2.9.1))
