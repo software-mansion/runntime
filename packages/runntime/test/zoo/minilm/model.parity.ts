@@ -6,7 +6,9 @@ import { gpu } from '../../gpu.ts';
 import {
   readJson,
   readTensors,
+  rows,
   runParity,
+  summaryCell,
   transposedWeights,
   type Measured,
 } from '../../parity/harness.ts';
@@ -17,7 +19,6 @@ import {
   rankMismatches,
   summarize,
   topK,
-  type Summary,
 } from '../../parity/metrics.ts';
 import { MINILM_PARITY, TOP_K } from './parity.manifest.ts';
 
@@ -38,17 +39,6 @@ const dot = (a: Float32Array, b: Float32Array) => a.reduce((sum, v, i) => sum + 
 const wantScores = wantVectors
   .slice(0, inputs.queries.length)
   .map((query) => wantVectors.slice(inputs.queries.length).map((passage) => dot(query, passage)));
-
-/** The `count` rows of a `[count, dim]` reference tensor. */
-function rows(tensor: Float32Array | Int32Array, count: number): Float32Array[] {
-  const dim = tensor.length / count;
-  return Array.from({ length: count }, (_, i) =>
-    Float32Array.from(tensor.subarray(i * dim, (i + 1) * dim)),
-  );
-}
-
-const cell = ({ mean, p99, max }: Summary) =>
-  [mean, p99, max].map((v) => v.toExponential(1)).join(' / ');
 
 /** Embeds every text one at a time and compares with the reference. */
 async function measure(
@@ -88,8 +78,8 @@ async function measure(
   };
   return {
     cells: {
-      '1 − cos (mean / p99 / max)': cell(cosineDistance),
-      'max error (mean / p99 / max)': cell(error),
+      '1 − cos (mean / p99 / max)': summaryCell(cosineDistance),
+      'max error (mean / p99 / max)': summaryCell(error),
       'ranking positions differing': `${(100 * metrics.rankMismatches).toFixed(1)}%`,
       'top-k missed': `${(100 * metrics.topKMissed).toFixed(1)}%`,
       'near-ties, not gated (ranking / top-k)': `${nearPositions} / ${nearItems}`,
