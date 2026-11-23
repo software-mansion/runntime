@@ -106,7 +106,7 @@ export function spokenInput(
   verbalize: TextToSpeechModel['verbalize'],
 ): { text: string; voice: Voice } {
   if (!verbalize) return { text, voice };
-  const { codes, frames, transcript, language } = voice;
+  const { transcript, language } = voice;
   const spoken = (input: string, what: string) => {
     const out = verbalize(input, language);
     if (typeof out !== 'string' || out.trim() === '') {
@@ -119,7 +119,7 @@ export function spokenInput(
   };
   return {
     text: spoken(text, 'text'),
-    voice: { codes, frames, language, transcript: spoken(transcript, 'voice transcript') },
+    voice: { ...voice, transcript: spoken(transcript, 'voice transcript') },
   };
 }
 
