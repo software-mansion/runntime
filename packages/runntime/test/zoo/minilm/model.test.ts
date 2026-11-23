@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MINILM_L6 } from '../../../src/zoo/minilm/config.ts';
 import { MinilmModel } from '../../../src/zoo/minilm/model.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
+import { stackedParts } from '../stackedParts.ts';
 
 const cfg = { ...MINILM_L6, hidden: 32, heads: 4, headDim: 8, ffn: 64, layers: 4, vocab: 40 };
 
@@ -42,6 +43,15 @@ describe('MinilmModel', () => {
     await chunksFetched(new MinilmModel(cfg), hostedFile({ 'pooler.extra.weight': [2] }), 8192);
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       'loadStateDict: state dict has tensors the model does not read: pooler.extra.weight.',
+    );
+  });
+
+  it('stacks query, key and value in that order', async () => {
+    const self = (i: number) => `encoder.layer.${i}.attention.self`;
+    expect(await stackedParts(new MinilmModel(cfg), hostedFile())).toEqual(
+      Object.fromEntries(
+        Array.from({ length: cfg.layers }, (_, i) => [`${self(i)}.qkv`, ['query', 'key', 'value']]),
+      ),
     );
   });
 });

@@ -10,6 +10,7 @@ import { HIGGS_ENCODER } from '../../../src/zoo/higgs/config.ts';
 import { HiggsEncoder } from '../../../src/zoo/higgs/encoder.ts';
 import { resample } from '../../../src/zoo/higgs/resample.ts';
 import { expectClose } from '../../gpu.ts';
+import { stackedParts } from '../stackedParts.ts';
 import { dequantizeWeight, quantizeWeight, quantSource } from '../../core/weights/checkpoint.ts';
 import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
 
@@ -139,6 +140,16 @@ describe('HiggsEncoder', () => {
       expect(quantized).toEqual(layers.filter((name) => !floats.includes(name)));
     },
   );
+
+  it('stacks q, k and v in that order', async () => {
+    const layers = Array.from(
+      { length: CFG.hubert.layers },
+      (_, i) => `semantic_model.encoder.layers.${i}.attention.qkv`,
+    );
+    expect(await stackedParts(new HiggsEncoder(CFG), memoryStateDict(checkpoint()))).toEqual(
+      Object.fromEntries(layers.map((path) => [path, ['q_proj', 'k_proj', 'v_proj']])),
+    );
+  });
 
   it('scales the q projection by 1/√headDim, under its own name', async () => {
     const raw = checkpoint();
