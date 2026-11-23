@@ -17,3 +17,6 @@ apps/docs/src/content/docs/api/
 
 # kernel A/B base copy and results
 .bench/
+
+# parity reports
+.parity/
