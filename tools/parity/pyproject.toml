@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=2.0",
     "pillow>=13.0.0",
     "pyarrow>=26.0.1",
+    "reverb-tts==1.0.0",
     "safetensors>=0.8.0",
     "sentence-transformers>=6.1",
     "soundfile>=0.14.0",
