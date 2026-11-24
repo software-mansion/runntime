@@ -94,6 +94,11 @@ describe('attnFlash kernel', () => {
       name: 'rows that see no key, with sinks',
       c: { qLen: 40, kvLen: 20, qHeads: 2, kvHeads: 1, headDim: 16, windowLeft: 0, sinks: true },
     },
+    // Past headDim 128 the key blocks shrink to fit in workgroup memory
+    {
+      name: 'a scale of 0.1 at headDim 512',
+      c: { qLen: 20, kvLen: 20, qHeads: 2, kvHeads: 1, headDim: 512, scale: 0.1 },
+    },
     {
       name: 'segments with maxSegment',
       c: {

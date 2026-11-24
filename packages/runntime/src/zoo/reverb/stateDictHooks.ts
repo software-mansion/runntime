@@ -14,7 +14,6 @@ import {
   concatRows,
   derive,
   permuteRows,
-  scaleWeight,
   type LazyStateDict,
   type LazyTensor,
 } from '../../core/index.ts';
@@ -100,10 +99,10 @@ export function transformReverbStateDict(
     );
     const qn = take(`${attn}.q_norm.weight`);
     const kn = take(`${attn}.k_norm.weight`);
-    const qScaled = scaleWeight(rope(qn), d ** -0.5);
+    const q = rope(qn);
     const k = rope(kn);
     const norms = concatRows([
-      ...Array<LazyTensor>(heads).fill(qScaled),
+      ...Array<LazyTensor>(heads).fill(q),
       ...Array<LazyTensor>(kvHeads).fill(k),
     ]);
     // concatRows reads a part listed several times once.

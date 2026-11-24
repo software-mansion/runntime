@@ -3,14 +3,13 @@ import { MOONSHINE_STREAMING_SMALL } from '../../../src/zoo/moonshine-streaming/
 import { transformStreamingStateDict } from '../../../src/zoo/moonshine-streaming/stateDictHooks.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
-// The hook reads only the layer counts and head dims. Encoder headDim 4
-// makes the q scale 1/√4 = 0.5, exact in f16. The hidden sizes
-// differ, as in the small model, so the decoder projection is there.
+// The hook reads only the encoder layer count. The hidden sizes differ, as in
+// the small model, so the decoder projection is there.
 const SMALL = MOONSHINE_STREAMING_SMALL;
 const CFG = {
   ...SMALL,
-  enc: { ...SMALL.enc, hidden: 2, layers: 1, headDim: 4 },
-  dec: { ...SMALL.dec, hidden: 3, layers: 1, headDim: 4 },
+  enc: { ...SMALL.enc, hidden: 2, layers: 1 },
+  dec: { ...SMALL.dec, hidden: 3, layers: 1 },
   frameLen: 3,
 };
 
@@ -44,13 +43,11 @@ const UNTOUCHED = [
   'model.decoder.layers.0.mlp.fc2.weight',
   'model.decoder.layers.0.mlp.fc2.bias',
   'model.decoder.norm.weight',
-  'model.encoder.layers.0.self_attn.k_proj.weight',
-  'model.encoder.layers.0.self_attn.v_proj.weight',
-  'model.decoder.layers.0.self_attn.q_proj.weight',
-  'model.decoder.layers.0.self_attn.k_proj.weight',
-  'model.decoder.layers.0.self_attn.v_proj.weight',
-  'model.decoder.layers.0.encoder_attn.k_proj.weight',
-  'model.decoder.layers.0.encoder_attn.v_proj.weight',
+  ...[
+    'encoder.layers.0.self_attn',
+    'decoder.layers.0.self_attn',
+    'decoder.layers.0.encoder_attn',
+  ].flatMap((attn) => ['q', 'k', 'v'].map((p) => `model.${attn}.${p}_proj.weight`)),
 ];
 
 /** A one-layer Moonshine v2 checkpoint with HF names. Every value is exact in
@@ -90,8 +87,6 @@ describe('transformStreamingStateDict', () => {
       'model.encoder.layers.0.input_layernorm.weight',
       'model.encoder.layers.0.post_attention_layernorm.weight',
       'model.encoder.final_norm.weight',
-      'model.encoder.layers.0.self_attn.q_proj.weight',
-      'model.decoder.layers.0.encoder_attn.q_proj.weight',
     ];
     expect([...sd.tensors.keys()].sort()).toEqual([...UNTOUCHED, ...derived].sort());
     for (const name of UNTOUCHED) expect(get(name)).toBe(before.get(name));
@@ -113,20 +108,6 @@ describe('transformStreamingStateDict', () => {
       expect(gamma.byteLength).toBe(2 * elemBytes);
       expect(await contents(gamma)).toEqual({ type: 'f32', values });
     }
-
-    // Encoder q times 1/√headDim = 0.5: the encoder has no rope. Scaled
-    // tensors are f32 on every checkpoint. The decoder's self-attention
-    // projections stay as they are: its rope tables carry the scale.
-    const encQ = get('model.encoder.layers.0.self_attn.q_proj.weight');
-    expect(encQ.shape).toEqual([2, 2]);
-    expect(encQ.byteLength).toBe(4 * elemBytes);
-    expect(await contents(encQ)).toEqual({ type: 'f32', values: [0.5, 1, 1.5, 2] });
-
-    // Cross-attention q times 1/√headDim = 0.5.
-    const crossQ = get('model.decoder.layers.0.encoder_attn.q_proj.weight');
-    expect(crossQ.shape).toEqual([2, 3]);
-    expect(crossQ.byteLength).toBe(6 * elemBytes);
-    expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5] });
 
     // The derived tensors carry their sources' bytes, so the unread
     // proj_out.weight is the only loss.

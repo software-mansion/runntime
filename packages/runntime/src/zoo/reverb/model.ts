@@ -53,7 +53,7 @@ export interface ReverbCall {
 class Attention extends nn.Module {
   /** q heads then k heads, rows permuted for the interleaved rope. */
   readonly qk: nn.Linear;
-  /** q_norm·d^-½ tiled over the q heads, then k_norm over the kv heads. */
+  /** q_norm tiled over the q heads, then k_norm over the kv heads. */
   readonly qk_norm: nn.Parameter;
   readonly v_proj: nn.Linear;
   readonly o_proj: nn.Linear;

@@ -10,9 +10,8 @@
  *  parity tests, while forwardStep() feeds one token against the per-layer
  *  cache, so per-step cost is independent of the sequence length.
  *
- *  Score scales are folded into the weights and rope tables, so none appears
- *  here. Cross K and V are computed once per utterance and reused by every
- *  decode step. Module fields are named like the checkpoint; the token
+ *  Cross K and V are computed once per utterance and reused by every decode
+ *  step. Module fields are named like the checkpoint; the token
  *  embedding lives here, as in HF, and doubles as the tied LM head. */
 
 import { chunk, nn, rope, slice, swigluChunk, writeRows, type Value } from '../../core/index.ts';
@@ -82,7 +81,6 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
 }
 
 class DecoderCrossAttn extends nn.Module<[Value, CrossKV, Value?], Value> {
-  /** Carries the 1/√headDim score scale, folded in at load. */
   readonly q_proj: nn.Linear;
   readonly k_proj: nn.Linear;
   readonly v_proj: nn.Linear;

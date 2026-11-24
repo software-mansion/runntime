@@ -13,6 +13,8 @@ import { expectClose } from '../../gpu.ts';
 import { stackedParts } from '../stackedParts.ts';
 import { dequantizeWeight, quantizeWeight, quantSource } from '../../core/weights/checkpoint.ts';
 import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
+import { input } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 
 const POS = 'semantic_model.encoder.pos_conv_embed';
 const ATTN = 'semantic_model.encoder.layers.0.attention';
@@ -151,23 +153,6 @@ describe('HiggsEncoder', () => {
     );
   });
 
-  it('scales the q projection by 1/√headDim, under its own name', async () => {
-    const raw = checkpoint();
-    const sd = memoryStateDict(raw);
-    new HiggsEncoder(CFG).semantic_model.encoder.layers.items[0]!.attention.transformStateDict(
-      sd,
-      ATTN,
-    );
-    const scale = 1 / Math.sqrt(CFG.hubert.hidden / CFG.hubert.heads);
-    for (const name of [`${ATTN}.q_proj.weight`, `${ATTN}.q_proj.bias`]) {
-      expectClose(
-        await read(sd, name),
-        Array.from(raw[name]!.data, (x) => x * scale),
-        { atol: 1e-7, rtol: 1e-6 },
-      );
-    }
-  });
-
   it('scores each codebook row as 2·row·x − |row|² and drops the training state', async () => {
     const raw = checkpoint();
     const sd = memoryStateDict(raw);
@@ -209,20 +194,12 @@ describe('HiggsEncoder', () => {
       },
       error: /pos_conv_embed weight norm has shapes \[1,1,4\] and \[8,4,5\]/,
     },
-    {
-      name: 'an attention without a q projection bias',
-      edit: (sd: Sd) => delete sd[`${ATTN}.q_proj.bias`],
-      error: /missing 'semantic_model\.encoder\.layers\.0\.attention\.q_proj\.bias'/,
-    },
   ])('refuses $name before reading any tensor', ({ edit, error }) => {
     const raw = checkpoint();
     edit(raw);
     const sd = memoryStateDict(raw);
     const enc = new HiggsEncoder(CFG);
-    const transform = () => {
-      enc.semantic_model.encoder.pos_conv_embed.transformStateDict(sd, POS);
-      enc.semantic_model.encoder.layers.items[0]!.attention.transformStateDict(sd, ATTN);
-    };
+    const transform = () => enc.semantic_model.encoder.pos_conv_embed.transformStateDict(sd, POS);
     expect(transform).toThrow(
       expect.objectContaining({
         code: 'CHECKPOINT_MISMATCH',
@@ -282,5 +259,14 @@ describe('HiggsEncoder', () => {
 
   it('refuses an unbounded buffer size', () => {
     expect(() => new HiggsEncoder(CFG).maxFrames(Infinity)).toThrow(/must be finite/);
+  });
+});
+
+describe('HiggsEncoder attention', () => {
+  it("scales HuBERT's scores by 1/√headDim, as HubertAttention does", () => {
+    const { hidden, heads, layers } = CFG.hubert;
+    const enc = standInWeights(new HiggsEncoder(CFG));
+    const out = enc.semantic_model.encoder.forward(input([7, hidden]));
+    expect(attentionScales(out)).toEqual(Array(layers).fill(1 / Math.sqrt(hidden / heads)));
   });
 });

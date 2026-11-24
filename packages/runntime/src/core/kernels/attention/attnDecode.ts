@@ -18,14 +18,15 @@ import { type Elem, F32_ELEM } from '../elem.ts';
  *  One workgroup per (q row, head), its threads striding the key range and
  *  merging their online-softmax partials through workgroup memory. Only the
  *  summation order differs from attn.ts, so results agree to ~1e-6, not
- *  bitwise. */
+ *  bitwise. q is read again for every key, so the scale multiplies each
+ *  score, as in attn.ts's batch kernel. */
 
 const LN2 = Math.LN2;
 const MAX_HEAD_DIM = 128;
 const NEG_SEED = -1e30;
 const TILE = 32;
 
-const Dims = d.struct({ qLen: d.u32, kvLen: d.u32, qPosOffset: d.u32 });
+const Dims = d.struct({ qLen: d.u32, kvLen: d.u32, qPosOffset: d.u32, scale: d.f32 });
 
 export interface AttnDecodeCfg {
   qHeads: number;
@@ -129,6 +130,7 @@ function makeAttnDecodeKernel(cfg: AttnDecodeCfg, elem: Elem) {
       for (const kk of std.range(hd)) {
         score += d.f32(layout.$.q[qBase + kk]!) * d.f32(layout.$.k[kBase + kk]!);
       }
+      score *= D.scale;
 
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
@@ -197,7 +199,7 @@ export function createAttnDecodePipeline(
 export function attnDecodeHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createAttnDecodePipeline>,
-  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number },
+  args: { qLen: number; kvLen: number; qPosOffset: number; qHeads: number; scale: number },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -212,6 +214,7 @@ export function attnDecodeHandle(
     qLen: args.qLen,
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
+    scale: args.scale,
   });
   const bindGroup = cachedBindGroup(root, attnDecodeLayoutFor(elem), {
     q: buffers.q,
@@ -238,7 +241,7 @@ export const ATTN_DECODE_CHUNK = 256;
 export const ATTN_DECODE_MAX_CHUNKS = 8;
 export const ATTN_SPLIT_SCRATCH_ELEMS = 64 * ATTN_DECODE_MAX_CHUNKS * (2 + MAX_HEAD_DIM);
 
-const SplitDims = d.struct({ kvLen: d.u32, qPosOffset: d.u32, chunks: d.u32 });
+const SplitDims = d.struct({ kvLen: d.u32, qPosOffset: d.u32, chunks: d.u32, scale: d.f32 });
 
 const makeSplitLayout = (elem: Elem) =>
   tgpu.bindGroupLayout({
@@ -315,6 +318,7 @@ function makeAttnDecodeSplitKernel(cfg: AttnDecodeCfg, elem: Elem) {
       for (const kk of std.range(hd)) {
         score += d.f32(layout.$.q[qBase + kk]!) * d.f32(layout.$.k[kBase + kk]!);
       }
+      score *= D.scale;
       const mNew = std.max(m, score);
       const correction = std.exp(m - mNew);
       const p = std.exp(score - mNew);
@@ -443,7 +447,7 @@ export function attnDecodeSplitHandles(
   root: TgpuRoot,
   partialPipeline: ReturnType<typeof createAttnDecodeSplitPipeline>,
   mergePipeline: ReturnType<typeof createAttnDecodeMergePipeline>,
-  args: { kvLen: number; qPosOffset: number; qHeads: number; chunks: number },
+  args: { kvLen: number; qPosOffset: number; qHeads: number; scale: number; chunks: number },
   buffers: {
     q: FloatBuffer;
     k: FloatBuffer;
@@ -459,6 +463,7 @@ export function attnDecodeSplitHandles(
     kvLen: args.kvLen,
     qPosOffset: args.qPosOffset,
     chunks: args.chunks,
+    scale: args.scale,
   });
   const partialBind = cachedBindGroup(root, attnDecodeSplitLayoutFor(elem), {
     q: buffers.q,
