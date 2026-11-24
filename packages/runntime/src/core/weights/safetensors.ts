@@ -357,6 +357,9 @@ export interface LazyStateDict {
    *  float because its quantized kernel cannot run them, by their names in
    *  the file. The layers' hooks fill it and loadStateDict warns about them. */
   quantizedAsFloat?: string[];
+  /** The FusedLinears that loaded as float because their parts are not
+   *  quantized alike, each with its parts. loadStateDict warns about them. */
+  fusedPartsDiffer?: string[];
   totalBytes(): number;
 }
 

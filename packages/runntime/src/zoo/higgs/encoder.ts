@@ -13,7 +13,6 @@
 import {
   add,
   cat,
-  concatRows,
   derive,
   elu,
   gatherRowsFrom,
@@ -239,10 +238,13 @@ function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   });
 }
 
-/** Self-attention with q, k and v in one projection. The load stacks them
- *  and folds the score scale into q. */
+/** Self-attention with q, k and v in one projection. The load folds the
+ *  score scale into q. */
 class HubertAttention extends nn.Module {
-  readonly qkv: nn.Linear;
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly out_proj: nn.Linear;
   constructor(
@@ -250,7 +252,10 @@ class HubertAttention extends nn.Module {
     readonly heads: number,
   ) {
     super();
-    this.qkv = new nn.Linear(hidden, 3 * hidden);
+    this.q_proj = new nn.Linear(hidden, hidden);
+    this.k_proj = new nn.Linear(hidden, hidden);
+    this.v_proj = new nn.Linear(hidden, hidden);
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: heads,
       kvHeads: heads,
@@ -262,9 +267,8 @@ class HubertAttention extends nn.Module {
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const scale = 1 / Math.sqrt(this.hidden / this.heads);
-    for (const part of ['weight', 'bias']) {
-      const [q, k, v] = ['q', 'k', 'v'].map((p) => take(sd, prefix, `${p}_proj.${part}`));
-      sd.tensors.set(at(prefix, `qkv.${part}`), concatRows([scaleWeight(q!, scale), k!, v!]));
+    for (const name of ['q_proj.weight', 'q_proj.bias']) {
+      sd.tensors.set(at(prefix, name), scaleWeight(take(sd, prefix, name), scale));
     }
   }
   override forward(x: Value): Value {

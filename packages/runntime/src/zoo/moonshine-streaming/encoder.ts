@@ -13,8 +13,11 @@ import type { MoonshineStreamingConfig } from './config.ts';
 import { StreamingEmbedder } from './frontend.ts';
 
 class EncoderAttn extends nn.Module {
-  /** q | k | v rows, fused at load. */
-  readonly qkv: nn.Linear;
+  /** Carries the 1/√headDim score scale, folded in at load. */
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly o_proj: nn.Linear;
   constructor(
@@ -24,7 +27,10 @@ class EncoderAttn extends nn.Module {
     super();
     const { hidden, heads, headDim } = cfg.enc;
     const qw = heads * headDim;
-    this.qkv = new nn.Linear(hidden, 3 * qw, { bias: false });
+    this.q_proj = new nn.Linear(hidden, qw, { bias: false });
+    this.k_proj = new nn.Linear(hidden, qw, { bias: false });
+    this.v_proj = new nn.Linear(hidden, qw, { bias: false });
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: heads,
       kvHeads: heads,

@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MOONSHINE_STREAMING_TINY } from '../../../src/zoo/moonshine-streaming/config.ts';
 import { MoonshineStreamingModel } from '../../../src/zoo/moonshine-streaming/model.ts';
 import { chunksFetched, onceInFileOrder } from '../chunkedLoad.ts';
+import { stackedParts } from '../stackedParts.ts';
 import { moonshineFile } from '../moonshine/hostedFile.ts';
 
 const tiny = MOONSHINE_STREAMING_TINY;
 const small = { hidden: 16, ffn: 32, layers: 2, heads: 2, headDim: 8 };
 const size = { hidden: small.hidden, vocab: 64 };
+const QKV = ['q_proj', 'k_proj', 'v_proj'];
 const model = () =>
   new MoonshineStreamingModel({
     ...tiny,
@@ -47,6 +49,20 @@ describe('MoonshineStreamingModel', () => {
     await chunksFetched(model(), file, 2048);
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       'loadStateDict: state dict has tensors the model does not read: proj_out.bias.',
+    );
+  });
+
+  it('stacks q, k and v, and the cross-attention k and v, in that order', async () => {
+    const layers = (side: string) =>
+      Array.from({ length: small.layers }, (_, i) => `model.${side}.layers.${i}`);
+    expect(await stackedParts(model(), moonshineFile(model(), size, {}, RENAMED))).toEqual(
+      Object.fromEntries([
+        ...layers('encoder').map((l) => [`${l}.self_attn.qkv`, QKV]),
+        ...layers('decoder').flatMap((l) => [
+          [`${l}.self_attn.qkv`, QKV],
+          [`${l}.encoder_attn.kv`, ['k_proj', 'v_proj']],
+        ]),
+      ]),
     );
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { matrix, pending, type ValueMeta } from '../../../src/core/graph/value.ts';
-import { Conv1d, Linear } from '../../../src/core/nn/layers.ts';
+import { Conv1d, FusedLinear, Linear } from '../../../src/core/nn/layers.ts';
 import {
   bufferSource,
   fromSafetensors,
@@ -10,6 +10,7 @@ import { HIGGS_ENCODER } from '../../../src/zoo/higgs/config.ts';
 import { HiggsEncoder } from '../../../src/zoo/higgs/encoder.ts';
 import { resample } from '../../../src/zoo/higgs/resample.ts';
 import { expectClose } from '../../gpu.ts';
+import { stackedParts } from '../stackedParts.ts';
 import { dequantizeWeight, quantizeWeight, quantSource } from '../../core/weights/checkpoint.ts';
 import { CFG, checkpoint, QUANT_CFG, quantize, type Sd } from './encoderCheckpoint.ts';
 
@@ -120,13 +121,18 @@ describe('HiggsEncoder', () => {
         'acoustic_encoder.conv1',
         'semantic_model.feature_extractor.conv_layers.0.conv',
       ];
+      // q, k and v load as the one weight of the FusedLinear over them.
       const layers = [...enc.namedModules()]
         .filter(
           ([name, m]) =>
-            (m instanceof Conv1d || m instanceof Linear) && !name.startsWith('quantizer.'),
+            (m instanceof Conv1d ||
+              m instanceof FusedLinear ||
+              (m instanceof Linear && !m.fused)) &&
+            !name.startsWith('quantizer.'),
         )
         .map(([name]) => name);
-      const quantized = [...enc.namedParameters()]
+      expect(layers).toContain(`${ATTN}.qkv`);
+      const quantized = [...enc.storageParameters()]
         .map(([name]) => name)
         .filter((name) => name.endsWith('.weightScale'))
         .map((name) => name.slice(0, -'.weightScale'.length));
@@ -135,7 +141,17 @@ describe('HiggsEncoder', () => {
     },
   );
 
-  it('stacks q, k and v into one projection, q scaled by 1/√headDim', async () => {
+  it('stacks q, k and v in that order', async () => {
+    const layers = Array.from(
+      { length: CFG.hubert.layers },
+      (_, i) => `semantic_model.encoder.layers.${i}.attention.qkv`,
+    );
+    expect(await stackedParts(new HiggsEncoder(CFG), memoryStateDict(checkpoint()))).toEqual(
+      Object.fromEntries(layers.map((path) => [path, ['q_proj', 'k_proj', 'v_proj']])),
+    );
+  });
+
+  it('scales the q projection by 1/√headDim, under its own name', async () => {
     const raw = checkpoint();
     const sd = memoryStateDict(raw);
     new HiggsEncoder(CFG).semantic_model.encoder.layers.items[0]!.attention.transformStateDict(
@@ -143,11 +159,10 @@ describe('HiggsEncoder', () => {
       ATTN,
     );
     const scale = 1 / Math.sqrt(CFG.hubert.hidden / CFG.hubert.heads);
-    for (const part of ['weight', 'bias']) {
-      const [q, k, v] = ['q', 'k', 'v'].map((p) => raw[`${ATTN}.${p}_proj.${part}`]!.data);
+    for (const name of [`${ATTN}.q_proj.weight`, `${ATTN}.q_proj.bias`]) {
       expectClose(
-        await read(sd, `${ATTN}.qkv.${part}`),
-        [...q!.map((x) => x * scale), ...k!, ...v!],
+        await read(sd, name),
+        Array.from(raw[name]!.data, (x) => x * scale),
         { atol: 1e-7, rtol: 1e-6 },
       );
     }
@@ -195,9 +210,9 @@ describe('HiggsEncoder', () => {
       error: /pos_conv_embed weight norm has shapes \[1,1,4\] and \[8,4,5\]/,
     },
     {
-      name: 'an attention without a v projection',
-      edit: (sd: Sd) => delete sd[`${ATTN}.v_proj.bias`],
-      error: /missing 'semantic_model\.encoder\.layers\.0\.attention\.v_proj\.bias'/,
+      name: 'an attention without a q projection bias',
+      edit: (sd: Sd) => delete sd[`${ATTN}.q_proj.bias`],
+      error: /missing 'semantic_model\.encoder\.layers\.0\.attention\.q_proj\.bias'/,
     },
   ])('refuses $name before reading any tensor', ({ edit, error }) => {
     const raw = checkpoint();

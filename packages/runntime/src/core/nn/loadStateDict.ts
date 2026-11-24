@@ -131,6 +131,12 @@ async function bindStateDict(
     }
   };
   visit(model, '');
+  const hooked = new Set(sd.tensors.keys());
+  const paths = new Map<AnyModule, string[]>([[model, ['']]]);
+  for (const [path, module] of model.namedModules()) {
+    paths.set(module, [...(paths.get(module) ?? []), path]);
+  }
+  for (const module of paths.keys()) module.fuseStateDict?.(sd, paths);
   if (sd.quantizedAsFloat?.length) {
     console.warn(
       'loadStateDict: quantized weights loaded as float, the quantized kernel of their layer ' +
@@ -138,11 +144,23 @@ async function bindStateDict(
     );
     sd.quantizedAsFloat = undefined;
   }
+  if (sd.fusedPartsDiffer?.length) {
+    console.warn(
+      'loadStateDict: fused layers loaded as float, their parts are not quantized alike: ' +
+        sd.fusedPartsDiffer.join('; '),
+    );
+    sd.fusedPartsDiffer = undefined;
+  }
 
-  const params = [...model.namedParameters()];
-  const paramNames = new Set(params.map(([n]) => n));
-  const missing = params.filter(([n]) => !sd.tensors.has(n)).map(([n]) => n);
-  const unexpected = [...sd.tensors.keys()].filter((n) => !paramNames.has(n));
+  // The key check runs on the declared names. The parameters bound below
+  // differ from them at a FusedLinear, which loads its parts' tensors as one
+  // stacked weight under a key of its own. A tensor the file holds under
+  // that key is one the model does not read.
+  const declared = new Set([...model.namedParameters()].map(([n]) => n));
+  const params = [...model.storageParameters()];
+  const stacked = new Set(params.map(([n]) => n).filter((n) => !declared.has(n)));
+  const missing = [...declared].filter((n) => !sd.tensors.has(n));
+  const unexpected = [...hooked].filter((n) => stacked.has(n) || !declared.has(n));
   if (missing.length || (unexpected.length && opts.strict)) {
     throw new RunntimeError(
       'CHECKPOINT_MISMATCH',
