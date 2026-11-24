@@ -5,8 +5,10 @@ description = "Runs the PyTorch reference of each runntime model and saves its o
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
+    "einops==0.8.1",
     "huggingface-hub>=2.4.0",
     "numpy>=2.0",
+    "opencv-python-headless==4.10.0.84",
     "pillow>=13.0.0",
     "pyarrow>=26.0.1",
     "reverb-tts==1.0.0",

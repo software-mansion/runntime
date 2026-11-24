@@ -1,6 +1,7 @@
-"""What every reference script shares: where references go, the reference
-noise, and the files a run saves."""
+"""What every reference script shares: where references go, the check of a
+download, the reference noise, and the files a run saves."""
 
+import hashlib
 import json
 import os
 import platform
@@ -20,6 +21,14 @@ def references_dir(family: str) -> Path:
     path = Path(root) / family
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def checked(what: str, data: bytes, sha256: str) -> bytes:
+    """`data`, once it has the sha256 it should. `what` names it in the error."""
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != sha256:
+        raise RuntimeError(f"{what} has sha256 {digest}, expected {sha256}")
+    return data
 
 
 def noise(reference: NDArray[np.float32], double: NDArray[np.float64]) -> float:
