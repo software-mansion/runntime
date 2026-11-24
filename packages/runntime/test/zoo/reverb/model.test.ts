@@ -6,6 +6,7 @@ import { ReverbModel } from '../../../src/zoo/reverb/model.ts';
 import { input, materializedInput } from '../../core/graph/values.ts';
 import { attentionScales, standInWeights } from '../attentionScales.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
+import { ropeLayouts } from '../ropeLayouts.ts';
 
 const cfg: ReverbConfig = {
   ...REVERB,
@@ -93,12 +94,11 @@ describe('ReverbModel', () => {
   });
 });
 
-// HF's Qwen3 attention scales by 1/√headDim after the per-head q and k norms.
 describe('ReverbModel attention', () => {
-  it("scales every layer's scores by 1/√headDim", () => {
-    const model = standInWeights(new ReverbModel(cfg));
+  /** The output of every layer for 6 rows. */
+  const forward = () => {
     const t = 6;
-    const out = model.forward(input([t, hidden]), {
+    return standInWeights(new ReverbModel(cfg)).forward(input([t, hidden]), {
       cos: input([t, d]),
       sin: input([t, d]),
       cache: layers.map(() => ({
@@ -107,6 +107,17 @@ describe('ReverbModel attention', () => {
       })),
       start: 0,
     });
-    expect(attentionScales(out)).toEqual(Array(cfg.layers).fill(1 / Math.sqrt(d)));
+  };
+
+  // HF's Qwen3 attention scales by 1/√headDim after the per-head q and k norms.
+  it("scales every layer's scores by 1/√headDim", () => {
+    expect(attentionScales(forward())).toEqual(Array(cfg.layers).fill(1 / Math.sqrt(d)));
+  });
+
+  // HF's Qwen3 ropes q and k with rotate_half.
+  it('ropes q and k of every layer in the half layout', () => {
+    expect(ropeLayouts(forward())).toEqual(
+      Array(2 * cfg.layers).fill({ layout: 'half', ropesPerHead: 1 }),
+    );
   });
 });

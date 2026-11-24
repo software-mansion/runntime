@@ -4,21 +4,13 @@
  *  the checkpoint. `codebook_layer_offsets`, which the model never reads, is
  *  dropped.
  *
- *  q and k rows go from the checkpoint's half-split rope layout to the
- *  kernel's interleaved pairs and fuse into one projection, as do up and
- *  gate. q_norm takes 1/√d and is tiled over the q heads, k_norm over the kv
- *  heads. The audio heads split into codebooks 0–1 and 2–7, each codebook's
- *  rows centered and each half padded with zero rows to a multiple of 4. */
+ *  q and k fuse into one projection, as do up and gate. q_norm is tiled over
+ *  the q heads, k_norm over the kv heads. The audio heads split into
+ *  codebooks 0–1 and 2–7, each codebook's rows centered and each half padded
+ *  with zero rows to a multiple of 4. */
 
-import {
-  concatRows,
-  derive,
-  permuteRows,
-  type LazyStateDict,
-  type LazyTensor,
-} from '../../core/index.ts';
+import { concatRows, derive, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
-import { ropeOrder } from '../shared/rope.ts';
 import { COARSE_CODEBOOKS, type ReverbConfig } from './config.ts';
 
 const WHAT = 'reverb state dict';
@@ -71,7 +63,7 @@ export function transformReverbStateDict(
     return t;
   };
   const put = (name: string, t: LazyTensor) => sd.tensors.set(q(name), t);
-  const { heads, kvHeads, headDim: d, codebooks, codes, hidden } = cfg;
+  const { heads, kvHeads, codebooks, codes, hidden } = cfg;
 
   // Each codebook's offset into audio_embeddings is fixed at codebook·codes.
   sd.tensors.delete(q('codebook_layer_offsets'));
@@ -89,21 +81,18 @@ export function transformReverbStateDict(
     centeredHead(audioHeads, COARSE_CODEBOOKS, codebooks - COARSE_CODEBOOKS, cfg),
   );
 
-  const rope = (w: LazyTensor) => permuteRows(w, ropeOrder(w.shape[0]!, d));
   for (let i = 0; i < cfg.layers; i++) {
     const attn = `llm.layers.${i}.self_attn`;
     const mlp = `llm.layers.${i}.mlp`;
     put(
       `${attn}.qk.weight`,
-      concatRows([rope(take(`${attn}.q_proj.weight`)), rope(take(`${attn}.k_proj.weight`))]),
+      concatRows([take(`${attn}.q_proj.weight`), take(`${attn}.k_proj.weight`)]),
     );
     const qn = take(`${attn}.q_norm.weight`);
     const kn = take(`${attn}.k_norm.weight`);
-    const q = rope(qn);
-    const k = rope(kn);
     const norms = concatRows([
-      ...Array<LazyTensor>(heads).fill(q),
-      ...Array<LazyTensor>(kvHeads).fill(k),
+      ...Array<LazyTensor>(heads).fill(qn),
+      ...Array<LazyTensor>(kvHeads).fill(kn),
     ]);
     // concatRows reads a part listed several times once.
     put(`${attn}.qk_norm`, { ...norms, byteLength: qn.byteLength + kn.byteLength });

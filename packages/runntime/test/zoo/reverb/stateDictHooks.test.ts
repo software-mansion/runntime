@@ -134,18 +134,13 @@ describe('transformReverbStateDict', () => {
     for (const name of KEPT) expect(sd.tensors.get(name)).toBe(before.get(name));
     const get = (name: string) => contents(sd.tensors.get(name)!);
 
-    // Each 4-row head goes from the half split to interleaved pairs.
-    const rope = [0, 2, 1, 3];
     expect(await get('llm.layers.0.self_attn.qk.weight')).toEqual({
       type,
-      values: [
-        ...gridRows(100, [...rope, ...rope.map((r) => r + 4)], 4),
-        ...gridRows(200, rope, 4),
-      ],
+      values: [...gridRows(100, [0, 1, 2, 3, 4, 5, 6, 7], 4), ...gridRows(200, [0, 1, 2, 3], 4)],
     });
     expect(await get('llm.layers.0.self_attn.qk_norm')).toEqual({
       type,
-      values: [1, 3, 2, 4, 1, 3, 2, 4, 5, 7, 6, 8],
+      values: [1, 2, 3, 4, 1, 2, 3, 4, 5, 6, 7, 8],
     });
     expect(await get('llm.layers.0.mlp.up_gate.weight')).toEqual({
       type,
@@ -178,11 +173,10 @@ describe('transformReverbStateDict', () => {
       scaleType: 'f16',
       scales: parts.flatMap((p) => p.scales),
     });
-    const rope = [0, 2, 1, 3];
     const q = quant[`${S}.self_attn.q_proj.weight`]!;
     const k = quant[`${S}.self_attn.k_proj.weight`]!;
     expect(await quantContents(sd.tensors.get('llm.layers.0.self_attn.qk.weight')!)).toEqual(
-      joined(rows(q, [...rope, ...rope.map((r) => r + 4)]), rows(k, rope)),
+      joined(rows(q, [0, 1, 2, 3, 4, 5, 6, 7]), rows(k, [0, 1, 2, 3])),
     );
     const up = quant[`${S}.mlp.up_proj.weight`]!;
     const gate = quant[`${S}.mlp.gate_proj.weight`]!;
