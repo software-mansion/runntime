@@ -390,6 +390,26 @@ describe('gpuExecutor in a warm-up', () => {
     expect(blocking).not.toHaveBeenCalled();
   });
 
+  it('runs a submit whose pipeline is compiled after an earlier one that is still compiling', async () => {
+    const { device, ex, a, b, blocking, async } = await freshDevice();
+    await warmUp(device, () => toArray(mul(a, a), ex));
+    expect(async).toHaveBeenCalledTimes(1);
+    await withAsyncCompile(device, async () => {
+      const y = matmul(a, b);
+      evalValues([y], ex);
+      // mul is compiled, so nothing but the first submit holds this one back.
+      const squares = mul(y, y);
+      evalValues([squares], ex);
+      expectClose(
+        await ex.readback(squares.buffer, squares.shape),
+        PRODUCT.map((v) => v * v),
+      );
+    });
+    // matmul only: the second submit compiled nothing.
+    expect(async).toHaveBeenCalledTimes(2);
+    expect(blocking).not.toHaveBeenCalled();
+  });
+
   it('replays a frame captured in a warm-up once its pipelines compiled', async () => {
     const { device, ex, a, b, blocking } = await freshDevice();
     const { targets: y, replay } = withAsyncCompile(device, () =>
