@@ -30,6 +30,22 @@ function move(sd: LazyStateDict, from: string, to: string): void {
   sd.tensors.set(to, take(sd, from));
 }
 
+/** An expert tensor [E, …]. Throws CHECKPOINT_MISMATCH on a quantized one. A
+ *  file stores a 3D expert weight as rows [E, everything else], so splitting
+ *  or folding it would mix the experts' values. The bias is 2D and would
+ *  split, but its halves go with float weights, so it is refused with them. */
+function takeExperts(sd: LazyStateDict, name: string): LazyTensor {
+  const t = take(sd, name);
+  if (t.kind === 'quant') {
+    throw checkpointMismatch(
+      'privacy-filter state dict',
+      `'${name}' is quantized, and a quantized expert tensor cannot be split into experts: ` +
+        'keep it float in the file',
+    );
+  }
+  return t;
+}
+
 /** Folds every leading dim into rows: [E, K, H] → [E·K, H]. */
 function foldRows(t: LazyTensor): LazyTensor {
   const cols = t.shape[t.shape.length - 1]!;
@@ -61,13 +77,16 @@ export function transformHfPrivacyFilterStateDict(sd: LazyStateDict): void {
     }
     move(sd, `${src}.self_attn.sinks`, `${dst}.attn.sinks`);
 
-    const [gluWeight, linWeight] = splitHalves(take(sd, `${src}.mlp.experts.gate_up_proj`));
+    const [gluWeight, linWeight] = splitHalves(takeExperts(sd, `${src}.mlp.experts.gate_up_proj`));
     sd.tensors.set(`${dst}.mlp.gluWeight`, gluWeight);
     sd.tensors.set(`${dst}.mlp.linWeight`, linWeight);
-    const [gluBias, linBias] = splitHalves(take(sd, `${src}.mlp.experts.gate_up_proj_bias`));
+    const [gluBias, linBias] = splitHalves(takeExperts(sd, `${src}.mlp.experts.gate_up_proj_bias`));
     sd.tensors.set(`${dst}.mlp.gluBias`, gluBias);
     sd.tensors.set(`${dst}.mlp.linBias`, linBias);
-    sd.tensors.set(`${dst}.mlp.outWeight`, foldRows(take(sd, `${src}.mlp.experts.down_proj`)));
+    sd.tensors.set(
+      `${dst}.mlp.outWeight`,
+      foldRows(takeExperts(sd, `${src}.mlp.experts.down_proj`)),
+    );
     move(sd, `${src}.mlp.experts.down_proj_bias`, `${dst}.mlp.outBias`);
     n++;
   }

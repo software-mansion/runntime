@@ -12,8 +12,8 @@
 import {
   concatRows,
   derive,
-  floatTensor,
   f32ArrayToF16Bits,
+  inTorchShape,
   permuteRows,
   reshapeWeight,
   scaleWeight,
@@ -99,7 +99,7 @@ export function transformEmbeddingGemma2StateDict(
     // Derived, so the CPU parameter binds f32 rather than raw bf16 bits.
     put(
       `${L}.layer_scalar`,
-      derive([1], [floatTensor(what, s)], ([value]) => value),
+      derive([1], [s], ([value]) => value),
     );
   }
   const ple = 'ple.per_layer_model_projection.weight';
@@ -120,7 +120,8 @@ export function transformEmbeddingGemma2VisionStateDict(
   const { hidden, heads, headDim: d, positions } = cfg;
 
   // [2, positions, hidden]: the x table, then the y table.
-  const [x, y] = splitRows(take(sd, what, q('patch_embedder.position_embedding_table')), [1, 1]);
+  const table = take(sd, what, q('patch_embedder.position_embedding_table'));
+  const [x, y] = splitRows(inTorchShape(table, [2, positions, hidden]), [1, 1]);
   put('patch_embedder.pos_x.weight', reshapeWeight(x!, [positions, hidden]));
   put('patch_embedder.pos_y.weight', reshapeWeight(y!, [positions, hidden]));
 
@@ -156,7 +157,7 @@ export function transformEmbeddingGemma2AudioStateDict(
       const t = take(sd, what, q(`${linear}.${b}`));
       put(
         `${linear}.${b}`,
-        derive([1], [floatTensor(what, t)], ([value]) => value),
+        derive([1], [t], ([value]) => value),
       );
     }
   };
@@ -172,7 +173,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     return (o * c0 + c) * 9 + k;
   });
   const conv1 = `${sub}layer1.conv.weight`;
-  const taps = reshapeWeight(take(sd, what, q(conv1)), [c1 * c0 * 9]);
+  const taps = reshapeWeight(inTorchShape(take(sd, what, q(conv1)), [c1, c0, 3, 3]), [c1 * c0 * 9]);
   put(conv1, reshapeWeight(permuteRows(taps, tapsMajor), [c1, 9 * c0]));
 
   // Sinusoidal rows for distances 0 … window − 1: sines, then cosines.
@@ -205,7 +206,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     );
     // One set of bounds for the fused projection, checked to agree.
     for (const b of BOUNDS) {
-      const bounds = parts.map((n) => floatTensor(what, take(sd, what, q(`${A}.${n}.${b}`))));
+      const bounds = parts.map((n) => take(sd, what, q(`${A}.${n}.${b}`)));
       put(
         `${A}.qkv.${b}`,
         derive([1], bounds, (each) => {
@@ -223,7 +224,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     const rk = take(sd, what, q(`${A}.relative_k_proj.weight`));
     put(
       `${A}.rel`,
-      derive([window, hidden], [floatTensor(what, rk)], ([w]) => {
+      derive([window, hidden], [rk], ([w]) => {
         const out = new Float32Array(window * hidden);
         for (let j = 0; j < window; j++) {
           for (let o = 0; o < hidden; o++) {
@@ -238,14 +239,15 @@ export function transformEmbeddingGemma2AudioStateDict(
     const dimScale = take(sd, what, q(`${A}.per_dim_scale`));
     put(
       `${A}.q_scale`,
-      derive([headDim], [floatTensor(what, dimScale)], ([scale]) =>
+      derive([headDim], [dimScale], ([scale]) =>
         scale.map((x) => qScale * Math.log1p(Math.exp(x))),
       ),
     );
 
     // [hidden, 1, K] → [K, hidden].
     const conv = `${L}.lconv1d.depthwise_conv1d.weight`;
-    put(conv, transposeWeight(reshapeWeight(take(sd, what, q(conv)), [hidden, K])));
+    const depthwise = inTorchShape(take(sd, what, q(conv)), [hidden, 1, K]);
+    put(conv, transposeWeight(reshapeWeight(depthwise, [hidden, K])));
     f32Bounds(`${L}.lconv1d.linear_start`);
     f32Bounds(`${L}.lconv1d.linear_end`);
   }

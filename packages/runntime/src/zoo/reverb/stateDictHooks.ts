@@ -13,7 +13,6 @@
 import {
   concatRows,
   derive,
-  floatTensor,
   permuteRows,
   scaleWeight,
   type LazyStateDict,
@@ -36,7 +35,7 @@ function centeredHead(t: LazyTensor, from: number, books: number, cfg: ReverbCon
   const rows = headRows(books, codes);
   return derive(
     [rows, hidden],
-    [floatTensor(WHAT, t)],
+    [t],
     ([src]) => {
       const out = new Float32Array(rows * hidden);
       const mean = new Float64Array(hidden);

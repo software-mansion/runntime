@@ -15,10 +15,10 @@ import {
   cat,
   concatRows,
   derive,
-  floatTensor,
   elu,
   gatherRowsFrom,
   gelu,
+  inTorchShape,
   logitStats,
   matrix,
   mul,
@@ -189,10 +189,19 @@ class PositionConv extends nn.Module {
    *  conv checks the shape of its rows. */
   private weight(sd: LazyStateDict, prefix: string): LazyTensor {
     if (sd.tensors.has(at(prefix, 'conv.weight'))) return take(sd, prefix, 'conv.weight');
-    const g = take(sd, prefix, 'conv.parametrizations.weight.original0');
-    const v = take(sd, prefix, 'conv.parametrizations.weight.original1');
     const { hidden, kernel, groups } = this;
     const width = hidden / groups;
+    // The norm folds per tap, across the scale groups of a quantized tensor.
+    const g = inTorchShape(take(sd, prefix, 'conv.parametrizations.weight.original0'), [
+      1,
+      1,
+      kernel,
+    ]);
+    const v = inTorchShape(take(sd, prefix, 'conv.parametrizations.weight.original1'), [
+      hidden,
+      width,
+      kernel,
+    ]);
     if (
       v.shape.join() !== [hidden, width, kernel].join() ||
       g.shape.join() !== [1, 1, kernel].join()
@@ -218,7 +227,7 @@ class PositionConv extends nn.Module {
  *  in] slice scaled to norm g[tap]. In f64. */
 function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   const [out, cIn, kernel] = v.shape as [number, number, number];
-  return derive([out, cIn, kernel], [floatTensor(WHAT, g), floatTensor(WHAT, v)], ([gs, vs]) => {
+  return derive([out, cIn, kernel], [g, v], ([gs, vs]) => {
     const norm = new Float64Array(kernel);
     for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
     const w = new Float32Array(vs.length);
@@ -414,7 +423,7 @@ class Codebook extends nn.Module {
     this.score = new nn.Linear(dim, size);
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    const embed = floatTensor(WHAT, requireTensor(sd, at(prefix, 'embed'), WHAT));
+    const embed = requireTensor(sd, at(prefix, 'embed'), WHAT);
     const [size, dim] = embed.shape as [number, number];
     for (const name of ['cluster_size', 'embed_avg', 'inited']) sd.tensors.delete(at(prefix, name));
     // The rows' bytes count once, under embed.

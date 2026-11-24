@@ -209,3 +209,20 @@ export async function quantContents(
     scales: [...(scales instanceof Uint16Array ? f16ToF32(scales) : scales)],
   };
 }
+
+/** Replaces `name` in `sd` with the tensor `runntime quantize` stores for
+ *  it: int8 rows [dim 0, everything else] of `values`, whole numbers, one
+ *  scale of 1 per row, so it dequantizes to `values` exactly. */
+export async function storeAsQuantizedRows(
+  sd: LazyStateDict,
+  name: string,
+  values: number[],
+  rows: number,
+): Promise<void> {
+  const entry: QuantEntry = {
+    ints: values,
+    scales: new Array<number>(rows).fill(1),
+    shape: [rows, values.length / rows],
+  };
+  sd.tensors.set(name, await quantSource(8, values.length / rows, name, entry));
+}
