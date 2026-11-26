@@ -51,7 +51,7 @@ export interface ReverbCall {
 
 /** The attention projections, q and k fused at load. */
 class Attention extends nn.Module {
-  /** q heads then k heads, rows permuted for the interleaved rope. */
+  /** q heads then k heads. */
   readonly qk: nn.Linear;
   /** q_norm tiled over the q heads, then k_norm over the kv heads. */
   readonly qk_norm: nn.Parameter;
@@ -99,7 +99,7 @@ class Layer extends nn.Module<[Value, ReverbCall, number], Value> {
     const h = this.input_layernorm.forward(x);
     const qk = rmsNorm(attn.qk.forward(h), attn.qk_norm.value, eps, { group: d });
     const roped = (start: number, width: number) =>
-      rope(qk, call.cos, call.sin, { headDim: d, srcStart: start, width });
+      rope(qk, call.cos, call.sin, { headDim: d, layout: 'half', srcStart: start, width });
     const q = roped(0, heads * d);
     const cache = call.cache[index]!;
     const k = writeRows(cache.k, roped(heads * d, kvHeads * d), call.start);

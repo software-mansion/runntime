@@ -1,8 +1,8 @@
 /** Moonshine rope table builder. Model math rather than core, which owns only
  *  the op consuming these tables.
  *
- *  HF's convention is already the kernel's interleaved-pair form, so the
- *  projections need no permutation; a GPU equivalence test guards that.
+ *  HF's Moonshine rotates the interleaved pairs (2p, 2p + 1), so entries 2p
+ *  and 2p + 1 of a table row hold pair p's angle.
  *
  *  Rotary is partial: dims past rotaryDim get cos=1 and sin=0, where the
  *  rotation is an exact identity.
@@ -11,6 +11,10 @@
  *  it. */
 
 import type { MoonshineConfig } from './config.ts';
+
+/** The columns of a head that HF's Moonshine rotates together, for the rope
+ *  op. */
+export const ROPE_LAYOUT = 'interleaved';
 
 export interface MoonshineRopeTables {
   cos: Float32Array;

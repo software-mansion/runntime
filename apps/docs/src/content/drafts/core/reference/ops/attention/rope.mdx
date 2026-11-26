@@ -11,7 +11,13 @@ rope(
   x: Value,
   cos: Value,
   sin: Value,
-  opts: { headDim: number; srcStart?: number; width?: number },
+  opts: {
+    headDim: number;
+    layout: 'half' | 'interleaved'; // required: the pairs the checkpoint rotates
+    ropesPerHead?: number; // ropes side by side in a head, default 1 (2 for a 2D rope)
+    srcStart?: number;
+    width?: number;
+  },
 ): Value
 ```
 

@@ -16,6 +16,7 @@
 
 import { chunk, nn, rope, slice, swigluChunk, writeRows, type Value } from '../../core/index.ts';
 import type { MoonshineConfig } from './config.ts';
+import { ROPE_LAYOUT } from './rope.ts';
 
 export interface CrossKV {
   k: Value;
@@ -54,8 +55,8 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
     const { heads, headDim } = this.cfg;
     const qw = heads * headDim;
     const qkv = this.qkv.forward(x); // [t, 3·qw], columns q|k|v
-    const q = rope(qkv, cos, sin, { headDim, srcStart: 0, width: qw });
-    const k = rope(qkv, cos, sin, { headDim, srcStart: qw, width: qw });
+    const q = rope(qkv, cos, sin, { headDim, layout: ROPE_LAYOUT, srcStart: 0, width: qw });
+    const k = rope(qkv, cos, sin, { headDim, layout: ROPE_LAYOUT, srcStart: qw, width: qw });
     const v = slice(qkv, 1, 2 * qw, 3 * qw);
     return this.o_proj.forward(this.mha.forward(q, k, v), { addend: residual });
   }
@@ -70,8 +71,13 @@ class DecoderSelfAttn extends nn.Module<[Value, Value, Value, Value?], Value> {
     const { heads, headDim } = this.cfg;
     const qw = heads * headDim;
     const qkv = this.qkv.forward(x1); // [1, 3·qw]
-    const q = rope(qkv, cosRow, sinRow, { headDim, srcStart: 0, width: qw });
-    const kNew = rope(qkv, cosRow, sinRow, { headDim, srcStart: qw, width: qw });
+    const q = rope(qkv, cosRow, sinRow, { headDim, layout: ROPE_LAYOUT, srcStart: 0, width: qw });
+    const kNew = rope(qkv, cosRow, sinRow, {
+      headDim,
+      layout: ROPE_LAYOUT,
+      srcStart: qw,
+      width: qw,
+    });
     const vNew = slice(qkv, 1, 2 * qw, 3 * qw);
     const k = writeRows(cache.k, kNew, t); // [t+1, qw] view of the cache buffer
     const v = writeRows(cache.v, vNew, t);

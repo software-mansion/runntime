@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ropeOrder, ropeTables } from '../../../src/zoo/shared/rope.ts';
+import { ropeTables } from '../../../src/zoo/shared/rope.ts';
 
 const close = (want: number) => expect.closeTo(want, 6);
 
@@ -32,19 +32,12 @@ describe('ropeTables', () => {
     for (const t of [1, 4]) {
       for (let p = 0; p < headDim / 2; p++) {
         const angle = t / theta ** ((2 * p) / headDim);
-        // Entries 2p and 2p + 1 hold the same angle.
-        for (const i of [2 * p, 2 * p + 1]) {
+        // HF's cat(freqs, freqs): entries p and p + headDim/2 hold the angle.
+        for (const i of [p, p + headDim / 2]) {
           expect(cos[t * headDim + i]).toEqual(close(Math.cos(angle)));
           expect(sin[t * headDim + i]).toEqual(close(Math.sin(angle)));
         }
       }
     }
-  });
-});
-
-describe('ropeOrder', () => {
-  it('takes each block from half-split to interleaved pairs', () => {
-    // Rows (p, p + 2) of each block of 4 become (2p, 2p + 1).
-    expect(ropeOrder(8, 4)).toEqual([0, 2, 1, 3, 4, 6, 5, 7]);
   });
 });

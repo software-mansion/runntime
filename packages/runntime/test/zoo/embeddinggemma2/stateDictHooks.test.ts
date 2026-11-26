@@ -36,10 +36,6 @@ const grid = (base: number, rows: number, cols: number): Entry => ({
   shape: [rows, cols],
 });
 
-/** The rows of `grid(base, …, cols)` listed in `order`. */
-const gridRows = (base: number, order: number[], cols: number) =>
-  order.flatMap((r) => Array.from({ length: cols }, (_, c) => base + 10 * r + c));
-
 const ones = (n: number) => new Array<number>(n).fill(1);
 
 /** Maps `sd` and returns a getter over the result, after checking that the
@@ -60,8 +56,8 @@ function mapAndCheck(
 
 describe('transformEmbeddingGemma2StateDict', () => {
   // A sliding layer, then a full one: hidden 4, 2 q heads and 1 kv head,
-  // head size 4 for sliding and 8 for full, so each layer type gets its own
-  // rope block. hidden^-½ = 0.5, so the PLE scale is exact in f16.
+  // head size 4 for sliding and 8 for full. hidden^-½ = 0.5, so the PLE
+  // scale is exact in f16.
   const cfg: EmbeddingGemma2Config = {
     ...EMBEDDINGGEMMA2_TEXT,
     hidden: 4,
@@ -124,49 +120,31 @@ describe('transformEmbeddingGemma2StateDict', () => {
   it.for(DTYPES)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
+    // q, k and v stay the checkpoint's tensors: mapAndCheck fails if the
+    // hook replaces one.
     const untouched = [
       ...UNTOUCHED,
-      `${L(0)}.self_attn.v_proj.weight`,
-      `${L(1)}.self_attn.v_proj.weight`,
+      ...[0, 1].flatMap((i) =>
+        ['q_proj', 'k_proj', 'v_proj'].map((n) => `${L(i)}.self_attn.${n}.weight`),
+      ),
     ];
     const get = mapAndCheck(sd, (s) => transformEmbeddingGemma2StateDict(s, '', cfg), untouched, [
-      ...[0, 1].flatMap((i) => [
-        `${L(i)}.self_attn.q_proj.weight`,
-        `${L(i)}.self_attn.k_proj.weight`,
-        `${L(i)}.self_attn.qkv_norm`,
-        `${L(i)}.layer_scalar`,
-      ]),
+      ...[0, 1].flatMap((i) => [`${L(i)}.self_attn.qkv_norm`, `${L(i)}.layer_scalar`]),
       `${S}ple.per_layer_model_projection.weight`,
     ]);
 
-    // Rope pairs (p, p + d/2) of each d-row head become rows (2p, 2p + 1):
-    // rows 0 2 1 3 of a 4-row head, 0 4 1 5 2 6 3 7 of an 8-row one. The
-    // layer's type picks d, so the full layer must not reorder like the
-    // sliding one. v is left as it is.
-    const layers: [i: number, d: number, head: number[]][] = [
-      [0, 4, [0, 2, 1, 3]],
-      [1, 8, [0, 4, 1, 5, 2, 6, 3, 7]],
+    const layers: [i: number, d: number][] = [
+      [0, 4],
+      [1, 8],
     ];
-    for (const [i, d, head] of layers) {
-      const q = get(`${L(i)}.self_attn.q_proj.weight`);
-      expect(q.shape).toEqual([2 * d, 4]);
-      expect(q.byteLength).toBe(8 * d * elemBytes);
-      expect(await contents(q)).toEqual({
-        type,
-        values: gridRows(0, [...head, ...head.map((r) => r + d)], 4),
-      });
-      const k = get(`${L(i)}.self_attn.k_proj.weight`);
-      expect(k.shape).toEqual([d, 4]);
-      expect(k.byteLength).toBe(4 * d * elemBytes);
-      expect(await contents(k)).toEqual({ type, values: gridRows(100, head, 4) });
-
-      // q_norm reordered like q, once per q head; k_norm once; ones for v.
-      // Each norm's bytes count once.
+    for (const [i, d] of layers) {
+      // q_norm in the checkpoint's order, once per q head; k_norm once; ones
+      // for v. Each norm's bytes count once.
       const norm = get(`${L(i)}.self_attn.qkv_norm`);
       expect(norm.shape).toEqual([4 * d]);
       expect(norm.byteLength).toBe(2 * d * elemBytes);
-      const qn = head.map((r) => r + 1);
-      const kn = head.map((r) => d + r + 1);
+      const qn = Array.from({ length: d }, (_, r) => r + 1);
+      const kn = Array.from({ length: d }, (_, r) => d + r + 1);
       expect(await contents(norm)).toEqual({
         type,
         values: [...qn, ...qn, ...kn, ...ones(d)],
@@ -189,8 +167,7 @@ describe('transformEmbeddingGemma2StateDict', () => {
 });
 
 describe('transformEmbeddingGemma2VisionStateDict', () => {
-  // One layer with one head of size 8: each half head of 4 rows has its own
-  // rope, so q and k reorder per 4 rows.
+  // One layer with one head of size 8.
   const cfg: EmbeddingGemma2VisionConfig = {
     ...EMBEDDINGGEMMA2_VISION,
     hidden: 2,
@@ -235,14 +212,13 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     const get = mapAndCheck(
       sd,
       (s) => transformEmbeddingGemma2VisionStateDict(s, '', cfg),
-      [...UNTOUCHED, `${T}.self_attn.v_proj.linear.weight`],
+      // q, k and v stay the checkpoint's tensors: mapAndCheck fails if the
+      // hook replaces one.
       [
-        `${P}.pos_x.weight`,
-        `${P}.pos_y.weight`,
-        `${T}.self_attn.q_proj.linear.weight`,
-        `${T}.self_attn.k_proj.linear.weight`,
-        `${T}.self_attn.qkv_norm`,
+        ...UNTOUCHED,
+        ...['q_proj', 'k_proj', 'v_proj'].map((n) => `${T}.self_attn.${n}.linear.weight`),
       ],
+      [`${P}.pos_x.weight`, `${P}.pos_y.weight`, `${T}.self_attn.qkv_norm`],
     );
 
     for (const [name, values] of [
@@ -255,27 +231,13 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
       expect(await contents(table)).toEqual({ type, values });
     }
 
-    // Rows 0 2 1 3 of each half head, for q and k. v is left as it is.
-    const halfHeads = [0, 2, 1, 3, 4, 6, 5, 7];
-    for (const [name, base] of [
-      ['q_proj', 0],
-      ['k_proj', 100],
-    ] as const) {
-      const projection = get(`${T}.self_attn.${name}.linear.weight`);
-      expect(projection.shape).toEqual([8, 2]);
-      expect(projection.byteLength).toBe(16 * elemBytes);
-      expect(await contents(projection)).toEqual({
-        type,
-        values: gridRows(base, halfHeads, 2),
-      });
-    }
-
+    // q_norm and k_norm in the checkpoint's order, ones for v.
     const norm = get(`${T}.self_attn.qkv_norm`);
     expect(norm.shape).toEqual([24]);
     expect(norm.byteLength).toBe(16 * elemBytes);
     expect(await contents(norm)).toEqual({
       type,
-      values: [1, 3, 2, 4, 5, 7, 6, 8, 11, 13, 12, 14, 15, 17, 16, 18, ...ones(8)],
+      values: [1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, ...ones(8)],
     });
 
     expect(sd.totalBytes()).toBe(total);

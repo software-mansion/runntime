@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { visionRopeTables } from '../../../src/zoo/embeddinggemma2/rope.ts';
-import { ropeTables } from '../../../src/zoo/shared/rope.ts';
 
 const close = (want: number) => expect.closeTo(want, 6);
 
@@ -14,24 +13,29 @@ describe('visionRopeTables', () => {
   const cols = 3;
   const rows = 2;
   const { cos, sin } = visionRopeTables(cols, rows, headDim, theta);
-  // A 1D rope of half a head, for every column and row index.
-  const half = ropeTables(Math.max(cols, rows), headDim / 2, theta);
+  // HF's Gemma vision attention ropes each half of a head, 8 columns, on its
+  // own: inv_freq = 1 / theta^(arange(0, 8, 2) / 8), written out for theta
+  // 100.
+  const invFreq = [1, 100 ** -0.25, 0.1, 100 ** -0.75];
 
   it('is [cols · rows, headDim]', () => {
     expect(cos.length).toBe(cols * rows * headDim);
     expect(sin.length).toBe(cols * rows * headDim);
   });
 
-  it('turns the first half of a head by the column and the second by the row', () => {
-    for (let k = 0; k < cols * rows; k++) {
-      const col = k % cols;
-      const r = Math.floor(k / cols);
-      const want = (table: Float32Array) => [
-        ...row(table, col, headDim / 2),
-        ...row(table, r, headDim / 2),
-      ];
-      expect(row(cos, k, headDim)).toEqual(want(half.cos).map(close));
-      expect(row(sin, k, headDim)).toEqual(want(half.sin).map(close));
-    }
+  // The first half of a head turns with the patch's column, the second with
+  // its row, each cat(freqs, freqs): entries p and p + 4 of a half hold pair
+  // p's angle. Patches are row-major on the 3-wide grid.
+  it.each([
+    { k: 0, col: 0, r: 0 },
+    { k: 2, col: 2, r: 0 },
+    { k: 3, col: 0, r: 1 },
+    { k: 5, col: 2, r: 1 },
+  ])('turns patch $k by column $col in the first half and row $r in the second', (patch) => {
+    const x = invFreq.map((f) => patch.col * f);
+    const y = invFreq.map((f) => patch.r * f);
+    const angles = [...x, ...x, ...y, ...y];
+    expect(row(cos, patch.k, headDim)).toEqual(angles.map((a) => close(Math.cos(a))));
+    expect(row(sin, patch.k, headDim)).toEqual(angles.map((a) => close(Math.sin(a))));
   });
 });

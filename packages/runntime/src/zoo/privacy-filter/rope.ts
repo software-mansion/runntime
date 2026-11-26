@@ -91,6 +91,8 @@ export function ropeConstants(tokens: number): RopeConstants {
   return { cosE, sinE, rawCos: cos, rawSin: sin };
 }
 
+/** Ropes x with the pair-duplicated tables. The checkpoint rotates the
+ *  interleaved pairs (2p, 2p + 1), as HF's OpenAIPrivacyFilter does. */
 export function applyRope(x: Value, cosE: Value, sinE: Value): Value {
-  return rope(x, cosE, sinE, { headDim: HEAD_DIM });
+  return rope(x, cosE, sinE, { headDim: HEAD_DIM, layout: 'interleaved' });
 }
