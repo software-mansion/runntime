@@ -84,6 +84,17 @@ def scores(embeddings: Embeddings, modality: str) -> NDArray[np.floating]:
     return embeddings[asking] @ embeddings[ranked].T
 
 
+def noises(embeddings: Embeddings, double: Embeddings) -> dict[str, float]:
+    """The noise of each metric: how far `embeddings` are from the f64 ones,
+    per tower."""
+    out = {}
+    for modality, names in TOWERS.items():
+        out[f"{modality}Error"] = max(noise(embeddings[name], double[name]) for name in names)
+        out[f"{modality}CosineDistance"] = max(cosine_noise(embeddings[name], double[name]) for name in names)
+        out[f"{modality}Score"] = noise(scores(embeddings, modality), scores(double, modality))
+    return out
+
+
 def main() -> None:
     queries, passages = squad.squad_pairs(PAIRS, LONG)
     paths, images, sources = coco.coco_images(PAIRS)
@@ -113,6 +124,9 @@ def main() -> None:
     del model
     gc.collect()
     double = embed(load(double=True), inputs)
+    # The same model in f16 gives the f16 noise, its embeddings as f32.
+    gc.collect()
+    half = {name: vectors.astype(np.float32) for name, vectors in embed(load().half(), inputs).items()}
 
     rankings = {
         f"{modality}Ranking": np.argsort(-scores(reference, modality), axis=1, kind="stable")[:, :TOP_K].astype(
@@ -120,11 +134,6 @@ def main() -> None:
         )
         for modality in MODALITIES
     }
-    noises = {}
-    for modality, names in TOWERS.items():
-        noises[f"{modality}Error"] = max(noise(reference[name], double[name]) for name in names)
-        noises[f"{modality}CosineDistance"] = max(cosine_noise(reference[name], double[name]) for name in names)
-        noises[f"{modality}Score"] = noise(scores(reference, modality), scores(double, modality))
     save(
         "embeddinggemma2",
         {
@@ -148,7 +157,8 @@ def main() -> None:
                 "audio": librispeech.ATTRIBUTION,
             },
             "settings": {"topK": TOP_K},
-            "noise": noises,
+            "noise": noises(reference, double),
+            "noiseF16": noises(half, double),
         },
         ["torch", "sentence-transformers", "transformers", "pillow", "soundfile"],
     )

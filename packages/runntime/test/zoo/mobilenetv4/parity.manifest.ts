@@ -1,7 +1,7 @@
 /** Parity manifest of MobileNetV4-Conv-S: the timm model in f32 as the
  *  reference, photos from COCO as inputs. */
 import { models } from '../../../src/zoo/models.ts';
-import type { ParityManifest } from '../../parity/manifest.ts';
+import { COSINE_WITHIN_F16_NOISE, type ParityManifest } from '../../parity/manifest.ts';
 
 const DEFAULTS = 'methodology default';
 
@@ -23,8 +23,9 @@ export const MOBILENETV4_PARITY = {
       name: 'SMALL',
       config: models.imageClassification.MOBILENETV4.SMALL,
       thresholds: {
-        // Level A: cos >= 0.999, on logits with their mean subtracted.
-        cosineDistance: { value: 1e-3, source: DEFAULTS },
+        // Level A: within three times the f16 noise in error, on logits
+        // with their mean subtracted.
+        cosineDistance: COSINE_WITHIN_F16_NOISE,
         // Level B: top-1 agrees on >= 99%.
         top1Missed: {
           value: 0.01,

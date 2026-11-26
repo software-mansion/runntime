@@ -179,7 +179,6 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
   const { family, variants } = manifest;
   const meta = await readJson<ParityMeta>(`${family}/meta.json`);
   checkMeta(manifest, meta);
-  const { noise } = meta;
   const report: Record<string, string>[] = [];
   afterAll(() => writeReport(family, report));
 
@@ -196,7 +195,7 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
     let metrics: Measured['metrics'];
     beforeAll(async () => {
       model = await load(config, await weights());
-      const { cells, metrics: got } = await measure(model, limits(margins ?? {}, noise));
+      const { cells, metrics: got } = await measure(model, limits(margins ?? {}, meta));
       metrics = got;
       report.push({ variant, ...cells, result: result(got) });
     });
@@ -211,7 +210,7 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
       margins,
       async () => config.modelPath,
       (got) => {
-        const over = exceeded(got, thresholds, noise);
+        const over = exceeded(got, thresholds, meta);
         if (over.length === 0) return 'pass';
         const known = over.every((metric) => thresholds[metric]!.knownIssue !== undefined);
         return known ? `known issue: ${over.join(', ')}` : 'fail';
@@ -221,7 +220,7 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
     for (const [metric, threshold] of Object.entries<Threshold>(thresholds)) {
       const { knownIssue } = threshold;
       const title = `stays within its ${metric} threshold`;
-      const test = () => expect(exceeded(metrics(), { [metric]: threshold }, noise)).toEqual([]);
+      const test = () => expect(exceeded(metrics(), { [metric]: threshold }, meta)).toEqual([]);
       if (knownIssue === undefined) it(title, test);
       else it.fails(`${title} (known issue: ${knownIssue})`, test);
     }
@@ -238,7 +237,7 @@ export async function runParity<P extends ParityManifest, Model extends { dispos
     );
 
     it.each(variants)('fails every $name threshold', ({ thresholds }) => {
-      expect(exceeded(metrics(), thresholds, noise)).toEqual(Object.keys(thresholds));
+      expect(exceeded(metrics(), thresholds, meta)).toEqual(Object.keys(thresholds));
     });
   });
 }

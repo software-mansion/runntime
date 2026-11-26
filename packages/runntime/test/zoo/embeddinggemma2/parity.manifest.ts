@@ -3,6 +3,7 @@
  *  speech from LibriSpeech as inputs. */
 import { models } from '../../../src/zoo/models.ts';
 import {
+  COSINE_WITHIN_F16_NOISE,
   COSINE_WITHIN_NOISE,
   WITHIN_NOISE,
   type ParityManifest,
@@ -71,13 +72,16 @@ export const EMBEDDINGGEMMA2_PARITY = {
       // DEFAULT loads the same files.
       name: 'F16',
       config: F16,
-      thresholds: perModality({
-        // Level A: cos >= 0.999.
-        cosineDistance: { value: 1e-3, source: DEFAULTS },
-        // Level B: top-k agrees on >= 99%. With 40 slots per modality that
-        // allows no miss.
-        topKMissed: { value: 0.01, source: DEFAULTS },
-      }),
+      thresholds: {
+        ...perModality({
+          // Level A: within three times the f16 noise in error.
+          cosineDistance: COSINE_WITHIN_F16_NOISE,
+          // Level B: top-k agrees on >= 99%. With 40 slots per modality that
+          // allows no miss.
+          topKMissed: { value: 0.01, source: DEFAULTS },
+        }),
+        imageCosineDistance: { ...COSINE_WITHIN_F16_NOISE, knownIssue: RESIZE },
+      },
       // Two items the reference scores closer than f16 resolves are a
       // near-tie.
       margins: perModality({

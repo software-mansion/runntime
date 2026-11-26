@@ -3,7 +3,7 @@
  *  and noise. The reference checkpoints are CC BY-NC 4.0: their training
  *  labels come from Depth Anything V2-L. */
 import { models } from '../../../src/zoo/models.ts';
-import type { ParityManifest } from '../../parity/manifest.ts';
+import { COSINE_WITHIN_F16_NOISE, type ParityManifest } from '../../parity/manifest.ts';
 
 // cos >= 0.999.
 const COSINE = {
@@ -40,8 +40,8 @@ const manifest = <S extends keyof typeof SIZES>(size: S) =>
         thresholds: {
           // Level A: on maps with their mean subtracted, from the
           // reference's own model input.
-          cosineDistance: COSINE,
-          // Level B: the same, from the photo.
+          cosineDistance: COSINE_WITHIN_F16_NOISE,
+          // Level B: cos >= 0.999 on the same maps, from the photo.
           imageCosineDistance: {
             ...COSINE,
             knownIssue: 'runntime resizes linearly, the reference bicubic',

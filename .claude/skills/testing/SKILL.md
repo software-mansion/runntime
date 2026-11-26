@@ -88,11 +88,13 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
 - References come from `tools/parity`, one script per model:
   `uv run python -m runntime_parity.minilm`. It runs the released model on
   the fixed inputs on the CPU and saves the inputs, the outputs, the
-  reference noise (how far the same model run in f64 is from them) and the
-  library versions. Tests read them from `RUNNTIME_PARITY_DIR`,
+  reference noise (how far the same model run in f64 is from them), the f16
+  noise (the same model in `model.half()` against f64) and the library
+  versions. Tests read them from `RUNNTIME_PARITY_DIR`,
   `~/.cache/runntime-parity` by default. A missing reference fails the
   test, and so does a stale one: `meta.json` has to agree with the manifest
-  on the reference, the input count and the manifest's `settings`.
+  on the reference, the input count and the manifest's `settings`, and hold
+  the f16 noise when a threshold counts in it.
 - Every entry in `models.ts` needs a variant in a manifest:
   `test/parity/coverage.test.ts` fails in CI without one. A new model lands
   with its manifest, never on the pending list.
@@ -101,6 +103,9 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
   known, unfixed difference runs as `it.fails`, with the reason in
   `knownIssue` in the manifest; removing the field turns it back into a
   plain test.
+- An f32 variant's cosine gate is nine times the reference noise,
+  `COSINE_WITHIN_NOISE`; an f16 variant's is nine times the f16 noise,
+  `COSINE_WITHIN_F16_NOISE`, at most the methodology's 1e-3.
 - A ranking or top-1 difference counts as a miss only where the reference
   scores the items further apart than the variant's margin. Inside the
   margin it is a near-tie: the report counts it, no threshold gates it.

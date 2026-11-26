@@ -1,7 +1,12 @@
 /** Parity manifest of Moonshine Streaming tiny: the transformers model in
  *  f32 as the reference, speech from LibriSpeech as inputs. */
 import { models } from '../../../src/zoo/models.ts';
-import { COSINE_WITHIN_NOISE, WITHIN_NOISE, type ParityManifest } from '../../parity/manifest.ts';
+import {
+  COSINE_WITHIN_F16_NOISE,
+  COSINE_WITHIN_NOISE,
+  WITHIN_NOISE,
+  type ParityManifest,
+} from '../../parity/manifest.ts';
 
 const DEFAULTS = 'methodology default';
 
@@ -49,9 +54,9 @@ export const MOONSHINE_STREAMING_TINY_PARITY = {
       name: 'F16',
       config: models.speechToText.MOONSHINE_STREAMING.TINY.F16,
       thresholds: {
-        // Level A: cos >= 0.999.
-        encoderCosineDistance: { value: 1e-3, source: DEFAULTS },
-        logitsCosineDistance: { value: 1e-3, source: DEFAULTS },
+        // Level A: within three times the f16 noise in error.
+        encoderCosineDistance: COSINE_WITHIN_F16_NOISE,
+        logitsCosineDistance: COSINE_WITHIN_F16_NOISE,
         // Level B: WER delta <= 0.5 pp.
         werDelta: { value: 0.005, source: DEFAULTS },
       },

@@ -109,6 +109,9 @@ def main() -> None:
         # selective scan computes in f32 whatever it is given, so the noise
         # is f32 against mostly f64.
         double = model.double()(pixels.double())[:, 0].numpy()
+        # The same in f16 gives the f16 noise, the scan still in f32. f64
+        # holds the f32 weights exactly.
+        half = model.half()(pixels.half())[:, 0].float().numpy()
     save(
         f"depthart-{size}",
         {"images": paths},
@@ -123,6 +126,10 @@ def main() -> None:
             "noise": {
                 "error": noise(reference, double),
                 "cosineDistance": cosine_noise(centered(reference), centered(double)),
+            },
+            "noiseF16": {
+                "error": noise(half, double),
+                "cosineDistance": cosine_noise(centered(half), centered(double)),
             },
         },
         ["torch", "timm", "einops", "opencv-python-headless", "pillow"],

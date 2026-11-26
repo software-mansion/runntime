@@ -1,7 +1,12 @@
 /** Parity manifest of all-MiniLM-L6-v2: the sentence-transformers model in
  *  f32 as the reference, questions and paragraphs from SQuAD as inputs. */
 import { models } from '../../../src/zoo/models.ts';
-import { COSINE_WITHIN_NOISE, WITHIN_NOISE, type ParityManifest } from '../../parity/manifest.ts';
+import {
+  COSINE_WITHIN_F16_NOISE,
+  COSINE_WITHIN_NOISE,
+  WITHIN_NOISE,
+  type ParityManifest,
+} from '../../parity/manifest.ts';
 
 const { F32, F16 } = models.embedding.ALL_MINILM_L6_V2;
 
@@ -44,8 +49,8 @@ export const MINILM_PARITY = {
       name: 'F16',
       config: F16,
       thresholds: {
-        // Level A: cos >= 0.999.
-        cosineDistance: { value: 1e-3, source: DEFAULTS },
+        // Level A: within three times the f16 noise in error.
+        cosineDistance: COSINE_WITHIN_F16_NOISE,
         // Level B: top-k agrees on >= 99%.
         topKMissed: { value: 0.01, source: DEFAULTS },
       },

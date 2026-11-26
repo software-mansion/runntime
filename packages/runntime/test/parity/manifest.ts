@@ -13,8 +13,11 @@ export interface ModelConfig {
 export interface Threshold {
   /** The most the metric may be. */
   readonly value: number;
-  /** Set when `value` counts in multiples of the metric's reference noise. */
-  readonly timesNoise?: true;
+  /** Set when `value` counts in multiples of the metric's reference noise:
+   *  `noise` in meta.json, or `noiseF16` with 'f16'. */
+  readonly timesNoise?: true | 'f16';
+  /** The most a limit in multiples of the noise may be. */
+  readonly max?: number;
   /** Where the value comes from. */
   readonly source: string;
   /** Set while the variant is known to exceed this threshold, with the
@@ -35,6 +38,16 @@ export const COSINE_WITHIN_NOISE = {
   timesNoise: true,
   source:
     '1 − cos grows with the square of the error: nine times the noise is three times the noise in error',
+} as const;
+
+/** The same limit on the f16 noise, for an f16 variant, at most the
+ *  methodology default. */
+export const COSINE_WITHIN_F16_NOISE = {
+  value: 9,
+  timesNoise: 'f16',
+  max: 1e-3,
+  source:
+    "nine times the f16 noise in meta.json, three times in error, at most the methodology's 1e-3",
 } as const;
 
 export interface ParityVariant<M extends ModelConfig> {
@@ -104,10 +117,13 @@ export interface ParityMeta {
   readonly inputs?: { readonly license?: string; readonly count?: number };
   readonly settings?: Readonly<Record<string, string | number>>;
   readonly noise: Readonly<Record<string, number>>;
+  /** The same for the model run in f16. */
+  readonly noiseF16?: Readonly<Record<string, number>>;
 }
 
-/** Throws when `meta` and `manifest` disagree on a value both hold: the
- *  references come from other settings than the test expects. */
+/** Throws when `meta` and `manifest` disagree on a value both hold, or when
+ *  a threshold counts in the f16 noise and `meta` has none: the references
+ *  come from other settings than the test expects. */
 export function checkMeta(manifest: ParityManifest, meta: ParityMeta): void {
   const { family, reference, inputs, settings = {} } = manifest;
   const fields: [field: string, want: unknown, got: unknown][] = [
@@ -128,32 +144,42 @@ export function checkMeta(manifest: ParityManifest, meta: ParityMeta): void {
       );
     }
   }
+  const usesF16 = manifest.variants.some(({ thresholds, margins = {} }) =>
+    [...Object.values(thresholds), ...Object.values(margins)].some((t) => t.timesNoise === 'f16'),
+  );
+  if (usesF16 && meta.noiseF16 === undefined) {
+    throw new Error(
+      `stale ${family} reference: no noiseF16 in meta.json, which the manifest uses. Run its tools/parity script again.`,
+    );
+  }
 }
 
-/** The limit of each threshold in `thresholds`, by name. `noise` is the
- *  reference noise in the family's `meta.json`, by the same names. A missing
+/** The limit of each threshold in `thresholds`, by name: its value, or with
+ *  `timesNoise` that many times the metric's noise in the family's
+ *  `meta.json` (`noise`, or `noiseF16` with 'f16'), at most `max`. A missing
  *  noise gives NaN. */
 export function limits(
   thresholds: Readonly<Record<string, Threshold>>,
-  noise: Readonly<Record<string, number>>,
+  meta: ParityMeta,
 ): Record<string, number> {
   return Object.fromEntries(
-    Object.entries(thresholds).map(([name, { value, timesNoise }]) => [
-      name,
-      value * (timesNoise ? noise[name]! : 1),
-    ]),
+    Object.entries(thresholds).map(([name, { value, timesNoise, max = Infinity }]) => {
+      if (timesNoise === undefined) return [name, value];
+      const noise = (timesNoise === 'f16' ? meta.noiseF16 : meta.noise)?.[name];
+      return [name, Math.min(value * (noise ?? NaN), max)];
+    }),
   );
 }
 
-/** The names of the thresholds in `thresholds` that `metrics` exceed.
- *  `noise` is the reference noise in the family's `meta.json`, by metric. */
+/** The names of the thresholds in `thresholds` that `metrics` exceed, with
+ *  the reference noise in the family's `meta.json`. */
 export function exceeded(
   metrics: Readonly<Record<string, number>>,
   thresholds: Readonly<Record<string, Threshold>>,
-  noise: Readonly<Record<string, number>>,
+  meta: ParityMeta,
 ): string[] {
   // Written so a NaN or missing metric or noise counts as exceeded.
-  return Object.entries(limits(thresholds, noise))
+  return Object.entries(limits(thresholds, meta))
     .filter(([name, limit]) => !(metrics[name]! <= limit))
     .map(([name]) => name);
 }
