@@ -88,12 +88,12 @@ export function makeMatmulKernel(cfg: MatmulCfg, elem: Elem = F32_ELEM) {
   })(({ gid }) => {
     'use gpu';
     const m = L.$.dims.m;
-    const mQuads = d.u32((m + 3) / 4); // explicit integer division (codebase convention)
+    const mQuads = std.intdiv(m + 3, 4);
     const idx = flatIndex(gid);
     if (idx >= mQuads * n4c) {
       return;
     }
-    const r0 = d.u32(idx / n4c) * 4;
+    const r0 = std.intdiv(idx, n4c) * 4;
     const col0 = (idx % n4c) * 4;
     // Clamped so loads stay in bounds; the writeback discards duplicates.
     const r1 = std.min(r0 + 1, m - 1);
@@ -324,7 +324,7 @@ function makeMatmulTiledKernel(cfg: MatmulCfg) {
     'use gpu';
     const m = matmulLayout.$.dims.m;
     const tid = lid.x;
-    const tr = d.u32(tid / 16); // explicit integer division (codebase convention)
+    const tr = std.intdiv(tid, 16);
     const tc = tid % 16;
     const rowBase = wid.y * TILE;
     const colBase = wid.x * TILE;
@@ -342,7 +342,7 @@ function makeMatmulTiledKernel(cfg: MatmulCfg) {
       // become 0, so the inner loop needs no guards.
       for (const i of tgpu.unroll(std.range(A_LOADS))) {
         const e = tid + i * TILED_THREADS;
-        const er = d.u32(e / TILE_K);
+        const er = std.intdiv(e, TILE_K);
         const ec = e % TILE_K;
         const ar = rowBase + er;
         const ak = k0 + ec;
@@ -351,7 +351,7 @@ function makeMatmulTiledKernel(cfg: MatmulCfg) {
       }
       for (const iv of tgpu.unroll(std.range(B_LOADS))) {
         const e = tid + iv * TILED_THREADS; // vec4 slot: row-major [TILE_K, TILE/4]
-        const er = d.u32(e / B_TILE_ROW_VEC4S);
+        const er = std.intdiv(e, B_TILE_ROW_VEC4S);
         const ec = (e % B_TILE_ROW_VEC4S) * 4;
         const bk = k0 + er;
         const bc = colBase + ec;

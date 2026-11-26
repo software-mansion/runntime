@@ -53,15 +53,21 @@ const MATMUL_ATTENTION_MAX_SLIDING_ROWS = 1024;
 
 /** The attention projections and per-head norms, fused at load. */
 class Attention extends nn.Module {
-  /** q | k | v rows, with q and k permuted for the interleaved rope. */
-  readonly qkv: nn.Linear;
+  /** Its rows are permuted for the interleaved rope at load, like k_proj's. */
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   /** q_norm tiled per q head, k_norm per kv head, ones for v. */
   readonly qkv_norm: nn.Parameter;
   readonly o_proj: nn.Linear;
   constructor(hidden: number, heads: number, kvHeads: number, headDim: number) {
     super();
     const width = (heads + 2 * kvHeads) * headDim;
-    this.qkv = new nn.Linear(hidden, width, { bias: false });
+    this.q_proj = new nn.Linear(hidden, heads * headDim, { bias: false });
+    this.k_proj = new nn.Linear(hidden, kvHeads * headDim, { bias: false });
+    this.v_proj = new nn.Linear(hidden, kvHeads * headDim, { bias: false });
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.qkv_norm = new nn.Parameter({ elems: width, dtype: 'f32', dims: [width] });
     this.o_proj = new nn.Linear(heads * headDim, hidden, { bias: false });
   }
@@ -173,6 +179,7 @@ class Layer extends nn.Module<[Value, Value, EmbeddingGemma2Inputs], Value> {
           headDim: d,
           windowLeft: window,
           windowRight: window,
+          scale: 1, // q and k are RMS-normed per head
           segments: inp.segments,
           maxSegment: inp.maxSegment,
         },

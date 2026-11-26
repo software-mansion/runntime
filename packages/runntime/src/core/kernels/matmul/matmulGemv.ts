@@ -51,7 +51,7 @@ function makeGemvVariant(elem: Elem) {
     const n = config.$.n;
     const tid = lid.x;
     const colLane = tid % TN;
-    const kLane = d.u32(tid / TN); // explicit integer division (codebase convention)
+    const kLane = std.intdiv(tid, TN);
     const col = flatWorkgroupId(wid) * TN + colLane;
 
     let acc = d.f32(0);
@@ -191,7 +191,7 @@ function makeGemvVec4Kernel(cfg: GemvVec4Cfg, elem: Elem) {
   })(({ wid, lid }) => {
     'use gpu';
     const lane = lid % VEC_LANES;
-    const slice = d.u32(lid / VEC_LANES);
+    const slice = std.intdiv(lid, VEC_LANES);
     const cg = wid.x * VEC_LANES + lane;
 
     let acc = d.vec4f();

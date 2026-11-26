@@ -16,6 +16,8 @@ export interface SdpaCase {
   windowLeft?: number;
   windowRight?: number;
   qPosOffset?: number;
+  /** Passed to the op. Default: none, so the op's 1/√headDim applies. */
+  scale?: number;
   /** A sink logit per query head. */
   sinks?: boolean;
   /** Packs two sequences: rows before qLen / 2 see the keys before
@@ -49,12 +51,18 @@ export const SDPA_OPTIONS: readonly { name: string; opts: Partial<SdpaCase> }[] 
     opts: { qHeads: 6, kvHeads: 2, sinks: true, windowRight: 0 },
   },
   { name: 'as many kv heads as query heads', opts: { kvHeads: 4 } },
+  { name: 'a scale of 0.4', opts: { scale: 0.4, windowRight: 0 } },
+  {
+    name: 'a scale of 0.4, sinks and a key bias',
+    opts: { scale: 0.4, sinks: true, keyBias: true, segments: true },
+  },
+  { name: 'packed qkv and a scale of 0.4', opts: { packed: true, scale: 0.4 } },
 ];
 
-/** softmax(q·kᵀ) v per query row and head, in f64, over the keys the window
- *  and the row's segment leave visible. q and k arrive pre-scaled. A sink
- *  adds exp(sink · ln 2) to the denominator alone. The key bias adds its
- *  value to the scores of its keys. A row that sees no key comes out 0. */
+/** softmax(scale · q·kᵀ) v per query row and head, in f64, over the keys the
+ *  window and the row's segment leave visible. A sink adds exp(sink · ln 2)
+ *  to the denominator alone. The key bias adds its value to the scaled
+ *  scores of its keys. A row that sees no key comes out 0. */
 export function sdpaRef(
   q: Float32Array,
   k: Float32Array,
@@ -63,6 +71,7 @@ export function sdpaRef(
     windowLeft: number;
     windowRight: number;
     qPosOffset: number;
+    scale: number;
     sinks?: Float32Array;
     segs?: Float32Array;
     keyBias?: { start: number; end: number; value: number };
@@ -87,6 +96,7 @@ export function sdpaRef(
         for (let x = 0; x < hd; x++) {
           s += q[(i * qHeads + h) * hd + x]! * k[(j * kvHeads + kvh) * hd + x]!;
         }
+        s *= c.scale;
         if (c.keyBias && j >= c.keyBias.start && j < c.keyBias.end) s += c.keyBias.value;
         scores.push(s);
       }
@@ -139,10 +149,9 @@ export async function checkSdpa(
   const windowRight = c.windowRight ?? Infinity;
   const qPosOffset = c.qPosOffset ?? 0;
   const round = dtype === 'f16' ? roundF16 : (x: Float32Array) => x;
-  // Scaled by 2 / sqrt(headDim), so scores spread over a few units whatever
-  // the head size and the softmax is neither flat nor one-hot.
-  const scale = 2 / Math.sqrt(headDim);
-  const q = round(randomF32(qLen * qHeads * headDim, 1).map((x) => x * scale));
+  // Doubled, so under the default 1/√headDim scores spread over a few units
+  // whatever the head size and the softmax is neither flat nor one-hot.
+  const q = round(randomF32(qLen * qHeads * headDim, 1).map((x) => 2 * x));
   const k = round(randomF32(kvLen * kvHeads * headDim, 2));
   const v = round(randomF32(kvLen * kvHeads * headDim, 3));
   const sinks = c.sinks ? randomF32(qHeads, 4).map((x) => 2 * x) : undefined;
@@ -167,6 +176,7 @@ export async function checkSdpa(
     windowLeft,
     windowRight,
     qPosOffset,
+    scale: c.scale,
     sinks: sinks && upload(root, sinks, [1, qHeads]),
     segments: segs && upload(root, segs, [qLen, 2]),
     maxSegment: c.maxSegment,
@@ -198,6 +208,7 @@ export async function checkSdpa(
     windowLeft,
     windowRight,
     qPosOffset,
+    scale: c.scale ?? 1 / Math.sqrt(headDim),
     sinks,
     segs,
     keyBias,

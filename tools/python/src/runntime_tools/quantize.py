@@ -1,4 +1,4 @@
-"""Symmetric group-wise int8/int4 quantization of [out, in] weights, in the
+"""Symmetric group-wise int8/int4 quantization of [rows, cols] weights, in the
 runntime format v1 layout."""
 
 from dataclasses import dataclass
@@ -12,22 +12,22 @@ Bits = Literal[4, 8]
 
 @dataclass(frozen=True)
 class QuantizedWeight:
-    """`ints` [out, in], one signed value per element, and `scales`
-    [out, in / group_size], one f16 scale per group of inputs."""
+    """`ints` [rows, cols], one signed value per element, and `scales`
+    [rows, cols / group_size], one f16 scale per group of a row."""
 
     ints: NDArray[np.int8]
     scales: NDArray[np.float16]
 
 
 def quantize(weight: NDArray[np.float32], bits: Bits, group_size: int) -> QuantizedWeight:
-    """Quantizes each group of `group_size` inputs of each output row to
+    """Quantizes each group of `group_size` values of each row to
     `int = round(w / scale)` with `scale = absmax / (2^(bits-1) - 1)`, so the
     range is symmetric and has no zero point. The ints divide by the scale
     rounded to f16, the one the file stores. An all-zero group has scale 0
     and ints 0."""
-    out_features, in_features = weight.shape
+    rows, cols = weight.shape
     largest = 2 ** (bits - 1) - 1
-    groups = weight.reshape(out_features, in_features // group_size, group_size)
+    groups = weight.reshape(rows, cols // group_size, group_size)
     scales = (np.abs(groups).max(axis=-1, keepdims=True) / largest).astype(np.float16)
     divisor = scales.astype(np.float32)
     ratio = np.divide(groups, divisor, out=np.zeros_like(groups), where=divisor != 0)
@@ -37,11 +37,11 @@ def quantize(weight: NDArray[np.float32], bits: Bits, group_size: int) -> Quanti
 
 def dequantize(weight: QuantizedWeight) -> NDArray[np.float32]:
     """The float values the ints stand for: int * scale."""
-    out_features, in_features = weight.ints.shape
+    rows, cols = weight.ints.shape
     group_count = weight.scales.shape[1]
-    groups = weight.ints.reshape(out_features, group_count, in_features // group_count)
+    groups = weight.ints.reshape(rows, group_count, cols // group_count)
     values = groups * weight.scales.astype(np.float32)[..., np.newaxis]
-    return values.reshape(out_features, in_features)
+    return values.reshape(rows, cols)
 
 
 def pack_int4(ints: NDArray[np.int8]) -> NDArray[np.uint8]:

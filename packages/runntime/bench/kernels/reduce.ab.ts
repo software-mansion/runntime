@@ -5,7 +5,7 @@
  *  cases vary dtype, row count and row width. */
 import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
-import { randMat } from './inputs.ts';
+import { mat, randMat } from './inputs.ts';
 
 type Float = 'f32' | 'f16';
 
@@ -41,14 +41,36 @@ const rmsNorm = (name: string, m: number, n: number, dtype: Float) =>
 
 /** Reverb's sampler: `blocks` codebooks of 1025 logits per row, then 2 padding
  *  columns. The last logit of each codebook is the mask, which the argmax
- *  skips. */
-const logitStats = (name: string, m: number, blocks: number, guided: boolean): AbCase =>
+ *  skips. With `held`, also the log-probability of each slot's held code, as
+ *  Reverb's coarse passes read it. */
+const logitStats = (
+  name: string,
+  m: number,
+  blocks: number,
+  guided: boolean,
+  withHeld = false,
+): AbCase =>
   rows(name, m, blocks * 1025 + 2, 'f16', (version, x) => {
     const guide = guided ? randMat(version, m, blocks * 1025 + 2, 'f16') : undefined;
+    const held = withHeld
+      ? version.upload(
+          Float32Array.from(version.rand(blocks * m), (v) => Math.floor((v + 1) * 512)),
+          mat(blocks * m, 1),
+        )
+      : undefined;
     const call = () =>
-      version.lib.logitStats(x, { blocks, block: 1025, argmaxCols: 1024, guide, guideWeight: 1.5 });
-    // Built once here, so a base without logitStats skips the case.
-    call();
+      version.lib.logitStats(x, {
+        blocks,
+        block: 1025,
+        argmaxCols: 1024,
+        guide,
+        guideWeight: 1.5,
+        held,
+      });
+    // Built once here, so a base without logitStats, or without held, skips
+    // the case.
+    const width = call().shape.dims![1];
+    if (held && width !== 3) throw new Error('logitStats takes no held');
     return call;
   });
 
@@ -91,7 +113,8 @@ abSuite('reduce', [
   ),
   rows('topk 4 f16, router [64,128]', 64, 128, 'f16', (version, x) => () => version.lib.topk(x, 4)),
 
-  logitStats('logitStats f16, Reverb coarse pass [335,2052], 2 × 1025', 335, 2, false),
+  logitStats('logitStats f16, no held [335,2052], 2 × 1025', 335, 2, false),
+  logitStats('logitStats f16 + held, Reverb coarse pass [335,2052], 2 × 1025', 335, 2, false, true),
   logitStats('logitStats f16 + guide, Reverb fine pass [335,6152], 6 × 1025', 335, 6, true),
 
   rmsNorm('rmsNorm, privacy-filter [512,640]', 512, 640, 'f32'),

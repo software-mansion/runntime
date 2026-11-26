@@ -20,10 +20,7 @@ import {
   snake,
 } from '../graph/ops.ts';
 import { matrix, type Value } from '../graph/value.ts';
-import {
-  MATMUL_QUANT_TILED_BK,
-  matmulQuantTiledEligible,
-} from '../kernels/matmul/matmulQuantTiled.ts';
+import { matmulQuantTiledEligible } from '../kernels/matmul/matmulQuantTiled.ts';
 import {
   convToTapMajor,
   f16ToF32,
@@ -39,9 +36,10 @@ import {
   derive,
   deriveFromTensors,
   type LazyStateDict,
+  type LazyTensor,
   type QuantTensor,
 } from '../weights/safetensors.ts';
-import { dequantize, floatTensor, readFloats, transposeWeight } from '../weights/transforms.ts';
+import { concatRows, dequantize, readFloats, transposeWeight } from '../weights/transforms.ts';
 import { tensor } from '../gpu/buffers.ts';
 import { CpuParameter, Module, Parameter, type AnyModule } from './module.ts';
 
@@ -146,6 +144,14 @@ function loadQuantWeight(
   return scale;
 }
 
+/** A quantized weight its layer's quantized kernel cannot run, as its
+ *  dequantized f32 values in torch's `shape`, and noted on `sd` for
+ *  loadStateDict's warning. */
+function asFloat(sd: LazyStateDict, t: QuantTensor, shape: readonly number[]): LazyTensor {
+  (sd.quantizedAsFloat ??= []).push(...t.sources.map((s) => s.name));
+  return dequantize(t, shape);
+}
+
 /** `t`'s scales in f32, as stored. */
 async function scalesF32(t: QuantTensor): Promise<Float32Array> {
   const data = await t.scales();
@@ -163,13 +169,47 @@ async function scaleColumns(t: QuantTensor, groups: number, n: number): Promise<
   return out;
 }
 
+/** The FusedLinear each of its parts is in. Kept off the Linear: a Module
+ *  field would register the FusedLinear as the part's child. */
+const FUSED_INTO = new WeakMap<Linear, FusedLinear>();
+
+/** Throws CHECKPOINT_MISMATCH unless `tensor` is `layer`'s weight in torch's
+ *  [out, in]. Without it a square wrong-layout weight loads silently
+ *  transposed. */
+function checkTorchLayout(
+  name: string,
+  tensor: LazyTensor,
+  layer: { inFeatures: number; outFeatures: number },
+): void {
+  const { inFeatures, outFeatures } = layer;
+  if (
+    tensor.shape.length === 2 &&
+    tensor.shape[0] === outFeatures &&
+    tensor.shape[1] === inFeatures
+  )
+    return;
+  throw new RunntimeError(
+    'CHECKPOINT_MISMATCH',
+    `Linear: ${name} has shape ${JSON.stringify(tensor.shape)}, ` +
+      `expected torch layout [${outFeatures}, ${inFeatures}]`,
+  );
+}
+
+/** Whether the quantized matmul runs `t` as the weight of a Linear from
+ *  `inFeatures` to `outFeatures`. It reads whole tiles of 4 columns and 8
+ *  rows, groups of whole 4-row chunks, and packs int4 columns 8 to a word. */
+const quantLinearFits = (inFeatures: number, outFeatures: number, t: QuantTensor): boolean =>
+  matmulQuantTiledEligible(inFeatures, outFeatures, t.groupSize) &&
+  outFeatures % (32 / t.bits) === 0;
+
 /** y = x @ weight + bias. weight is stored [in, out]; torch checkpoints
  *  transpose once at load.
  *
  *  A quantized checkpoint weight loads as quantW words with its f32 scales in
  *  `weightScale` [in / groupSize, out], and forward() runs the quantized
  *  matmul. Only the checkpoint says which kind it is, so transformStateDict
- *  retypes the slot at load.
+ *  retypes the slot at load. A weight the quantized matmul cannot run loads
+ *  as its dequantized floats.
  *
  *  `addend` and `activation` fold a residual add and a following tanh or GELU
  *  into the matmul epilogue, as act(x·W + bias) + addend. */
@@ -181,6 +221,10 @@ export class Linear extends Module {
   weightScale?: Parameter;
   /** How the loaded weight is quantized, or undefined for a float weight. */
   private quantization?: { bits: 4 | 8; groupSize: number };
+  /** Whether a FusedLinear holds this layer's weight and bias. */
+  get fused(): boolean {
+    return FUSED_INTO.has(this);
+  }
   constructor(
     readonly inFeatures: number,
     readonly outFeatures: number,
@@ -195,48 +239,25 @@ export class Linear extends Module {
         : new Parameter({ elems: outFeatures, dtype: 'f32', dims: [outFeatures] });
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
+    if (this.fused) return; // the FusedLinear checks and stacks it
     const name = prefix ? `${prefix}.weight` : 'weight';
     const tensor = sd.tensors.get(name);
     if (!tensor) return; // missing keys are the key check's job, not ours
-    // Without this a square wrong-layout weight loads silently transposed.
-    if (
-      tensor.shape.length !== 2 ||
-      tensor.shape[0] !== this.outFeatures ||
-      tensor.shape[1] !== this.inFeatures
-    ) {
-      throw new RunntimeError(
-        'CHECKPOINT_MISMATCH',
-        `Linear: ${name} has shape ${JSON.stringify(tensor.shape)}, ` +
-          `expected torch layout [${this.outFeatures}, ${this.inFeatures}]`,
-      );
-    }
-    if (tensor.kind === 'quant') {
-      this.loadQuantized(sd, prefix, name, tensor);
+    checkTorchLayout(name, tensor, this);
+    if (tensor.kind !== 'quant') {
+      sd.tensors.set(name, transposeWeight(tensor));
       return;
     }
-    sd.tensors.set(name, transposeWeight(tensor));
+    if (quantLinearFits(this.inFeatures, this.outFeatures, tensor)) {
+      this.loadQuantized(sd, prefix, tensor);
+    } else sd.tensors.set(name, transposeWeight(asFloat(sd, tensor, tensor.shape)));
   }
-  /** Loads `name` as quantW words [in, out] with its scales
+  /** Loads the weight as quantW words [in, out] with its scales
    *  [in / groupSize, out]. */
-  private loadQuantized(
-    sd: LazyStateDict,
-    prefix: string,
-    name: string,
-    tensor: QuantTensor,
-  ): void {
+  private loadQuantized(sd: LazyStateDict, prefix: string, tensor: QuantTensor): void {
     const { bits, groupSize } = tensor;
     const k = this.inFeatures;
     const n = this.outFeatures;
-    // The quantized matmul reads whole tiles of 4 columns and 8 rows and
-    // packs int4 columns 8 to a word.
-    if (!matmulQuantTiledEligible(k, n, groupSize) || n % (32 / bits) !== 0) {
-      throw new RunntimeError(
-        'CHECKPOINT_MISMATCH',
-        `Linear: ${name} is int${bits} in groups of ${groupSize}, which needs in features ` +
-          `a multiple of ${MATMUL_QUANT_TILED_BK} and of the group size, out features a ` +
-          `multiple of ${32 / bits} and a group size a multiple of 4, got [out, in] = [${n}, ${k}]`,
-      );
-    }
     this.quantization = { bits, groupSize };
     const groups = k / groupSize;
     this.weightScale = loadQuantWeight(
@@ -249,7 +270,30 @@ export class Linear extends Module {
       { dims: [groups, n], data: () => scaleColumns(tensor, groups, n) },
     );
   }
+  /** A FusedLinear held outside the module tree is never loaded, so its
+   *  parts refuse the load. */
+  override fuseStateDict(
+    _sd: LazyStateDict,
+    paths: ReadonlyMap<AnyModule, readonly string[]>,
+  ): void {
+    const fusedInto = FUSED_INTO.get(this);
+    if (fusedInto && !paths.has(fusedInto)) {
+      throw new Error(
+        `Linear at '${paths.get(this)?.[0]}': the FusedLinear over it is not in the module tree. ` +
+          'Assign the FusedLinear to a field of a module of the model',
+      );
+    }
+  }
+  override *storageParameters(prefix = ''): Generator<readonly [string, Parameter]> {
+    if (!this.fused) yield* super.storageParameters(prefix);
+  }
   forward(x: Value, call: { addend?: Value } = {}): Value {
+    if (this.fused) {
+      throw new Error(
+        'Linear: this layer is a part of a FusedLinear, which holds its weight. ' +
+          "Call the FusedLinear's forward() and take this part's columns",
+      );
+    }
     if (!this.weightScale || !this.quantization) {
       return linear(x, this.weight.value, this.bias?.value, call.addend, this.activation);
     }
@@ -260,6 +304,134 @@ export class Linear extends Module {
       addend: call.addend,
       activation: this.activation,
     });
+  }
+}
+
+/** Several Linears over the same input as one matmul: the output is the
+ *  parts' outputs side by side, in `parts` order.
+ *
+ *  The parts stay the fields the checkpoint names, and the FusedLinear is one
+ *  more field, of any module of the model:
+ *
+ *      q_proj = new nn.Linear(hidden, hidden);
+ *      k_proj = new nn.Linear(hidden, kvDim);
+ *      qk = new nn.FusedLinear([this.q_proj, this.k_proj]);
+ *
+ *  The checkpoint keeps one weight per part. At load the parts' rows stack
+ *  into one weight, once every transformStateDict hook has run, so it holds
+ *  what the hooks made of each part. A part without a bias, next to one that
+ *  has it, adds zeros. Quantized parts with the same bits and group size
+ *  stack as ints with their scales, and run the quantized matmul when a
+ *  Linear of the whole size would. Any other mix (float with quantized, int8
+ *  with int4, two group sizes) stacks the dequantized floats.
+ *
+ *  The parts only name the tensors: namedParameters() lists their
+ *  parameters, never loaded, and a part's own forward() throws. */
+export class FusedLinear extends Module {
+  /** The Linear that holds the stacked weight. The underscore keeps it out of
+   *  the module tree, so the walk gives it no name. */
+  private readonly _stacked: Linear;
+  constructor(private readonly parts: readonly Linear[]) {
+    super();
+    const first = parts[0];
+    if (!first) throw new Error('FusedLinear: needs at least one part');
+    for (const [i, part] of parts.entries()) {
+      if (parts.indexOf(part) !== i) throw new Error(`FusedLinear: part ${i} is listed twice`);
+      if (part.inFeatures !== first.inFeatures) {
+        throw new Error(
+          `FusedLinear: parts read ${first.inFeatures} and ${part.inFeatures} features, need one input size`,
+        );
+      }
+      if (part.activation) {
+        throw new Error(`FusedLinear: part ${i} has the activation '${part.activation}'`);
+      }
+      if (part.fused) throw new Error(`FusedLinear: part ${i} is already in another FusedLinear`);
+    }
+    for (const part of parts) FUSED_INTO.set(part, this);
+    this._stacked = new Linear(
+      first.inFeatures,
+      parts.reduce((sum, part) => sum + part.outFeatures, 0),
+      { bias: parts.some((part) => part.bias) },
+    );
+  }
+  override *storageParameters(prefix = ''): Generator<readonly [string, Parameter]> {
+    yield* this._stacked.namedParameters(prefix);
+  }
+  override fuseStateDict(
+    sd: LazyStateDict,
+    paths: ReadonlyMap<AnyModule, readonly string[]>,
+  ): void {
+    const [prefix = '', alias] = paths.get(this) ?? [];
+    if (alias !== undefined) {
+      throw new Error(
+        `FusedLinear: held in two fields, '${prefix}' and '${alias}'. Keep it in one`,
+      );
+    }
+    const weights: { name: string; tensor: LazyTensor }[] = [];
+    const biases: LazyTensor[] = [];
+    for (const [i, part] of this.parts.entries()) {
+      const [path, second] = paths.get(part) ?? [];
+      if (path === undefined) {
+        throw new Error(
+          `FusedLinear at '${prefix}': part ${i} of ${this.parts.length} is not in the module ` +
+            'tree. Assign every part to a field of a module of the model',
+        );
+      }
+      if (second !== undefined) {
+        throw new Error(
+          `FusedLinear at '${prefix}': part ${i} is held in two fields, '${path}' and ` +
+            `'${second}'. Keep it in one`,
+        );
+      }
+      const name = `${path}.weight`;
+      const tensor = sd.tensors.get(name);
+      if (!tensor) return; // a missing key is reported by the key check
+      checkTorchLayout(name, tensor, part);
+      weights.push({ name, tensor });
+      if (!part.bias) {
+        biases.push(derive([part.outFeatures], [], () => new Float32Array(part.outFeatures)));
+        continue;
+      }
+      const bias = sd.tensors.get(`${path}.bias`);
+      if (!bias) return;
+      if (bias.shape.length !== 1 || bias.shape[0] !== part.outFeatures) {
+        throw new RunntimeError(
+          'CHECKPOINT_MISMATCH',
+          `Linear: ${path}.bias has shape ${JSON.stringify(bias.shape)}, ` +
+            `expected [${part.outFeatures}]`,
+        );
+      }
+      biases.push(bias);
+    }
+    /** A part as loadStateDict's warnings name it: by its file tensors. */
+    const fileName = ({ name, tensor }: (typeof weights)[number]) =>
+      tensor.sources.map((s) => s.name).join(' + ') || name;
+    const setting = (t: LazyTensor) =>
+      t.kind === 'quant' ? `int${t.bits} in groups of ${t.groupSize}` : 'float';
+    const { inFeatures, outFeatures } = this._stacked;
+    let stacked: LazyTensor;
+    if (new Set(weights.map(({ tensor }) => setting(tensor))).size > 1) {
+      (sd.fusedPartsDiffer ??= []).push(
+        `${prefix}: ${weights.map((w) => `${fileName(w)} is ${setting(w.tensor)}`).join(', ')}`,
+      );
+      stacked = concatRows(
+        weights.map(({ tensor }) => (tensor.kind === 'quant' ? dequantize(tensor) : tensor)),
+      );
+    } else {
+      stacked = concatRows(weights.map(({ tensor }) => tensor));
+      if (stacked.kind === 'quant' && !quantLinearFits(inFeatures, outFeatures, stacked)) {
+        (sd.quantizedAsFloat ??= []).push(
+          `${prefix} (FusedLinear of ${weights.map(fileName).join(', ')})`,
+        );
+        stacked = dequantize(stacked);
+      }
+    }
+    sd.tensors.set(`${prefix}.weight`, stacked);
+    if (this._stacked.bias) sd.tensors.set(`${prefix}.bias`, concatRows(biases));
+    this._stacked.transformStateDict(sd, prefix);
+  }
+  forward(x: Value): Value {
+    return this._stacked.forward(x);
   }
 }
 
@@ -358,7 +530,7 @@ export class Conv1d extends Module {
         this.loadQuantized(sd, prefix, name, tensor, n);
         return;
       }
-      tensor = dequantize(tensor, [cOut, cIn, kernel]);
+      tensor = asFloat(sd, tensor, [cOut, cIn, kernel]);
     }
     // Without this a weight with equal in/out channels loads scrambled.
     if (
@@ -532,7 +704,7 @@ export class ConvTranspose1d extends Module {
       if (cOut % 4 === 0 && n % (32 / w.bits) === 0 && quantConvFits(cIn, taps, n)) {
         this.loadQuantized(sd, prefix, w);
       } else {
-        w = dequantize(w, [cIn, cOut, k]);
+        w = asFloat(sd, w, [cIn, cOut, k]);
       }
     }
     if (w && w.kind !== 'quant') {
@@ -568,7 +740,7 @@ export class ConvTranspose1d extends Module {
     if (b && this.bias) {
       sd.tensors.set(
         at('bias'),
-        derive([s * cOut], [floatTensor('ConvTranspose1d', b)], ([src]) => {
+        derive([s * cOut], [b], ([src]) => {
           const out = new Float32Array(s * cOut);
           for (let r = 0; r < s; r++) out.set(src, r * cOut);
           return out;
@@ -657,7 +829,7 @@ export class Snake extends Module {
     const c = this.channels;
     sd.tensors.set(
       at('weight'),
-      derive([2, c], [floatTensor('Snake', alpha)], ([a]) => {
+      derive([2, c], [alpha], ([a]) => {
         const out = new Float32Array(2 * c);
         for (let i = 0; i < c; i++) {
           out[i] = a[i]!;
@@ -891,6 +1063,9 @@ export interface MultiHeadAttentionOpts {
    *  qPos − windowLeft ≤ j ≤ qPos + windowRight. Infinity is unbounded. */
   windowLeft: number;
   windowRight: number;
+  /** Multiplies q·k before the softmax. Default 1/√headDim, as in PyTorch's
+   *  `scaled_dot_product_attention`. */
+  scale?: number;
   /** Registers a per-q-head sink-logit Parameter named `sinks`. */
   sinks?: boolean;
 }
@@ -898,8 +1073,8 @@ export interface MultiHeadAttentionOpts {
 /** Banded, causal or cross multi-head attention over packed
  *  [T, heads·headDim] slabs.
  *
- *  Takes already-projected q/k/v — models own the projections — and applies
- *  sm_scale = 1, so fold any score scale upstream. */
+ *  Takes already-projected q/k/v — models own the projections — and scales
+ *  the scores by `scale`, 1/√headDim unless the options say otherwise. */
 export class MultiHeadAttention extends Module<
   [Value, Value, Value, { qPosOffset?: number; segments?: Value; maxSegment?: number }?],
   Value
@@ -921,7 +1096,7 @@ export class MultiHeadAttention extends Module<
     v: Value,
     call: { qPosOffset?: number; segments?: Value; maxSegment?: number } = {},
   ): Value {
-    const { qHeads, kvHeads, headDim, windowLeft, windowRight } = this.opts;
+    const { qHeads, kvHeads, headDim, windowLeft, windowRight, scale } = this.opts;
     return sdpa(q, k, v, {
       qHeads,
       kvHeads,
@@ -929,6 +1104,7 @@ export class MultiHeadAttention extends Module<
       windowLeft,
       windowRight,
       qPosOffset: call.qPosOffset,
+      scale,
       sinks: this.sinks?.value,
       segments: call.segments,
       maxSegment: call.maxSegment,
@@ -940,7 +1116,7 @@ export class MultiHeadAttention extends Module<
     qkv: Value,
     call: { qPosOffset?: number; segments?: Value; maxSegment?: number } = {},
   ): Value {
-    const { qHeads, kvHeads, headDim, windowLeft, windowRight } = this.opts;
+    const { qHeads, kvHeads, headDim, windowLeft, windowRight, scale } = this.opts;
     return sdpaPacked(qkv, {
       qHeads,
       kvHeads,
@@ -948,6 +1124,7 @@ export class MultiHeadAttention extends Module<
       windowLeft,
       windowRight,
       qPosOffset: call.qPosOffset,
+      scale,
       sinks: this.sinks?.value,
       segments: call.segments,
       maxSegment: call.maxSegment,

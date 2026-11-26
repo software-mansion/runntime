@@ -106,13 +106,24 @@ export function topk(x: Value, k: number): Value {
  *  log-probability of that column over the whole block.
  *
  *  With `guide` (same shape and dtype as x) the argmax is over
- *  (1 + guideWeight)·x − guideWeight·guide; the log-probability stays x's. */
+ *  (1 + guideWeight)·x − guideWeight·guide; the log-probability stays x's.
+ *
+ *  With `held` (f32 column indices below `block`, blocks·rows of them) out is
+ *  [blocks·rows, 3]: its third column is the log-probability of column
+ *  held[b·rows + r] of block b of row r. */
 export function logitStats(
   x: Value,
-  opts: { blocks: number; block: number; argmaxCols: number; guide?: Value; guideWeight?: number },
+  opts: {
+    blocks: number;
+    block: number;
+    argmaxCols: number;
+    guide?: Value;
+    guideWeight?: number;
+    held?: Value;
+  },
 ): Value {
   const [rows, cols, dtype] = want2d('logitStats', x, FLOAT_DTYPES);
-  const { blocks, block, argmaxCols, guide, guideWeight = 0 } = opts;
+  const { blocks, block, argmaxCols, guide, guideWeight = 0, held } = opts;
   const ints = [blocks, block, argmaxCols];
   if (!ints.every((v) => Number.isInteger(v) && v > 0) || argmaxCols > block) {
     throw new Error(
@@ -126,11 +137,15 @@ export function logitStats(
     throw new Error(`logitStats: guide must be ${dtype} [${rows}, ${cols}] like x`);
   }
   if (!Number.isFinite(guideWeight)) throw new Error('logitStats: guideWeight must be finite');
+  if (held && (held.shape.dtype !== 'f32' || held.shape.elems !== blocks * rows)) {
+    throw new Error(`logitStats: held must be f32 with ${blocks * rows} elements`);
+  }
+  const width = held ? 3 : 2;
   return pending(
-    { elems: blocks * rows * 2, dtype: 'f32', dims: [blocks * rows, 2] },
+    { elems: blocks * rows * width, dtype: 'f32', dims: [blocks * rows, width] },
     'logitStats',
-    guide ? [x, guide] : [x],
+    [x, ...(guide ? [guide] : []), ...(held ? [held] : [])],
     undefined,
-    [blocks, block, argmaxCols, guide ? 1 : 0, guideWeight],
+    [blocks, block, argmaxCols, guide ? 1 : 0, guideWeight, held ? 1 : 0],
   );
 }

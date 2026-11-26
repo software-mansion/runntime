@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ACT_CODE } from '../../../src/core/graph/ops/shared.ts';
-import { pending, type ValueMeta } from '../../../src/core/graph/value.ts';
+import {
+  materialized,
+  pending,
+  type GpuBufferRef,
+  type ValueMeta,
+} from '../../../src/core/graph/value.ts';
 import {
   BatchNorm2d,
   Conv1d,
@@ -8,6 +14,7 @@ import {
   ConvTranspose1d,
   ConvTranspose2d,
   Embedding,
+  FusedLinear,
   GroupNorm,
   LayerNorm,
   Linear,
@@ -16,7 +23,7 @@ import {
   Snake,
 } from '../../../src/core/nn/layers.ts';
 import { loadLazyStateDict } from '../../../src/core/nn/loadStateDict.ts';
-import { CpuParameter, Module, type AnyModule } from '../../../src/core/nn/module.ts';
+import { CpuParameter, Module, ModuleList, type AnyModule } from '../../../src/core/nn/module.ts';
 import { f16ToF32, f32ArrayToF16Bits } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
@@ -26,8 +33,18 @@ import {
   type LazyStateDict,
 } from '../../../src/core/weights/safetensors.ts';
 import { scaleWeight } from '../../../src/core/weights/transforms.ts';
+import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../../zoo/chunkedLoad.ts';
 import { hwc4Input, input, meta } from '../graph/values.ts';
-import { contents, quantFile, safetensorsFile, type QuantEntry } from '../weights/checkpoint.ts';
+import {
+  checkpoint,
+  contents,
+  mixedQuantFile,
+  quantFile,
+  safetensorsFile,
+  type BitsQuantEntry,
+  type Entry,
+  type QuantEntry,
+} from '../weights/checkpoint.ts';
 
 /** Binds every parameter to a stand-in of its declared shape, so forward()
  *  can build its graph without real weights. */
@@ -362,11 +379,18 @@ describe('Linear with a quantized weight', () => {
     });
   });
 
+  // The quantized matmul takes in features a multiple of 8 and of the group
+  // size, out features a multiple of 4 (int8) or 8 (int4) and a group size a
+  // multiple of 4. A case names the one limit it sits on.
   it.each([
-    { name: 'in features off the 8-row tiles', inF: 12, outF: 4, bits: 8 as const, groupSize: 4 },
-    { name: 'int4 out features off 8 per word', inF: 8, outF: 4, bits: 4 as const, groupSize: 4 },
-    { name: 'a group size off 4', inF: 16, outF: 4, bits: 8 as const, groupSize: 2 },
-  ])('refuses $name with CHECKPOINT_MISMATCH', async ({ inF, outF, bits, groupSize }) => {
+    // quantized: in 8 % 8 == 0, out 4 % 4 == 0, groups of 4
+    { name: 'int8 [4, 8] in groups of 4', inF: 8, outF: 4, bits: 8 as const, groupSize: 4 },
+    // quantized: int4 out 8 % 8 == 0
+    { name: 'int4 [8, 8] in groups of 4', inF: 8, outF: 8, bits: 4 as const, groupSize: 4 },
+    // quantized: one group over the whole row, 16 % 4 == 0
+    { name: 'int8 [4, 16] in groups of 16', inF: 16, outF: 4, bits: 8 as const, groupSize: 16 },
+  ])('loads $name as quantW', async ({ inF, outF, bits, groupSize }) => {
+    const layer = new Linear(inF, outF);
     const sd = await quantCheckpoint(bits, groupSize, {
       weight: {
         ints: new Array(inF * outF).fill(0),
@@ -374,11 +398,46 @@ describe('Linear with a quantized weight', () => {
         shape: [outF, inF],
       },
     });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({
+      weight: { elems: (inF * outF * bits) / 32, dtype: 'quantW', dims: [inF, outF] },
+      bias: meta([outF]),
+      weightScale: meta([inF / groupSize, outF]),
+    });
+    expect(sd.quantizedAsFloat).toBeUndefined();
+  });
+
+  it.each([
+    // float: in 12 % 8 != 0
+    { name: 'in features off the 8-row tiles', inF: 12, outF: 4, bits: 8 as const, groupSize: 4 },
+    // float: in 4 % 8 != 0
+    { name: 'in features under one tile', inF: 4, outF: 4, bits: 8 as const, groupSize: 4 },
+    // float: int8 out 6 % 4 != 0
+    { name: 'int8 out features off 4 per word', inF: 8, outF: 6, bits: 8 as const, groupSize: 4 },
+    // float: int4 out 4 % 8 != 0
+    { name: 'int4 out features off 8 per word', inF: 8, outF: 4, bits: 4 as const, groupSize: 4 },
+    // float: group size 2 % 4 != 0
+    { name: 'a group size off 4', inF: 16, outF: 4, bits: 8 as const, groupSize: 2 },
+    // float: group size 1
+    { name: 'a scale per value', inF: 8, outF: 4, bits: 8 as const, groupSize: 1 },
+  ])('loads $name as its dequantized floats', async ({ inF, outF, bits, groupSize }) => {
+    // ints −7 … 7 and one scale per group, (g % 5 + 1) / 4, f16-exact
+    const ints = Array.from({ length: inF * outF }, (_, i) => (i % 15) - 7);
+    const scales = Array.from({ length: (inF * outF) / groupSize }, (_, g) => ((g % 5) + 1) / 4);
+    const sd = await quantCheckpoint(bits, groupSize, {
+      weight: { ints, scales, shape: [outF, inF] },
+    });
     const layer = new Linear(inF, outF);
-    expect(() => layer.transformStateDict(sd, '')).toThrow(
-      expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
-    );
-    expect(layer.weight.shape.dtype).toBe('f32');
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({ weight: meta([inF, outF]), bias: meta([outF]) });
+    expect(layer.weightScale).toBeUndefined();
+    expect(sd.quantizedAsFloat).toEqual(['weight']);
+    // stored [in, out]: row i, column o is torch value o·in + i
+    const want = Array.from({ length: inF * outF }, (_, j) => {
+      const at = (j % outF) * inF + Math.floor(j / outF);
+      return ints[at]! * scales[Math.floor(at / groupSize)]!;
+    });
+    expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
   });
 
   it.each([
@@ -413,6 +472,601 @@ describe('Linear with a quantized weight', () => {
     expect(() => new Linear(8, 4).transformStateDict(sd, '')).toThrow(
       expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
     );
+  });
+});
+
+/** How a part's weight sits in the checkpoint. A float part has no group
+ *  size. */
+type PartSpec = {
+  out: number;
+  bias?: boolean;
+  dtype: 'F32' | 'F16' | 'int8' | 'int4';
+  groupSize?: number;
+};
+
+/** Linears over `inFeatures` inputs as the fields part0, part1, … and a
+ *  FusedLinear over them as `fused`. */
+class FusedParts extends Module {
+  readonly parts: Linear[];
+  readonly fused: FusedLinear;
+  constructor(inFeatures: number, specs: readonly PartSpec[]) {
+    super();
+    this.parts = specs.map(({ out, bias }) => new Linear(inFeatures, out, { bias }));
+    this.parts.forEach((part, p) => {
+      (this as Record<string, unknown>)[`part${p}`] = part;
+    });
+    this.fused = new FusedLinear(this.parts);
+  }
+}
+
+/** Part p's torch [out, in] weight. A float part holds p + o/4 + i/8. A
+ *  quantized part holds ints −7 … 7 and one scale per group, 0.25 … 1. Every
+ *  value and every int · scale is exact in f16. */
+function partWeight({ out, dtype, groupSize = 1 }: PartSpec, p: number, inFeatures: number) {
+  const ints = Array.from({ length: out * inFeatures }, (_, j) => ((p * 7 + j * 3) % 15) - 7);
+  const scales = Array.from(
+    { length: (out * inFeatures) / groupSize },
+    (_, g) => (((p + g) % 4) + 1) / 4,
+  );
+  const floats = Array.from(
+    { length: out * inFeatures },
+    (_, j) => p + Math.floor(j / inFeatures) / 4 + (j % inFeatures) / 8,
+  );
+  const quantized = dtype === 'int8' || dtype === 'int4';
+  return {
+    ints,
+    scales,
+    /** The values the weight stands for. */
+    values: quantized ? ints.map((q, j) => q * scales[Math.floor(j / groupSize)]!) : floats,
+  };
+}
+
+/** The dotted path of every module of `model`, as loadStateDict hands it to
+ *  fuseStateDict. */
+const pathsOf = (model: AnyModule) =>
+  new Map<AnyModule, string[]>([
+    [model, ['']],
+    ...[...model.namedModules()].map(([path, module]): [AnyModule, string[]] => [module, [path]]),
+  ]);
+
+/** Part p's bias: 10p + o. */
+const partBias = (p: number, out: number) => Array.from({ length: out }, (_, o) => 10 * p + o);
+
+/** The checkpoint of `specs`: `part<p>.weight`, and `part<p>.bias` unless
+ *  the part has none. Float parts are all F32 or all F16. */
+async function partsCheckpoint(inFeatures: number, specs: readonly PartSpec[]) {
+  const floats: Record<string, Entry> = {};
+  const quantized: Record<string, BitsQuantEntry> = {};
+  for (const [p, spec] of specs.entries()) {
+    const { ints, scales, values } = partWeight(spec, p, inFeatures);
+    const shape: [number, number] = [spec.out, inFeatures];
+    if (spec.dtype === 'int8' || spec.dtype === 'int4') {
+      quantized[`part${p}.weight`] = { ints, scales, shape, bits: spec.dtype === 'int8' ? 8 : 4 };
+    } else {
+      floats[`part${p}.weight`] = { values, shape };
+    }
+    if (spec.bias !== false) {
+      floats[`part${p}.bias`] = { values: partBias(p, spec.out), shape: [spec.out] };
+    }
+  }
+  if (specs.some((spec) => spec.dtype === 'F16')) return checkpoint('F16', floats);
+  const f32 = Object.fromEntries(
+    Object.entries(floats).map(([name, { values, shape }]) => [
+      name,
+      { data: new Float32Array(values), shape },
+    ]),
+  );
+  return fromSafetensors(bufferSource(mixedQuantFile(quantized, f32)), { chunkBytes: 0 });
+}
+
+/** The torch [Σout, in] weight and [Σout] bias a single Linear would hold
+ *  for `specs`: the parts' rows one after another, zeros for a part without
+ *  a bias. */
+function stackedByHand(inFeatures: number, specs: readonly PartSpec[]) {
+  return {
+    out: specs.reduce((sum, spec) => sum + spec.out, 0),
+    weight: specs.flatMap((spec, p) => partWeight(spec, p, inFeatures).values),
+    bias: specs.flatMap((spec, p) =>
+      spec.bias === false ? new Array<number>(spec.out).fill(0) : partBias(p, spec.out),
+    ),
+    hasBias: specs.some((spec) => spec.bias !== false),
+  };
+}
+
+/** Loads `sd` into `model` and returns what reached the upload, by state-dict
+ *  key. */
+async function uploads(model: AnyModule, sd: LazyStateDict, strict = false) {
+  const names: string[] = [];
+  const upload = vi.fn((_data: Float32Array | Uint32Array | Uint16Array, shape: ValueMeta) =>
+    pending(shape, 'reshape', []),
+  );
+  await loadLazyStateDict(model, sd, { upload, strict, onProgress: (name) => names.push(name) });
+  return Object.fromEntries(
+    upload.mock.calls.map(([data, shape], i) => [names[i]!, { shape, ...bitsOf(data) }]),
+  );
+}
+
+/** What loading `specs` through a FusedLinear uploads, with the
+ *  loadStateDict warnings it raised. */
+async function fusedUploads(inFeatures: number, specs: readonly PartSpec[], half = false) {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  onTestFinished(() => warn.mockRestore());
+  const model = new FusedParts(inFeatures, specs);
+  if (half) model.half();
+  const uploaded = await uploads(model, await partsCheckpoint(inFeatures, specs), true);
+  return { model, uploaded, warnings: warn.mock.calls.map(([message]) => String(message)) };
+}
+
+/** What a single Linear named `fused` uploads from `sd`, which holds its
+ *  `weight` and `bias`. */
+async function singleUploads(layer: Linear, sd: LazyStateDict) {
+  const uploaded = await uploads(layer, sd);
+  return Object.fromEntries(
+    Object.entries(uploaded).map(([name, value]) => [`fused.${name}`, value]),
+  );
+}
+
+/** The checkpoint of the one Linear `specs` stack into, by hand: its `weight`
+ *  as F32, F16, or the parts' ints and scales one after another, and its
+ *  `bias` when a part has one. */
+async function stackedCheckpoint(
+  inFeatures: number,
+  specs: readonly PartSpec[],
+  stored: 'F32' | 'F16' | 'quant',
+) {
+  const { out, weight, bias, hasBias } = stackedByHand(inFeatures, specs);
+  const shape: [number, number] = [out, inFeatures];
+  if (stored !== 'quant') {
+    return checkpoint(stored, {
+      weight: { values: weight, shape },
+      ...(hasBias ? { bias: { values: bias, shape: [out] } } : {}),
+    });
+  }
+  const parts = specs.map((spec, p) => partWeight(spec, p, inFeatures));
+  const file = quantFile(
+    specs[0]!.dtype === 'int8' ? 8 : 4,
+    specs[0]!.groupSize!,
+    {
+      weight: { ints: parts.flatMap((w) => w.ints), scales: parts.flatMap((w) => w.scales), shape },
+    },
+    hasBias ? { bias: { data: new Float32Array(bias), shape: [out] } } : {},
+  );
+  return fromSafetensors(bufferSource(file), { chunkBytes: 0 });
+}
+
+/** An f32 state dict of `name: [values, shape]` entries. */
+const f32Dict = (entries: Record<string, [number[], number[]]>) =>
+  memoryStateDict(
+    Object.fromEntries(
+      Object.entries(entries).map(([name, [values, shape]]) => [
+        name,
+        { data: new Float32Array(values), shape },
+      ]),
+    ),
+  );
+
+/** What `uploads` reports for f32 `values` bound to a slot of `dims`. */
+const f32Upload = (dims: number[], values: number[]) => ({
+  shape: meta(dims),
+  ...bitsOf(new Float32Array(values)),
+});
+
+describe('FusedLinear', () => {
+  const F32 = (out: number, bias?: boolean): PartSpec => ({ out, bias, dtype: 'F32' });
+  const F16 = (out: number): PartSpec => ({ out, dtype: 'F16' });
+  const int8 = (out: number, groupSize = 4): PartSpec => ({ out, dtype: 'int8', groupSize });
+  const int4 = (out: number, groupSize = 4): PartSpec => ({ out, dtype: 'int4', groupSize });
+
+  it('stacks the parts as the columns of one [in, Σout] weight, in part order', async () => {
+    // torch rows: part0 [1 2], part1 [3 4] and [5 6]. Stored [in 2, out 3]:
+    // input 0 holds 1 3 5, input 1 holds 2 4 6.
+    const sd = f32Dict({
+      'part0.weight': [
+        [1, 2],
+        [1, 2],
+      ],
+      'part0.bias': [[7], [1]],
+      'part1.weight': [
+        [3, 4, 5, 6],
+        [2, 2],
+      ],
+      'part1.bias': [[8, 9], [2]],
+    });
+    expect(await uploads(new FusedParts(2, [F32(1), F32(2)]), sd, true)).toEqual({
+      'fused.weight': f32Upload([2, 3], [1, 3, 5, 2, 4, 6]),
+      'fused.bias': f32Upload([3], [7, 8, 9]),
+    });
+  });
+
+  /** Loads `specs` through a FusedLinear and through one Linear over the
+   *  rows stacked by hand, `stored` as that weight loads. Both upload the same. */
+  async function expectLoadsAsOneLinear(
+    specs: PartSpec[],
+    stored: 'F32' | 'F16' | 'quant',
+    half = false,
+    warning?: string,
+  ) {
+    const { uploaded, warnings } = await fusedUploads(8, specs, half);
+    const { out, hasBias } = stackedByHand(8, specs);
+    const single = new Linear(8, out, { bias: hasBias });
+    if (half) single.half();
+    expect(uploaded).toEqual(
+      await singleUploads(single, await stackedCheckpoint(8, specs, stored)),
+    );
+    expect(uploaded['fused.weight']!.shape.dtype).toBe(
+      stored === 'quant' ? 'quantW' : half ? 'f16' : 'f32',
+    );
+    expect('fused.weightScale' in uploaded).toBe(stored === 'quant');
+    expect(warnings).toEqual(warning ? [warning] : []);
+  }
+
+  // The quantized matmul takes in 8 % 8 == 0, out % 4 == 0 (int8) or
+  // out % 8 == 0 (int4), and groups of a multiple of 4: the limits apply to
+  // the stacked weight, not to a part.
+  it.each<[name: string, specs: PartSpec[], stored: 'F32' | 'F16' | 'quant', half?: boolean]>([
+    ['1 float part', [F32(3)], 'F32'],
+    ['2 float parts', [F32(3), F32(5)], 'F32'],
+    ['3 float parts', [F32(4), F32(2), F32(2)], 'F32'],
+    ['5 float parts', [1, 4, 2, 7, 3].map((out) => F32(out)), 'F32'],
+    ['3 parts without a bias', [4, 2, 2].map((out) => F32(out, false)), 'F32'],
+    ['a part without a bias between two with one', [F32(2), F32(3, false), F32(1)], 'F32'],
+    ['only the last part with a bias', [F32(2, false), F32(3)], 'F32'],
+    ['F16 parts in an f32 model', [F16(2), F16(4)], 'F16'],
+    ['F16 parts in a half() model', [F16(2), F16(4)], 'F16', true],
+    ['1 int8 part', [int8(4)], 'quant'],
+    ['3 int8 parts', [int8(4), int8(8), int8(4)], 'quant'],
+    ['5 int8 parts of sizes off 4 that sum to 12', [1, 2, 3, 1, 5].map((o) => int8(o)), 'quant'],
+    ['2 int4 parts, each too narrow to run quantized alone', [int4(4), int4(4)], 'quant'],
+    ['3 int4 parts in groups of 8', [int4(8, 8), int4(4, 8), int4(4, 8)], 'quant'],
+  ])('loads %s as one Linear of the stacked rows would', async (_, specs, stored, half) => {
+    await expectLoadsAsOneLinear(specs, stored, half);
+  });
+
+  const DIFFER =
+    'loadStateDict: fused layers loaded as float, their parts are not quantized alike: fused: ';
+  // The warning names the fused layer and every part, by its file tensor.
+  it.each<[name: string, specs: PartSpec[], warning: string]>([
+    [
+      'a float part next to an int8 one',
+      [F32(4), int8(4)],
+      `${DIFFER}part0.weight is float, part1.weight is int8 in groups of 4`,
+    ],
+    [
+      'int8 next to int4',
+      [int8(4), int4(8)],
+      `${DIFFER}part0.weight is int8 in groups of 4, part1.weight is int4 in groups of 4`,
+    ],
+    [
+      'int8 in groups of 4 next to groups of 8',
+      [int8(4, 4), int8(4, 8)],
+      `${DIFFER}part0.weight is int8 in groups of 4, part1.weight is int8 in groups of 8`,
+    ],
+    [
+      'int8 between two float parts',
+      [F32(2), int8(4), F32(3, false)],
+      `${DIFFER}part0.weight is float, part1.weight is int8 in groups of 4, part2.weight is float`,
+    ],
+    // float: stacked out 4 + 2 = 6, 6 % 4 != 0
+    [
+      'int8 parts whose stacked size the quantized matmul cannot run',
+      [int8(4), int8(2)],
+      'loadStateDict: quantized weights loaded as float, the quantized kernel of their layer ' +
+        'cannot run their shape or group size: fused (FusedLinear of part0.weight, part1.weight)',
+    ],
+  ])('loads %s as the dequantized floats, with one warning', async (_, specs, warning) => {
+    await expectLoadsAsOneLinear(specs, 'F32', false, warning);
+  });
+
+  it('stacks F16 parts as halfwords, without decoding them to f32', async () => {
+    const specs = [F16(2), F16(4)];
+    const model = new FusedParts(8, specs);
+    const sd = await partsCheckpoint(8, specs);
+    model.fused.fuseStateDict(sd, pathsOf(model));
+    expect((await contents(sd.tensors.get('fused.weight')!)).type).toBe('f16');
+    expect((await contents(sd.tensors.get('fused.bias')!)).type).toBe('f16');
+  });
+
+  it('lists only the parts in the tree, and loads strict with nothing to report', async () => {
+    const { model, warnings } = await fusedUploads(4, [F32(2), F32(3, false)]);
+    expect(shapes(model)).toEqual({
+      'part0.weight': meta([4, 2]),
+      'part0.bias': meta([2]),
+      'part1.weight': meta([4, 3]),
+    });
+    expect([...model.namedModules()].map(([name]) => name)).toEqual(['part0', 'part1', 'fused']);
+    expect([...model.storageParameters()].map(([name]) => name)).toEqual([
+      'fused.weight',
+      'fused.bias',
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  /** A [1] f32 tensor of `shape`, for a test to put in a state dict. */
+  const zeros = (shape: number[]) =>
+    f32Dict({
+      t: [new Array<number>(shape.reduce((a, b) => a * b, 1)).fill(0), shape],
+    }).tensors.get('t')!;
+
+  // The model declares part0 [2, 4] and part1 [3, 4], both with a bias. The
+  // wrong shapes would still stack, so each part is checked on its own.
+  const MISMATCH = 'loadStateDict: state dict does not match model.';
+  it.each<[name: string, change: (sd: LazyStateDict) => unknown, message: string]>([
+    [
+      "a part's missing weight, by its name in the checkpoint",
+      (sd) => sd.tensors.delete('part1.weight'),
+      `${MISMATCH} missing: part1.weight.`,
+    ],
+    [
+      "a part's missing bias, by its name in the checkpoint",
+      (sd) => sd.tensors.delete('part0.bias'),
+      `${MISMATCH} missing: part0.bias.`,
+    ],
+    [
+      'a tensor no parameter reads, when strict',
+      (sd) => sd.tensors.set('extra', zeros([2])),
+      `${MISMATCH} unexpected: extra.`,
+    ],
+    [
+      'a file tensor named like its stacked weight, when strict',
+      (sd) => sd.tensors.set('fused.weight', zeros([2, 4])),
+      `${MISMATCH} unexpected: fused.weight.`,
+    ],
+    [
+      "a part's weight that is not torch [out, in]",
+      (sd) => sd.tensors.set('part1.weight', zeros([2, 4])),
+      'Linear: part1.weight has shape [2,4], expected torch layout [3, 4]',
+    ],
+    [
+      "a part's bias of another length, by the part's name",
+      (sd) => sd.tensors.set('part1.bias', zeros([2])),
+      'Linear: part1.bias has shape [2], expected [3]',
+    ],
+  ])('refuses %s', async (_, change, message) => {
+    const specs = [F32(2), F32(3)];
+    const sd = await partsCheckpoint(4, specs);
+    change(sd);
+    await expect(uploads(new FusedParts(4, specs), sd, true)).rejects.toMatchObject({
+      code: 'CHECKPOINT_MISMATCH',
+      message,
+    });
+  });
+
+  it('warns about a file tensor named like its stacked weight, and loads the parts', async () => {
+    const specs = [F32(2), F32(3, false)];
+    const sd = await partsCheckpoint(4, specs);
+    sd.tensors.set('fused.weight', zeros([5, 4]));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+    expect(await uploads(new FusedParts(4, specs), sd)).toEqual(
+      await singleUploads(new Linear(4, 5), await stackedCheckpoint(4, specs, 'F32')),
+    );
+    expect(warn.mock.calls).toEqual([
+      ['loadStateDict: state dict has tensors the model does not read: fused.weight.'],
+    ]);
+  });
+
+  it('counts the bytes of every part in the load progress', async () => {
+    const specs = [F32(2), F32(3, false)];
+    const done: [string, number, number][] = [];
+    await loadLazyStateDict(new FusedParts(4, specs), await partsCheckpoint(4, specs), {
+      upload: (_data, shape) => pending(shape, 'reshape', []),
+      onProgress: (...event) => done.push(event),
+    });
+    // part0's 2 biases, then the weights (2 + 3) · 4 f32, bound where the
+    // file holds part1's, the largest
+    expect(done).toEqual([
+      ['fused.bias', 8, 88],
+      ['fused.weight', 88, 88],
+    ]);
+  });
+
+  class Bare extends Module {}
+  /** q and k, each [1, 2] with a bias, and a hook that doubles q. */
+  class Pair extends Module {
+    q = new Linear(2, 1);
+    k = new Linear(2, 1);
+    override transformStateDict(sd: LazyStateDict, prefix: string): void {
+      for (const name of [`${prefix}.q.weight`, `${prefix}.q.bias`]) {
+        sd.tensors.set(name, scaleWeight(sd.tensors.get(name)!, 2));
+      }
+    }
+  }
+  const fusedPair = (pair: Pair) => new FusedLinear([pair.q, pair.k]);
+  const holder = (fields: Record<string, unknown>): Module => Object.assign(new Bare(), fields);
+  /** The checkpoint of a Pair at `path`: q and k, each a weight row and a bias. */
+  const pairDict = (path: string, q: number[], qBias: number[], k: number[], kBias: number[]) =>
+    f32Dict({
+      [`${path}.q.weight`]: [q, [1, 2]],
+      [`${path}.q.bias`]: [qBias, [1]],
+      [`${path}.k.weight`]: [k, [1, 2]],
+      [`${path}.k.bias`]: [kBias, [1]],
+    });
+
+  // The paths of the parts' module and of the FusedLinear. It stacks once
+  // every hook has run, so q is doubled in each.
+  it.each<[name: string, pair: string, fused: string, build: (pair: Pair) => Module]>([
+    [
+      'a field after the module whose hook edits a part',
+      'pair',
+      'qk',
+      (pair) => Object.assign(new Bare(), { pair, qk: fusedPair(pair) }),
+    ],
+    [
+      'a field before the module whose hook edits a part',
+      'pair',
+      'qk',
+      (pair) => Object.assign(new Bare(), { qk: fusedPair(pair), pair }),
+    ],
+    [
+      'a field of a sibling module of its parts',
+      'pair',
+      'fuser.qk',
+      (pair) => Object.assign(new Bare(), { pair, fuser: holder({ qk: fusedPair(pair) }) }),
+    ],
+    [
+      'a field above its parts, at any depth of the model',
+      'layers.0.pair',
+      'layers.0.qk',
+      (pair) => holder({ layers: new ModuleList([holder({ pair, qk: fusedPair(pair) })]) }),
+    ],
+  ])('stacks its parts as the hooks left them, as %s', async (_, pair, fused, build) => {
+    const sd = pairDict(pair, [1, 2], [5], [3, 4], [6]);
+    expect(await uploads(build(new Pair()), sd, true)).toEqual({
+      [`${fused}.weight`]: f32Upload([2, 2], [2, 3, 4, 4]),
+      [`${fused}.bias`]: f32Upload([2], [10, 6]),
+    });
+  });
+
+  const OUTSIDE_THE_TREE =
+    "Linear at 'pair.q': the FusedLinear over it is not in the module tree. " +
+    'Assign the FusedLinear to a field of a module of the model';
+  it.each<[name: string, fields: (pair: Pair) => Record<string, unknown>, message: string]>([
+    [
+      'it is held in two fields',
+      (pair) => {
+        const qk = fusedPair(pair);
+        return { qk, alias: qk };
+      },
+      "FusedLinear: held in two fields, 'qk' and 'alias'. Keep it in one",
+    ],
+    [
+      'a part is held in two fields',
+      (pair) => ({ alias: pair.q, qk: fusedPair(pair) }),
+      "FusedLinear at 'qk': part 0 is held in two fields, 'pair.q' and 'alias'. Keep it in one",
+    ],
+    [
+      'a part is not a field of the module tree',
+      () => ({ qk: new FusedLinear([new Linear(2, 1)]) }),
+      "FusedLinear at 'qk': part 0 of 1 is not in the module tree. " +
+        'Assign every part to a field of a module of the model',
+    ],
+    [
+      'it is held in an array, outside the module tree',
+      (pair) => ({ list: [fusedPair(pair)] }),
+      OUTSIDE_THE_TREE,
+    ],
+    [
+      'it is held in an underscore field, outside the module tree',
+      (pair) => ({ _qk: fusedPair(pair) }),
+      OUTSIDE_THE_TREE,
+    ],
+    [
+      'it is held in a local, outside the module tree',
+      (pair) => (fusedPair(pair), {}),
+      OUTSIDE_THE_TREE,
+    ],
+  ])('refuses the load when %s', async (_, fields, message) => {
+    const pair = new Pair();
+    const model = holder({ pair, ...fields(pair) });
+    await expect(uploads(model, pairDict('pair', [0, 0], [0], [0, 0], [0]))).rejects.toThrow(
+      message,
+    );
+  });
+
+  const shared = new Linear(4, 2);
+  new FusedLinear([shared]);
+  const twice = new Linear(4, 2);
+  it.each<[name: string, parts: Linear[], message: RegExp]>([
+    ['no parts', [], /needs at least one part/],
+    [
+      'parts of different input sizes',
+      [new Linear(4, 2), new Linear(8, 2)],
+      /parts read 4 and 8 features/,
+    ],
+    [
+      'a part with an activation',
+      [new Linear(4, 2, { activation: 'gelu' })],
+      /part 0 has the activation 'gelu'/,
+    ],
+    ['a part of another FusedLinear', [shared], /part 0 is already in another FusedLinear/],
+    ['the same part twice', [twice, new Linear(4, 3), twice], /part 2 is listed twice/],
+  ])('cannot be built from %s', (_, parts, message) => {
+    expect(() => new FusedLinear(parts)).toThrow(message);
+  });
+
+  it('leaves the parts as they were when it cannot be built', () => {
+    const good = new Linear(4, 2);
+    expect(() => new FusedLinear([good, new Linear(8, 2)])).toThrow(/parts read 4 and 8/);
+    expect(good.fused).toBe(false);
+    expect(fakeLoad(good).forward(input([5, 4])).shape).toEqual(meta([5, 2]));
+  });
+
+  // File order k, o, q, v, as safetensors sorts an attention block. The
+  // stacked weight carries its parts' sources, so it binds where the first
+  // of these equally large parts sits and the loader walks the file once.
+  it('binds each stacked weight where the file holds its parts, fetching every chunk once', async () => {
+    class Attention extends Module {
+      q_proj = new Linear(8, 8, { bias: false });
+      k_proj = new Linear(8, 8, { bias: false });
+      v_proj = new Linear(8, 8, { bias: false });
+      o_proj = new Linear(8, 8, { bias: false });
+      qkv = new FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
+    }
+    class Model extends Module {
+      embed = new Linear(8, 64, { bias: false });
+      layers = new ModuleList([new Attention(), new Attention()]);
+      head = new Linear(8, 64, { bias: false });
+      // As the zoo hooks do: a part replaced by a scaled one.
+      override transformStateDict(sd: LazyStateDict): void {
+        for (const name of ['layers.0.q_proj.weight', 'layers.1.q_proj.weight']) {
+          sd.tensors.set(name, scaleWeight(sd.tensors.get(name)!, 2));
+        }
+      }
+    }
+    // Two projections (256 bytes each) to a chunk, as a real file holds a
+    // few layers per 8 MB chunk. The file spans more chunks than the 4 the
+    // source keeps, so a weight read out of file order fetches one again.
+    const chunks = await chunksFetched(new Model(), zeroCheckpoint(new Model(), [], {}), 512);
+    expect(chunks.length).toBeGreaterThan(8);
+    expect(chunks).toEqual(onceInFileOrder(chunks));
+  });
+
+  it('leaves its parts unloaded, and a part run alone throws', async () => {
+    const { model } = await fusedUploads(4, [F32(2), F32(3)]);
+    const [part] = model.parts;
+    expect(part!.weight.loaded).toBe(false);
+    expect(part!.bias!.loaded).toBe(false);
+    expect(() => part!.forward(input([5, 4]))).toThrow(
+      /this layer is a part of a FusedLinear, which holds its weight/,
+    );
+  });
+
+  it.each<{ name: string; specs: PartSpec[]; stored: 'F32' | 'quant' }>([
+    { name: 'float', specs: [F32(4), F32(8), F32(4)], stored: 'F32' },
+    { name: 'int8', specs: [int8(4), int8(8), int8(4)], stored: 'quant' },
+  ])('runs the $name forward as the one matmul a Linear of that size runs', async (c) => {
+    const { model } = await fusedUploads(8, c.specs);
+    const single = new Linear(8, 16);
+    single.transformStateDict(await stackedCheckpoint(8, c.specs, c.stored), '');
+    fakeLoad(single);
+    for (const [, p] of model.storageParameters()) p.bind(pending(p.shape, 'reshape', []));
+    const x = input([5, 8]);
+    const got = model.fused.forward(x).pending;
+    const want = single.forward(x).pending;
+    const quantized = c.stored === 'quant';
+    expect(got?.op).toBe(quantized ? 'matmulQuantW' : 'matmul');
+    expect(got?.op).toBe(want?.op);
+    expect(got?.attrs).toEqual(want?.attrs);
+    // x, the weight, the scales of a quantized one, the bias
+    expect(got?.inputs.length).toBe(quantized ? 4 : 3);
+    expect(got?.inputs.map((v) => v.shape)).toEqual(want?.inputs.map((v) => v.shape));
+  });
+
+  it('half() retypes the stacked weight and bias, and dispose() frees them', async () => {
+    const { model, uploaded } = await fusedUploads(4, [F32(2), F32(3)], true);
+    expect(uploaded['fused.weight']!.shape).toEqual(meta([4, 5], 'f16'));
+    expect(uploaded['fused.bias']!.shape).toEqual(meta([5], 'f16'));
+
+    const stored = [...model.storageParameters()].map(([, p]) => p);
+    const destroys = stored.map((p) => {
+      const destroy = vi.fn();
+      p.bind(materialized(p.shape, { destroy } as unknown as GpuBufferRef));
+      return destroy;
+    });
+    expect(() => model.half()).toThrow(/'fused.weight' is already loaded/);
+    model.dispose();
+    for (const destroy of destroys) expect(destroy).toHaveBeenCalledOnce();
+    expect(stored.map((p) => p.loaded)).toEqual([false, false]);
   });
 });
 
@@ -483,6 +1137,25 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
       0, 1, 2, 3, 0.5, 1.5, 2.5, 3.5,
     ]);
   });
+
+  it.for([8, 4] as const)(
+    'takes the int%i Conv1d weight the Python quantizer writes',
+    async (bits) => {
+      // tools/python's golden file holds torch [out 6, in 16, kernel 4] as
+      // [6, 64] in groups of 32. 6 outputs pad to the packing width, 8.
+      const golden = new URL(
+        `../../../../../tools/python/tests/golden/tiny.int${bits}.safetensors`,
+        import.meta.url,
+      );
+      const sd = await fromSafetensors(bufferSource(readFileSync(golden)));
+      const layer = new Conv1d(16, 6, 4, { bias: false });
+      layer.transformStateDict(sd, 'conv');
+      expect(shapes(layer)).toEqual({
+        weight: { elems: (64 * 8 * bits) / 32, dtype: 'quantW', dims: [64, 8] },
+        weightScale: meta([2, 8]),
+      });
+    },
+  );
 
   it('keeps a Conv1d group that ends inside a channel', async () => {
     const layer = new Conv1d(8, 4, 3);
@@ -1127,5 +1800,16 @@ describe('MultiHeadAttention', () => {
     const kv = input([5, 16]);
     expect(attn.forward(input([5, 32]), kv, kv).shape).toEqual(meta([5, 32]));
     expect(attn.forwardPacked(input([5, 64])).shape).toEqual(meta([5, 32]));
+  });
+
+  // attrs[10] is the score scale.
+  it.each([
+    { name: '1/√headDim by default', scale: undefined, want: 1 / Math.sqrt(8) },
+    { name: 'the scale it was built with', scale: 1, want: 1 },
+  ])('scales the scores by $name', ({ scale, want }) => {
+    const attn = new MultiHeadAttention({ ...opts, scale });
+    const kv = input([5, 16]);
+    expect(attn.forward(input([5, 32]), kv, kv).pending?.attrs?.[10]).toBe(want);
+    expect(attn.forwardPacked(input([5, 64])).pending?.attrs?.[10]).toBe(want);
   });
 });

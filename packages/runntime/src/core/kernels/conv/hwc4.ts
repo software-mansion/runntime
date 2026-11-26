@@ -140,9 +140,9 @@ export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ gid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const hOut = d.u32((dims.h + 2 * padding - kH) / stride) + 1;
-    const wOut = d.u32((dims.w + 2 * padding - kW) / stride) + 1;
-    const wRuns = d.u32((wOut + cols - 1) / cols);
+    const hOut = std.intdiv(dims.h + 2 * padding - kH, stride) + 1;
+    const wOut = std.intdiv(dims.w + 2 * padding - kW, stride) + 1;
+    const wRuns = std.intdiv(wOut + cols - 1, cols);
     const idx = flatIndex(gid);
     if (idx >= co4 * hOut * wRuns) {
       return;
@@ -150,9 +150,9 @@ export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
     // Narrow outputs put the channel block fastest: lanes share input loads
     // and store whole pixels. Wide ones put the column run fastest, so lanes
     // share one weight row.
-    const oB = narrowOut ? idx % co4 : d.u32(idx / (wRuns * hOut));
-    const ox0 = (narrowOut ? d.u32(idx / co4) % wRuns : idx % wRuns) * cols;
-    const oy = narrowOut ? d.u32(idx / (co4 * wRuns)) : d.u32(idx / wRuns) % hOut;
+    const oB = narrowOut ? idx % co4 : std.intdiv(idx, wRuns * hOut);
+    const ox0 = (narrowOut ? std.intdiv(idx, co4) % wRuns : idx % wRuns) * cols;
+    const oy = narrowOut ? std.intdiv(idx, co4 * wRuns) : std.intdiv(idx, wRuns) % hOut;
 
     const accs = d.arrayOf(d.vec4h, cols)();
     for (const ky of tgpu.unroll(std.range(kH))) {
@@ -255,11 +255,11 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ lid, wid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const hOut = d.u32((dims.h + 2 * padding - kH) / stride) + 1;
-    const wOut = d.u32((dims.w + 2 * padding - kW) / stride) + 1;
+    const hOut = std.intdiv(dims.h + 2 * padding - kH, stride) + 1;
+    const wOut = std.intdiv(dims.w + 2 * padding - kW, stride) + 1;
     const nPix = hOut * wOut;
     const tx = lid % TILED_WG_X;
-    const ty = d.u32(lid / TILED_WG_X);
+    const ty = std.intdiv(lid, TILED_WG_X);
     const nBase = wid.x * TILED_BN;
     const oBase = wid.y * TILED_BMB;
 
@@ -271,11 +271,11 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
       for (const i of tgpu.unroll(std.range(TILED_A_LOADS))) {
         const e = lid + i * TILED_THREADS;
         const iL = e % 4;
-        const oBl = d.u32(e / 4) % TILED_BMB;
-        const kgl = d.u32(e / (4 * TILED_BMB));
+        const oBl = std.intdiv(e, 4) % TILED_BMB;
+        const kgl = std.intdiv(e, 4 * TILED_BMB);
         const kg = kg0 + kgl;
         const oB = oBase + oBl;
-        const tap = d.u32(kg / ci4);
+        const tap = std.intdiv(kg, ci4);
         const iB = kg % ci4;
         let v = d.vec4h();
         if (kg < kGroups && oB < co4) {
@@ -287,14 +287,14 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
       for (const i of tgpu.unroll(std.range(TILED_B_LOADS))) {
         const e = lid + i * TILED_THREADS;
         const kgl = e % TILED_BKG;
-        const px = d.u32(e / TILED_BKG);
+        const px = std.intdiv(e, TILED_BKG);
         const kg = kg0 + kgl;
         const n = nBase + px;
-        const tap = d.u32(kg / ci4);
+        const tap = std.intdiv(kg, ci4);
         const iB = kg % ci4;
-        const ky = d.u32(tap / kW);
+        const ky = std.intdiv(tap, kW);
         const kx = tap % kW;
-        const oy = d.u32(n / wOut);
+        const oy = std.intdiv(n, wOut);
         const ox = n % wOut;
         const iyP = oy * stride + ky;
         const ixP = ox * stride + kx;
@@ -378,12 +378,12 @@ export const makeConv1x1Kernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ gid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const pT = d.u32((dims.h * dims.w) / pxT);
+    const pT = std.intdiv(dims.h * dims.w, pxT);
     const idx = flatIndex(gid);
     if (idx >= pT * co4) {
       return;
     }
-    const p0 = d.u32(idx / co4) * pxT;
+    const p0 = std.intdiv(idx, co4) * pxT;
     const oB = idx % co4;
 
     const accs = d.arrayOf(d.vec4f, pxT)();
@@ -456,9 +456,9 @@ export const makeConv1x1SmallKernel = (cfg: Conv2dHwc4Cfg) => {
     const dims = convLayout.$.dims;
     const hw = dims.h * dims.w;
     const kLane = lid % SMALL_1X1_KS;
-    const oLane = d.u32(lid / SMALL_1X1_KS);
+    const oLane = std.intdiv(lid, SMALL_1X1_KS);
     const oB = (wid.x % oGroups) * SMALL_1X1_OL + oLane;
-    const p0 = d.u32(wid.x / oGroups) * SMALL_1X1_PXT;
+    const p0 = std.intdiv(wid.x, oGroups) * SMALL_1X1_PXT;
 
     const accs = d.arrayOf(d.vec4h, SMALL_1X1_PXT)();
     if (oB < co4) {
@@ -539,16 +539,16 @@ const makeConvDwKernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ gid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const hOut = d.u32((dims.h + 2 * padding - kH) / stride) + 1;
-    const wOut = d.u32((dims.w + 2 * padding - kW) / stride) + 1;
-    const wRuns = d.u32((wOut + cols - 1) / cols);
+    const hOut = std.intdiv(dims.h + 2 * padding - kH, stride) + 1;
+    const wOut = std.intdiv(dims.w + 2 * padding - kW, stride) + 1;
+    const wRuns = std.intdiv(wOut + cols - 1, cols);
     const idx = flatIndex(gid);
     if (idx >= c4n * hOut * wRuns) {
       return;
     }
     const cB = idx % c4n;
-    const run = d.u32(idx / c4n) % wRuns;
-    const oy = d.u32(idx / (c4n * wRuns));
+    const run = std.intdiv(idx, c4n) % wRuns;
+    const oy = std.intdiv(idx, c4n * wRuns);
     const ox0 = run * cols;
 
     const accs = d.arrayOf(d.vec4f, cols)();
@@ -637,16 +637,16 @@ const makeWinogradInKernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ lid, wid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const tilesX = d.u32((dims.w + 3) / 4);
-    const tiles = tilesX * d.u32((dims.h + 3) / 4);
+    const tilesX = std.intdiv(dims.w + 3, 4);
+    const tiles = tilesX * std.intdiv(dims.h + 3, 4);
     const p = lid % WINOGRAD_PAIRS;
-    const lane = d.u32(lid / WINOGRAD_PAIRS);
+    const lane = std.intdiv(lid, WINOGRAD_PAIRS);
     const pair = flatWorkgroupId(wid) * WINOGRAD_PAIRS + p;
     const live = pair < tiles * ci4;
     const iB = pair % ci4;
-    const t = d.u32(pair / ci4);
+    const t = std.intdiv(pair, ci4);
     // Patch row `lane` in padded coordinates: input (y, x) is (yP - 1, xP - 1).
-    const yP = d.u32(t / tilesX) * 4 + lane;
+    const yP = std.intdiv(t, tilesX) * 4 + lane;
     const x0 = (t % tilesX) * 4;
 
     const xs = d.arrayOf(d.vec4f, 6)();
@@ -691,15 +691,15 @@ const makeWinogradMulKernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ gid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const tiles = d.u32((dims.w + 3) / 4) * d.u32((dims.h + 3) / 4);
-    const groups = d.u32((tiles + WINOGRAD_MUL_TILES - 1) / WINOGRAD_MUL_TILES);
+    const tiles = std.intdiv(dims.w + 3, 4) * std.intdiv(dims.h + 3, 4);
+    const groups = std.intdiv(tiles + WINOGRAD_MUL_TILES - 1, WINOGRAD_MUL_TILES);
     const idx = flatIndex(gid);
     if (idx >= WINOGRAD_PLANES * groups * co4) {
       return;
     }
     const oB = idx % co4;
-    const t0 = (d.u32(idx / co4) % groups) * WINOGRAD_MUL_TILES;
-    const k = d.u32(idx / (co4 * groups));
+    const t0 = (std.intdiv(idx, co4) % groups) * WINOGRAD_MUL_TILES;
+    const k = std.intdiv(idx, co4 * groups);
     const plane = k * tiles;
 
     const accs = d.arrayOf(d.vec4f, WINOGRAD_MUL_TILES)();
@@ -733,14 +733,14 @@ const makeWinogradOutKernel = (cfg: Conv2dHwc4Cfg) => {
   })(({ lid, wid }) => {
     'use gpu';
     const dims = convLayout.$.dims;
-    const tilesX = d.u32((dims.w + 3) / 4);
-    const tiles = tilesX * d.u32((dims.h + 3) / 4);
+    const tilesX = std.intdiv(dims.w + 3, 4);
+    const tiles = tilesX * std.intdiv(dims.h + 3, 4);
     const p = lid % WINOGRAD_PAIRS;
-    const lane = d.u32(lid / WINOGRAD_PAIRS);
+    const lane = std.intdiv(lid, WINOGRAD_PAIRS);
     const pair = flatWorkgroupId(wid) * WINOGRAD_PAIRS + p;
     const live = pair < tiles * co4;
     const oB = pair % co4;
-    const t = d.u32(pair / co4);
+    const t = std.intdiv(pair, co4);
 
     const ms = d.arrayOf(d.vec4f, 6)();
     if (live) {
@@ -764,7 +764,7 @@ const makeWinogradOutKernel = (cfg: Conv2dHwc4Cfg) => {
         winogradRows.$[sb + 16 + lane]!,
         winogradRows.$[sb + 20 + lane]!,
       );
-      const y0 = d.u32(t / tilesX) * 4;
+      const y0 = std.intdiv(t, tilesX) * 4;
       for (const r of tgpu.unroll(std.range(4))) {
         const y = y0 + r;
         if (y < dims.h) {
@@ -976,15 +976,15 @@ const makeMaxPoolHwc4Kernel = (cfg: MaxPool2dHwc4Cfg) => {
   })(({ gid }) => {
     'use gpu';
     const dims = moveLayout.$.dims;
-    const hOut = d.u32((dims.h + 2 * padding - k) / stride) + 1;
-    const wOut = d.u32((dims.w + 2 * padding - k) / stride) + 1;
+    const hOut = std.intdiv(dims.h + 2 * padding - k, stride) + 1;
+    const wOut = std.intdiv(dims.w + 2 * padding - k, stride) + 1;
     const idx = flatIndex(gid);
     if (idx >= dims.c4 * hOut * wOut) {
       return;
     }
     const cB = idx % dims.c4;
-    const ox = d.u32(idx / dims.c4) % wOut;
-    const oy = d.u32(idx / (dims.c4 * wOut));
+    const ox = std.intdiv(idx, dims.c4) % wOut;
+    const oy = std.intdiv(idx, dims.c4 * wOut);
 
     let best = d.vec4h(-65504.0); // f16 lowest; every window has >= 1 valid tap
     for (let ky = d.u32(0); ky < k; ky++) {
@@ -1017,10 +1017,10 @@ const makeUpsampleHwc4Kernel = (scale: number) =>
       return;
     }
     const cB = idx % dims.c4;
-    const ox = d.u32(idx / dims.c4) % wOut;
-    const oy = d.u32(idx / (dims.c4 * wOut));
+    const ox = std.intdiv(idx, dims.c4) % wOut;
+    const oy = std.intdiv(idx, dims.c4 * wOut);
     moveLayout.$.out[(oy * wOut + ox) * dims.outC4 + dims.outOffB + cB] = d.vec4h(
-      moveLayout.$.x[(d.u32(oy / scale) * dims.w + d.u32(ox / scale)) * dims.c4 + cB]!,
+      moveLayout.$.x[(std.intdiv(oy, scale) * dims.w + std.intdiv(ox, scale)) * dims.c4 + cB]!,
     );
   });
 
@@ -1033,15 +1033,15 @@ const makeAvgPoolHwc4Kernel = (cfg: AvgPool2dHwc4Cfg) => {
   })(({ gid }) => {
     'use gpu';
     const dims = moveLayout.$.dims;
-    const hOut = d.u32((dims.h - k) / stride) + 1;
-    const wOut = d.u32((dims.w - k) / stride) + 1;
+    const hOut = std.intdiv(dims.h - k, stride) + 1;
+    const wOut = std.intdiv(dims.w - k, stride) + 1;
     const idx = flatIndex(gid);
     if (idx >= dims.c4 * hOut * wOut) {
       return;
     }
     const cB = idx % dims.c4;
-    const ox = d.u32(idx / dims.c4) % wOut;
-    const oy = d.u32(idx / (dims.c4 * wOut));
+    const ox = std.intdiv(idx, dims.c4) % wOut;
+    const oy = std.intdiv(idx, dims.c4 * wOut);
 
     // f32 accumulation: a k² sum of f16 values drifts too far at k up to 8.
     let acc = d.vec4f();
@@ -1070,8 +1070,8 @@ const makePad2dHwc4Kernel = (padH: number, padW: number) =>
       return;
     }
     const cB = idx % dims.c4;
-    const ox = d.u32(idx / dims.c4) % wOut;
-    const oy = d.u32(idx / (dims.c4 * wOut));
+    const ox = std.intdiv(idx, dims.c4) % wOut;
+    const oy = std.intdiv(idx, dims.c4 * wOut);
     let v = d.vec4h();
     if (ox >= padW && ox < dims.w + padW && oy >= padH && oy < dims.h + padH) {
       v = d.vec4h(moveLayout.$.x[((oy - padH) * dims.w + (ox - padW)) * dims.c4 + cB]!);
@@ -1107,8 +1107,8 @@ const makeResizeBilinearHwc4Kernel = (alignCorners: boolean) =>
       return;
     }
     const cB = idx % dims.c4;
-    const ox = d.u32(idx / dims.c4) % dims.outW;
-    const oy = d.u32(idx / (dims.c4 * dims.outW));
+    const ox = std.intdiv(idx, dims.c4) % dims.outW;
+    const oy = std.intdiv(idx, dims.c4 * dims.outW);
 
     let sy = d.f32(0);
     let sx = d.f32(0);
@@ -1153,7 +1153,7 @@ const makeChannelAffineHwc4Kernel = (hasShift: boolean) =>
   })(({ gid }) => {
     'use gpu';
     const dims = affineLayout.$.dims;
-    const c4 = d.u32((dims.c + 3) / 4);
+    const c4 = std.intdiv(dims.c + 3, 4);
     const idx = flatIndex(gid);
     if (idx >= dims.h * dims.w * c4) {
       return;
@@ -1297,7 +1297,7 @@ const copyChHwc4Kernel = tgpu.computeFn({
   if (idx >= dims.pElems * dims.nB) {
     return;
   }
-  const px = d.u32(idx / dims.nB);
+  const px = std.intdiv(idx, dims.nB);
   const b = idx % dims.nB;
   copyLayout.$.out[px * dims.dstC4 + dims.dstOffB + b] = d.vec4h(
     copyLayout.$.x[px * dims.srcC4 + dims.srcOffB + b]!,
@@ -1352,12 +1352,12 @@ const makeToHwc4Kernel = (srcKey: 'f32' | 'f16') => {
     'use gpu';
     const dims = layout.$.dims;
     const p = dims.h * dims.w;
-    const c4 = d.u32((dims.c + 3) / 4);
+    const c4 = std.intdiv(dims.c + 3, 4);
     const idx = flatIndex(gid);
     if (idx >= p * c4) {
       return;
     }
-    const px = d.u32(idx / c4);
+    const px = std.intdiv(idx, c4);
     const cB = idx % c4;
     const c0 = cB * 4;
     const zero = d.f16(0);
@@ -1390,12 +1390,12 @@ const makeToChwKernel = (dstKey: 'f32' | 'f16') => {
     'use gpu';
     const dims = layout.$.dims;
     const p = dims.h * dims.w;
-    const c4 = d.u32((dims.c + 3) / 4);
+    const c4 = std.intdiv(dims.c + 3, 4);
     const idx = flatIndex(gid);
     if (idx >= p * c4) {
       return;
     }
-    const px = d.u32(idx / c4);
+    const px = std.intdiv(idx, c4);
     const cB = idx % c4;
     const v = layout.$.x[px * c4 + cB]!;
     const c0 = cB * 4;

@@ -137,8 +137,9 @@ describe('MiniLM from a quantized checkpoint', () => {
       quantFile(bits, groupSize, quantized, other),
       dtype,
     );
-    // Every Linear loaded quantized, so no layer took the float matmul.
-    const scaleNames = [...model.namedParameters()]
+    // Every Linear loaded quantized, so no layer took the float matmul. q, k
+    // and v are stored as the one weight of the FusedLinear over them.
+    const scaleNames = [...model.storageParameters()]
       .map(([name]) => name)
       .filter((name) => name.endsWith('weightScale'));
     expect(scaleNames).toEqual(

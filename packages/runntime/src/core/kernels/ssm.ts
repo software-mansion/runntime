@@ -20,7 +20,7 @@ const sourcePixel = (direction: number, position: number, width: number, height:
     t = width * height - 1 - t;
   }
   if (direction === 1 || direction === 3) {
-    return (t % height) * width + d.u32(t / height);
+    return (t % height) * width + std.intdiv(t, height);
   }
   return t;
 };
@@ -49,8 +49,8 @@ export const ssmScanProjectXKernel = tgpu.computeFn({
     return;
   }
   const pos = thread % P;
-  const row = d.u32(thread / P) % rows;
-  const dir = d.u32(thread / (P * rows));
+  const row = std.intdiv(thread, P) % rows;
+  const dir = std.intdiv(thread, P * rows);
   const pixel = sourcePixel(dir, pos, D.w, D.h);
 
   let acc = d.f32(0);
@@ -84,8 +84,8 @@ export const ssmScanProjectDtKernel = tgpu.computeFn({
     return;
   }
   const pos = thread % P;
-  const co = d.u32(thread / P) % D.c;
-  const dir = d.u32(thread / (P * D.c));
+  const co = std.intdiv(thread, P) % D.c;
+  const dir = std.intdiv(thread, P * D.c);
   const dtBase = SSM_DIRS * D.c + 2 * SSM_DIRS * SSM_STATE + dir * D.rank;
 
   let acc = d.f32(0);
@@ -133,7 +133,7 @@ export const ssmSelectiveScanKernel = tgpu.computeFn({
   if (seq >= SSM_DIRS * D.c) {
     return;
   }
-  const dir = d.u32(seq / D.c);
+  const dir = std.intdiv(seq, D.c);
   const ch = seq % D.c;
   const bBase = SSM_DIRS * D.c + dir * SSM_STATE;
   const cBase = bBase + SSM_DIRS * SSM_STATE;
@@ -186,7 +186,7 @@ export const ssmScanMergeKernel = tgpu.computeFn({
   if (thread >= D.c * P) {
     return;
   }
-  const ch = d.u32(thread / P);
+  const ch = std.intdiv(thread, P);
   const pixel = thread % P;
   // Unrolled, so `dir` is comptime and each direction keeps only its own
   // address arithmetic.
@@ -194,7 +194,7 @@ export const ssmScanMergeKernel = tgpu.computeFn({
   for (const dir of tgpu.unroll(std.range(SSM_DIRS))) {
     let position = pixel;
     if (dir === 1 || dir === 3) {
-      position = (pixel % D.w) * D.h + d.u32(pixel / D.w);
+      position = (pixel % D.w) * D.h + std.intdiv(pixel, D.w);
     }
     if (dir >= 2) {
       position = P - 1 - position;

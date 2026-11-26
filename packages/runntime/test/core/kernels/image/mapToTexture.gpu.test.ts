@@ -1,5 +1,5 @@
 import { d } from 'typegpu';
-import { describe, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createMapToTexture } from '../../../../src/core/kernels/image/mapToTexture.ts';
 import { expectClose, gpu, randomF32 } from '../../../gpu.ts';
 
@@ -37,6 +37,7 @@ async function draw(
   outW: number,
   outH: number,
   normalize: 'none' | 'minmax',
+  kernel = mapToTexture,
 ): Promise<Float32Array> {
   const buffer = root.createBuffer(d.arrayOf(d.f32, map.length), Array.from(map)).$usage('storage');
   const target = root.device.createTexture({
@@ -54,7 +55,7 @@ async function draw(
     readback.destroy();
   });
   const enc = root.device.createCommandEncoder();
-  mapToTexture.encode(enc, buffer, target, { width: w, height: h, normalize });
+  kernel.encode(enc, buffer, target, { width: w, height: h, normalize });
   enc.copyTextureToBuffer({ texture: target }, { buffer: readback, bytesPerRow: outW * 16 }, [
     outW,
     outH,
@@ -98,6 +99,30 @@ describe('mapToTexture kernel', () => {
     const want = resampleRef(map, w, h, outW, outH).map((v) => (v - lo) / (hi - lo));
     const got = await draw(map, w, h, outW, outH, 'minmax');
     expectClose(got, want, { atol: 1e-5, rtol: 1e-5 });
+  });
+
+  it.for([
+    { name: 'nothing for the format compile() got', format: 'rgba32float', draws: 0 },
+    { name: 'the draw pipeline for another format', format: 'rgba8unorm', draws: 1 },
+  ] as const)('after compile(), encode() compiles $name', async ({ format, draws }) => {
+    const kernel = createMapToTexture(root);
+    onTestFinished(() => kernel.dispose());
+    await kernel.compile(format);
+    const compute = vi.spyOn(root.device, 'createComputePipeline');
+    const render = vi.spyOn(root.device, 'createRenderPipeline');
+    onTestFinished(() => {
+      compute.mockRestore();
+      render.mockRestore();
+    });
+    const map = randomF32(64, 3);
+    const lo = Math.min(...map);
+    const hi = Math.max(...map);
+    const want = resampleRef(map, 8, 8, 16, 16).map((v) => (v - lo) / (hi - lo));
+    // minmax, so the range pipeline runs too. draw() renders to rgba32float.
+    const got = await draw(map, 8, 8, 16, 16, 'minmax', kernel);
+    expectClose(got, want, { atol: 1e-5, rtol: 1e-5 });
+    expect(compute).not.toHaveBeenCalled();
+    expect(render).toHaveBeenCalledTimes(draws);
   });
 
   it('normalize minmax draws a flat map as 0', async () => {

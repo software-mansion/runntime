@@ -18,8 +18,7 @@ import {
   type QuantEntry,
 } from '../../core/weights/checkpoint.ts';
 
-// One layer: hidden 4, 2 q heads and 1 kv head of size 4, so d^-½ = 0.5 is
-// exact in f16. Three codebooks of three codes: two coarse, one fine.
+// One layer: hidden 4, 2 q heads and 1 kv head of size 4. Three codebooks of three codes: two coarse, one fine.
 const CFG: ReverbConfig = {
   layers: 1,
   hidden: 4,
@@ -145,8 +144,8 @@ describe('transformReverbStateDict', () => {
       ],
     });
     expect(await get('llm.layers.0.self_attn.qk_norm')).toEqual({
-      type: 'f32',
-      values: [0.5, 1.5, 1, 2, 0.5, 1.5, 1, 2, 5, 7, 6, 8],
+      type,
+      values: [1, 3, 2, 4, 1, 3, 2, 4, 5, 7, 6, 8],
     });
     expect(await get('llm.layers.0.mlp.up_gate.weight')).toEqual({
       type,

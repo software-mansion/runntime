@@ -66,9 +66,14 @@ class ClippedLinear extends nn.Module {
     return { lo: this.output_min.data[0]!, hi: this.output_max.data[0]! };
   }
 
+  /** `x` clamped to the bounds of the input. */
+  clampInput(x: Value): Value {
+    return clamp(x, this.input_min.data[0]!, this.input_max.data[0]!);
+  }
+
   /** The matmul on the clamped input, its output left unclamped. */
   unclamped(x: Value): Value {
-    return this.linear.forward(clamp(x, this.input_min.data[0]!, this.input_max.data[0]!));
+    return this.linear.forward(this.clampInput(x));
   }
 
   forward(x: Value): Value {
@@ -141,8 +146,12 @@ class LightConv extends nn.Module<[Value], Value> {
 /** Local attention: the projections fused at load, the distance bias and q
  *  scale computed from the checkpoint at load. */
 class AudioAttention extends nn.Module {
-  /** q | k | v rows, with the bounds of all three. */
-  readonly qkv: ClippedLinear;
+  /** Its bounds clamp all of qkv: the load checks k_proj and v_proj have
+   *  the same. */
+  readonly q_proj: ClippedLinear;
+  readonly k_proj: ClippedLinear;
+  readonly v_proj: ClippedLinear;
+  readonly qkv: nn.FusedLinear;
   /** One bias row per key distance [window, hidden], f32, from
    *  `relative_k_proj`. */
   readonly rel: nn.Parameter;
@@ -159,10 +168,19 @@ class AudioAttention extends nn.Module {
         undefined,
         true,
       );
-    this.qkv = new ClippedLinear(hidden, 3 * hidden);
+    this.q_proj = new ClippedLinear(hidden, hidden);
+    this.k_proj = new ClippedLinear(hidden, hidden);
+    this.v_proj = new ClippedLinear(hidden, hidden);
+    this.qkv = new nn.FusedLinear([this.q_proj.linear, this.k_proj.linear, this.v_proj.linear]);
     this.rel = f32(window, hidden);
     this.q_scale = f32(headDim);
     this.post = new ClippedLinear(hidden, hidden);
+  }
+
+  /** q | k | v of `x` in one matmul, input and output clamped. */
+  project(x: Value): Value {
+    const { lo, hi } = this.q_proj.outBounds;
+    return clamp(this.qkv.forward(this.q_proj.clampInput(x)), lo, hi);
   }
 }
 
@@ -191,7 +209,7 @@ class AudioLayer extends nn.Module<[Value], Value> {
     const { heads, headDim, window, logitCap } = this.cfg;
     const { self_attn } = this;
     x = this.feed_forward1.forward(x);
-    const qkv = self_attn.qkv.forward(this.norm_pre_attn.forward(x));
+    const qkv = self_attn.project(this.norm_pre_attn.forward(x));
     const a = localAttention(qkv, self_attn.rel.value, self_attn.q_scale.value, {
       heads,
       headDim,

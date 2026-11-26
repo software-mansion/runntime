@@ -87,11 +87,9 @@ describe('convTranspose2d kernel', () => {
   it('runs past GRID_Y_STRIDE outputs, in the second grid dimension', () =>
     checkConvTranspose({ cIn: 2, cOut: 1, h: 1024, w: 1025, k: 2 }, 'f32'));
 
-  // Known bug: the kernel splits the flat output index into channel, row and
-  // column with d.u32(idx / wOut), which TypeGPU compiles to u32(f32(idx) /
-  // f32(wOut)). f32 counts exactly only up to 2^24, so past it outputs come
-  // from the wrong pixel. Turn into a plain `it` with the fix.
-  it.fails('runs past 2^24 outputs', async () => {
+  // f32 counts exactly only up to 2^24, so the flat output index past it must
+  // be split with integer division or outputs come from the wrong pixel.
+  it('runs past 2^24 outputs', async () => {
     expect(4098 * 4096).toBeGreaterThan(2 ** 24);
     await checkConvTranspose({ cIn: 2, cOut: 1, h: 2049, w: 2048, k: 2 }, 'f32');
   });

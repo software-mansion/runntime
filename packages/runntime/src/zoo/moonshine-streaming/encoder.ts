@@ -3,8 +3,7 @@
  *  per-layer asymmetric sliding-window attention, with windows converted from
  *  HF's strict bounds to the kernel's inclusive form.
  *
- *  There is no rope, so the score scale folds into the q columns at load. The
- *  loader also adds 1 back to the checkpoint's offset norm gamma, so plain
+ *  The loader adds 1 back to the checkpoint's offset norm gamma, so plain
  *  weight-only LayerNorms serve here. Module fields are named like the
  *  checkpoint. */
 
@@ -13,8 +12,10 @@ import type { MoonshineStreamingConfig } from './config.ts';
 import { StreamingEmbedder } from './frontend.ts';
 
 class EncoderAttn extends nn.Module {
-  /** q | k | v rows, fused at load. */
-  readonly qkv: nn.Linear;
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly o_proj: nn.Linear;
   constructor(
@@ -24,7 +25,10 @@ class EncoderAttn extends nn.Module {
     super();
     const { hidden, heads, headDim } = cfg.enc;
     const qw = heads * headDim;
-    this.qkv = new nn.Linear(hidden, 3 * qw, { bias: false });
+    this.q_proj = new nn.Linear(hidden, qw, { bias: false });
+    this.k_proj = new nn.Linear(hidden, qw, { bias: false });
+    this.v_proj = new nn.Linear(hidden, qw, { bias: false });
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: heads,
       kvHeads: heads,

@@ -125,6 +125,7 @@ export {
 export type { GpuOpTime, GpuPerfSink, GpuSubmitTiming } from './gpu/perf.ts';
 export { defaultRoot, resetRunntime, supportsF16 } from './gpu/context.ts';
 export { inGpuErrorScopes, warmUp } from './gpu/errorScopes.ts';
+export { withAsyncCompile } from './gpu/asyncCompile.ts';
 export {
   RUNNTIME_ERROR_CODES,
   RunntimeError,
@@ -152,7 +153,7 @@ export { foldBnIntoConv } from './weights/foldBn.ts';
 export {
   concatRows,
   dequantize,
-  floatTensor,
+  inTorchShape,
   permuteRows,
   reshapeWeight,
   scaleWeight,

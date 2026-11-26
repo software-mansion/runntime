@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WeightCache } from '../../../src/core/weights/cache.ts';
 import { f16ToF32 } from '../../../src/core/weights/convert.ts';
-import { floatTensor } from '../../../src/core/weights/transforms.ts';
 import {
   bufferSource,
   chunkedSource,
@@ -12,7 +11,7 @@ import {
   httpRangeSource,
   memoryStateDict,
   parseSafetensorsHeader,
-  type FloatTensor,
+  type LazyTensor,
   type RangeSource,
   type SafeTensorInfo,
 } from '../../../src/core/weights/safetensors.ts';
@@ -537,7 +536,26 @@ describe('fromSafetensors', () => {
       expect(sd.tensors.get('fc.weight')!.kind).toBe('quant');
     });
 
-    it.each(['f32', 'u16', 'halfWords', 'words'] as const)(
+    it('reads f32() of a quantized tensor as each int times the scale of its group', async () => {
+      // ints 1 2 | 3 4 and −1 −2 | −3 −4, scales 0.5 2 and 1 0.25
+      const sd = await open({
+        'fc.weight': {
+          dtype: 'I8',
+          shape: [2, 4],
+          bytes: Uint8Array.from([1, 2, 3, 4, 255, 254, 253, 252]),
+        },
+        'fc.weight_scale': {
+          dtype: 'F16',
+          shape: [2, 2],
+          bytes: u16Bytes([0x3800, 0x4000, 0x3c00, 0x3400]),
+        },
+      });
+      expect(await sd.tensors.get('fc.weight')!.f32()).toEqual(
+        new Float32Array([0.5, 1, 6, 8, -1, -2, -0.75, -1]),
+      );
+    });
+
+    it.each(['u16', 'halfWords', 'words'] as const)(
       'rejects %s() on a quantized tensor with CHECKPOINT_MISMATCH',
       async (call) => {
         const sd = await open({
@@ -618,21 +636,30 @@ describe('fromSafetensors', () => {
     it.for([4, 8])('reads int%i weights within half a step of the float source', async (bits) => {
       const source = await golden('tiny.safetensors');
       const sd = await golden(`tiny.int${bits}.safetensors`);
-      const w = sd.tensors.get('layer.weight')!;
-      if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
-      expect(w).toMatchObject({ shape: [8, 64], bits, groupSize: 32 });
-      const ints = await w.ints();
-      const halves = await w.scales();
-      const scales = halves instanceof Float32Array ? halves : f16ToF32(halves);
-      const want = await source.tensors.get('layer.weight')!.f32();
-      want.forEach((v, i) => {
-        const scale = scales[Math.floor(i / 32)]!;
-        expect(Math.abs(ints[i]! * scale - v)).toBeLessThanOrEqual(scale / 2 + 1e-6);
-      });
-      // The tensors it leaves alone keep their bytes.
-      for (const name of ['embed.weight', 'layer.bias', 'norm.weight']) {
+      // The tool stores a weight as rows of everything after its first dim:
+      // conv.weight is torch [6, 16, 4], and no file setting names the bits
+      // or the group size.
+      const quantized = { 'layer.weight': [8, 64], 'conv.weight': [6, 64] };
+      for (const [name, shape] of Object.entries(quantized)) {
+        const w = sd.tensors.get(name)!;
+        if (w.kind !== 'quant') throw new Error('expected a quantized tensor');
+        expect(w).toMatchObject({ shape, bits, groupSize: 32 });
+        const ints = await w.ints();
+        const halves = await w.scales();
+        const scales = halves instanceof Float32Array ? halves : f16ToF32(halves);
+        const want = await source.tensors.get(name)!.f32();
+        expect(ints.length).toBe(want.length);
+        want.forEach((v, i) => {
+          const scale = scales[Math.floor(i / 32)]!;
+          expect(Math.abs(ints[i]! * scale - v)).toBeLessThanOrEqual(scale / 2 + 1e-6);
+        });
+      }
+      // The tensors it leaves alone keep their bytes: an embedding table, a
+      // bias, a 1D norm and a row of 40 values that groups of 32 do not divide.
+      for (const name of ['embed.weight', 'layer.bias', 'norm.weight', 'odd.weight']) {
         expect(await sd.tensors.get(name)!.f32()).toEqual(await source.tensors.get(name)!.f32());
       }
+      expect(sd.tensors.size).toBe(6);
     });
   });
 
@@ -957,10 +984,10 @@ describe('derive', () => {
     // bf16 bits of 3
     c: new Uint16Array([0x4040]),
   });
-  const [a, b, c] = ['a', 'b', 'c'].map((name) => floatTensor('test', sd.tensors.get(name)!)) as [
-    FloatTensor,
-    FloatTensor,
-    FloatTensor,
+  const [a, b, c] = ['a', 'b', 'c'].map((name) => sd.tensors.get(name)!) as [
+    LazyTensor,
+    LazyTensor,
+    LazyTensor,
   ];
 
   it('hands compute the f32 values of its inputs, in their order', async () => {

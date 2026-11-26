@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type FloatBuffer,
@@ -31,7 +31,7 @@ function makeVariant(elem: Elem) {
     if (i >= meta.total) {
       return;
     }
-    const r = d.u32(i / meta.outCols); // explicit integer division (codebase convention)
+    const r = std.intdiv(i, meta.outCols);
     const c = i % meta.outCols;
     sliceLayout.$.out[i] = sliceLayout.$.x[r * meta.srcCols + meta.start + c]!;
   });
@@ -54,7 +54,7 @@ function makeVariant(elem: Elem) {
       return;
     }
     const outCols = meta.aCols + meta.bCols;
-    const r = d.u32(i / outCols); // explicit integer division (codebase convention)
+    const r = std.intdiv(i, outCols);
     const c = i % outCols;
     if (c < meta.aCols) {
       concatLayout.$.out[i] = concatLayout.$.a[r * meta.aCols + c]!;

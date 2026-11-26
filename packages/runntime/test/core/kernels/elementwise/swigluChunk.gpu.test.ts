@@ -60,12 +60,10 @@ describe('swigluChunk kernel', () => {
     await checkSwigluChunk(2048, 2049, 'f32');
   });
 
-  // Known bug: the kernel splits the flat output index into row and column
-  // with d.u32(i / half), which TypeGPU compiles to u32(f32(i) / f32(half)).
-  // f32 counts exactly only up to 2^24, so past 2^24 outputs it reads the
-  // wrong row. f16 is the dtype whose 2^25 inputs still fit one binding.
-  // Turn into a plain `it` with the fix.
-  it.fails('f16 past 2^24 outputs', async (ctx) => {
+  // f32 counts exactly only up to 2^24, so the flat output index past it must
+  // be split with integer division or it reads the wrong row. f16 is the
+  // dtype whose 2^25 inputs still fit one binding.
+  it('f16 past 2^24 outputs', async (ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     expect(4100 * 4097).toBeGreaterThan(2 ** 24);
     await checkSwigluChunk(4100, 4097, 'f16');

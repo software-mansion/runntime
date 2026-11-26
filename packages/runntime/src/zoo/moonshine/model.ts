@@ -40,7 +40,7 @@ export class MoonshineModel extends nn.Module {
   }
 
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    transformMoonshineStateDict(sd, prefix, this.cfg);
+    transformMoonshineStateDict(sd, prefix);
   }
 
   embed(ids: readonly number[]): Value {

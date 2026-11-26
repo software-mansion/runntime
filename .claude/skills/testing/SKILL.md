@@ -18,7 +18,8 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
   ends (`upload`), feature skips (`requireFeature`), the float check
   (`expectClose`), seeded inputs (`randomF32`) and f16 rounding for
   references (`roundF16`). CI runners have no GPU, so the GPU tests run
-  locally: run them before pushing a change to a kernel or its dispatch.
+  locally: run `test:gpu` before pushing any change to code that has a
+  `*.gpu.test.ts` (kernels, dispatch, layers, task runners).
 - Write the test once and put the cases in a list that `it.each` runs.
   Adding a case should be one line.
 - Expected values come from the math, worked out by hand or from Hugging
@@ -68,6 +69,41 @@ description: How to write and run tests and benchmarks in this repo. Use wheneve
 - Each model is tested against its PyTorch reference on the same inputs,
   corner cases included. Where our output differs on purpose, the test says
   why.
+
+## Parity
+
+- A parity test compares a zoo model with saved outputs of its PyTorch
+  reference, variant by variant: `test/zoo/<model>/model.parity.ts`, with
+  the variants, inputs and thresholds in `parity.manifest.ts` next to it.
+  `test/parity` holds what they share: the metrics, the manifest types, the
+  reference reader and `runParity`, which runs every variant and a model
+  broken on purpose against the thresholds and writes the report. A model's
+  test file holds only how to load the model, what to measure and how to
+  break its weights.
+- `pnpm test:parity` runs them in headless Chromium on the real GPU, from
+  their own config, `vitest.parity.config.ts`. `pnpm test` and CI never
+  run them. Run it before merging a change to kernels, routing or the zoo,
+  and paste the tables from `packages/runntime/.parity/results` into the
+  pull request.
+- References come from `tools/parity`, one script per model:
+  `uv run python -m runntime_parity.minilm`. It runs the released model on
+  the fixed inputs on the CPU and saves the inputs, the outputs, the
+  reference noise (how far the same model run in f64 is from them) and the
+  library versions. Tests read them from `RUNNTIME_PARITY_DIR`,
+  `~/.cache/runntime-parity` by default. A missing reference fails the
+  test, and so does a stale one: `meta.json` has to agree with the manifest
+  on the reference, the input count and the manifest's `settings`.
+- Every entry in `models.ts` needs a variant in a manifest:
+  `test/parity/coverage.test.ts` fails in CI without one. A new model lands
+  with its manifest, never on the pending list.
+- Every threshold names its source, and each model's test also runs a
+  model broken on purpose that has to fail all of them. A threshold with a
+  known, unfixed difference runs as `it.fails`, with the reason in
+  `knownIssue` in the manifest; removing the field turns it back into a
+  plain test.
+- A ranking or top-1 difference counts as a miss only where the reference
+  scores the items further apart than the variant's margin. Inside the
+  margin it is a near-tie: the report counts it, no threshold gates it.
 
 ## Performance
 

@@ -18,6 +18,7 @@ sdpa(
     windowLeft: number;
     windowRight: number;
     qPosOffset?: number;
+    scale?: number; // multiplies q·k, default 1/√headDim
     sinks?: Value;
   },
 ): Value

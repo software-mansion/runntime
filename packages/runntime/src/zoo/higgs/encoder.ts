@@ -13,19 +13,17 @@
 import {
   add,
   cat,
-  concatRows,
   derive,
-  floatTensor,
   elu,
   gatherRowsFrom,
   gelu,
+  inTorchShape,
   logitStats,
   matrix,
   mul,
   nn,
   reshape,
   RunntimeError,
-  scaleWeight,
   slice,
   splitRows,
   sub,
@@ -189,10 +187,19 @@ class PositionConv extends nn.Module {
    *  conv checks the shape of its rows. */
   private weight(sd: LazyStateDict, prefix: string): LazyTensor {
     if (sd.tensors.has(at(prefix, 'conv.weight'))) return take(sd, prefix, 'conv.weight');
-    const g = take(sd, prefix, 'conv.parametrizations.weight.original0');
-    const v = take(sd, prefix, 'conv.parametrizations.weight.original1');
     const { hidden, kernel, groups } = this;
     const width = hidden / groups;
+    // The norm folds per tap, across the scale groups of a quantized tensor.
+    const g = inTorchShape(take(sd, prefix, 'conv.parametrizations.weight.original0'), [
+      1,
+      1,
+      kernel,
+    ]);
+    const v = inTorchShape(take(sd, prefix, 'conv.parametrizations.weight.original1'), [
+      hidden,
+      width,
+      kernel,
+    ]);
     if (
       v.shape.join() !== [hidden, width, kernel].join() ||
       g.shape.join() !== [1, 1, kernel].join()
@@ -218,7 +225,7 @@ class PositionConv extends nn.Module {
  *  in] slice scaled to norm g[tap]. In f64. */
 function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   const [out, cIn, kernel] = v.shape as [number, number, number];
-  return derive([out, cIn, kernel], [floatTensor(WHAT, g), floatTensor(WHAT, v)], ([gs, vs]) => {
+  return derive([out, cIn, kernel], [g, v], ([gs, vs]) => {
     const norm = new Float64Array(kernel);
     for (let i = 0; i < vs.length; i++) norm[i % kernel]! += vs[i]! ** 2;
     const w = new Float32Array(vs.length);
@@ -230,18 +237,20 @@ function foldWeightNorm(g: LazyTensor, v: LazyTensor): LazyTensor {
   });
 }
 
-/** Self-attention with q, k and v in one projection. The load stacks them
- *  and folds the score scale into q. */
+/** Self-attention with q, k and v in one projection. */
 class HubertAttention extends nn.Module {
-  readonly qkv: nn.Linear;
+  readonly q_proj: nn.Linear;
+  readonly k_proj: nn.Linear;
+  readonly v_proj: nn.Linear;
+  readonly qkv: nn.FusedLinear;
   readonly mha: nn.MultiHeadAttention;
   readonly out_proj: nn.Linear;
-  constructor(
-    readonly hidden: number,
-    readonly heads: number,
-  ) {
+  constructor(hidden: number, heads: number) {
     super();
-    this.qkv = new nn.Linear(hidden, 3 * hidden);
+    this.q_proj = new nn.Linear(hidden, hidden);
+    this.k_proj = new nn.Linear(hidden, hidden);
+    this.v_proj = new nn.Linear(hidden, hidden);
+    this.qkv = new nn.FusedLinear([this.q_proj, this.k_proj, this.v_proj]);
     this.mha = new nn.MultiHeadAttention({
       qHeads: heads,
       kvHeads: heads,
@@ -250,13 +259,6 @@ class HubertAttention extends nn.Module {
       windowRight: Infinity,
     });
     this.out_proj = new nn.Linear(hidden, hidden);
-  }
-  override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    const scale = 1 / Math.sqrt(this.hidden / this.heads);
-    for (const part of ['weight', 'bias']) {
-      const [q, k, v] = ['q', 'k', 'v'].map((p) => take(sd, prefix, `${p}_proj.${part}`));
-      sd.tensors.set(at(prefix, `qkv.${part}`), concatRows([scaleWeight(q!, scale), k!, v!]));
-    }
   }
   override forward(x: Value): Value {
     return this.out_proj.forward(this.mha.forwardPacked(this.qkv.forward(x)), { addend: x });
@@ -414,7 +416,7 @@ class Codebook extends nn.Module {
     this.score = new nn.Linear(dim, size);
   }
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
-    const embed = floatTensor(WHAT, requireTensor(sd, at(prefix, 'embed'), WHAT));
+    const embed = requireTensor(sd, at(prefix, 'embed'), WHAT);
     const [size, dim] = embed.shape as [number, number];
     for (const name of ['cluster_size', 'embed_avg', 'inited']) sd.tensors.delete(at(prefix, name));
     // The rows' bytes count once, under embed.

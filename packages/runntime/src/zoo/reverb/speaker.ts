@@ -63,9 +63,10 @@ export interface ReverbGenerateOptions {
 export interface ReverbSession {
   readonly frames: number;
   /** Best codes and their log-probabilities [books, frames] for target
-   *  tokens [codebooks, frames]: codebooks 0–1, or with `fine` 2–7 and the
-   *  polish bias towards the reference frames. A fine pass keeps its logits:
-   *  the next `guided` one picks against them. */
+   *  tokens [codebooks, frames]: codebooks 0–1, with the log-probabilities
+   *  of the codes they hold, or with `fine` 2–7 and the polish bias towards
+   *  the reference frames. A fine pass keeps its logits: the next `guided`
+   *  one picks against them. */
   pass(tokens: Int32Array, opts: { fine: boolean; guided?: boolean }): Promise<SlotStats>;
   dispose(): void;
 }
@@ -211,16 +212,23 @@ export function createReverbSpeaker(
             keyBias: fine ? refBias : undefined,
           };
           const ids = tensor(root, model.audioIds(tokens, T), [T * codebooks, 1]);
+          let held: Value | undefined;
           try {
             const h = model.forward(model.audioRows(ids), call);
             const logits = (fine ? model.audio_heads.fine : model.audio_heads.coarse).forward(h);
             const guide = fine && guided ? lastFine : undefined;
+            // A coarse pass also reads the log-probability of each slot's code.
+            if (!fine) {
+              const n = COARSE_CODEBOOKS * T;
+              held = tensor(root, Float32Array.from(tokens.subarray(0, n)), [n, 1]);
+            }
             const stats = logitStats(logits, {
               blocks: booksOf(fine),
               block: codes,
               argmaxCols: MASK,
               guide,
               guideWeight: POLISH_GUIDANCE,
+              held,
             });
             let out: Float32Array;
             try {
@@ -237,15 +245,19 @@ export function createReverbSpeaker(
               } else ex.releaseValues([logits]);
             }
             const n = booksOf(fine) * T;
+            const width = stats.shape.dims![1]!;
             const best = new Int32Array(n);
             const confidence = new Float32Array(n);
+            const heldConfidence = held ? new Float32Array(n) : undefined;
             for (let i = 0; i < n; i++) {
-              best[i] = out[2 * i]!;
-              confidence[i] = out[2 * i + 1]!;
+              best[i] = out[width * i]!;
+              confidence[i] = out[width * i + 1]!;
+              if (heldConfidence) heldConfidence[i] = out[width * i + 2]!;
             }
-            return { best, confidence };
+            return { best, confidence, heldConfidence };
           } finally {
             ids.buffer.destroy();
+            held?.buffer.destroy();
           }
         },
         dispose: free,

@@ -331,8 +331,9 @@ export interface DerivedTensor extends LazyTensorBase {
 
 /** Symmetric int weights with one scale per `groupSize` values along the last
  *  dim: value = int · scale of its group. `shape` is logical, one element per
- *  int even for int4, and `byteLength` covers the ints and the scales. The
- *  float accessors reject with CHECKPOINT_MISMATCH. */
+ *  int even for int4, and `byteLength` covers the ints and the scales. f32()
+ *  gives the dequantized values, for a reader that only takes floats; the
+ *  readers of stored bits reject with CHECKPOINT_MISMATCH. */
 export interface QuantTensor extends LazyTensorBase {
   kind: 'quant';
   /** What the tensor is, for error messages: its name in the file, or the
@@ -349,12 +350,16 @@ export interface QuantTensor extends LazyTensorBase {
 
 export type LazyTensor = FileTensor | DerivedTensor | QuantTensor;
 
-/** A tensor whose f32() gives its values: any but a QuantTensor. */
-export type FloatTensor = FileTensor | DerivedTensor;
-
 export interface LazyStateDict {
   metadata: Record<string, string>;
   tensors: Map<string, LazyTensor>;
+  /** The quantized weights a Linear, Conv1d or ConvTranspose1d loaded as
+   *  float because its quantized kernel cannot run them, by their names in
+   *  the file. The layers' hooks fill it and loadStateDict warns about them. */
+  quantizedAsFloat?: string[];
+  /** The FusedLinears that loaded as float because their parts are not
+   *  quantized alike, each with its parts. loadStateDict warns about them. */
+  fusedPartsDiffer?: string[];
   totalBytes(): number;
 }
 
@@ -428,6 +433,22 @@ function fileTensor(name: string, info: SafeTensorInfo, source: RangeSource): Fi
   };
 }
 
+/** The values `ints` stand for in f32: each int times the scale of its group
+ *  of `groupSize`. */
+export function dequantizeInts(
+  ints: Int8Array,
+  scales: Float32Array | Uint16Array,
+  groupSize: number,
+): Float32Array {
+  const f32 = scales instanceof Float32Array ? scales : f16ToF32(scales);
+  const out = new Float32Array(ints.length);
+  for (let g = 0, i = 0; g < f32.length; g++) {
+    const scale = f32[g]!;
+    for (const end = i + groupSize; i < end; i++) out[i] = ints[i]! * scale;
+  }
+  return out;
+}
+
 /** A QuantTensor over `ints` and `scales`. Like a derived tensor it holds
  *  nothing between reads. */
 export function quantTensor(
@@ -440,17 +461,14 @@ export function quantTensor(
     Promise.reject(
       new RunntimeError(
         'CHECKPOINT_MISMATCH',
-        `tensor ${parts.name} is quantized (int${parts.bits}, groups of ${parts.groupSize}) and has no float reading`,
+        `tensor ${parts.name} is quantized (int${parts.bits}, groups of ${parts.groupSize}) and stores no float bits`,
       ),
     );
-  return {
-    kind: 'quant',
-    ...parts,
-    f32: refuse,
-    halfWords: refuse,
-    words: refuse,
-    u16: refuse,
+  const f32 = async () => {
+    const [ints, scales] = await Promise.all([parts.ints(), parts.scales()]);
+    return dequantizeInts(ints, scales, parts.groupSize);
   };
+  return { kind: 'quant', ...parts, f32, halfWords: refuse, words: refuse, u16: refuse };
 }
 
 /** Unpacks int4 bytes, two values each with the low nibble first, into one
@@ -529,14 +547,13 @@ export function eagerTensor(data: Float32Array | Uint32Array, shape: number[]): 
 type DerivedData = Float32Array | Uint16Array | Uint32Array;
 
 /** One f32 array per tensor of `T`. */
-type FloatsOf<T extends readonly FloatTensor[]> = { [K in keyof T]: Float32Array };
+type FloatsOf<T extends readonly LazyTensor[]> = { [K in keyof T]: Float32Array };
 
 /** A tensor that `compute` makes from the f32 values of `inputs`, which it
- *  receives in the same order. A QuantTensor has no f32 values to give:
- *  `floatTensor` checks an input is not one. For a compute that reads
- *  halfwords or ints, or shares one read between outputs, see
+ *  receives in the same order, a QuantTensor's dequantized. For a compute
+ *  that reads halfwords or ints, or shares one read between outputs, see
  *  `deriveFromTensors`, which also says what `byteLength` is. */
-export function derive<const T extends readonly FloatTensor[]>(
+export function derive<const T extends readonly LazyTensor[]>(
   shape: number[],
   inputs: T,
   compute: (floats: FloatsOf<T>) => DerivedData | Promise<DerivedData>,

@@ -49,6 +49,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:gpu": "vitest run --project gpu",
+    "test:parity": "vitest run --config vitest.parity.config.ts",
     "bench:ab": "node bench/cli.ts"
   },
   "dependencies": {
