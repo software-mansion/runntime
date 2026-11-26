@@ -154,7 +154,6 @@ export {
   concatRows,
   dequantize,
   inTorchShape,
-  permuteRows,
   reshapeWeight,
   scaleWeight,
   splitCols,

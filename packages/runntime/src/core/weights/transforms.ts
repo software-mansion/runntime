@@ -101,19 +101,6 @@ function stackFloats(datas: readonly Floats[]): Floats {
   return out;
 }
 
-/** Fills `out` with row `order[i]` of `data` at row i, rows of `rowElems`. */
-function reorderRows<T extends Rows>(
-  data: T,
-  out: T,
-  order: readonly number[],
-  rowElems: number,
-): T {
-  for (const [i, r] of order.entries()) {
-    out.set(data.subarray(r * rowElems, (r + 1) * rowElems), i * rowElems);
-  }
-  return out;
-}
-
 /** Fills `out` with columns [from, from + cols) of every row of `data`, rows
  *  of `width`. */
 function copyCols<T extends Rows>(data: T, out: T, width: number, from: number, cols: number): T {
@@ -276,40 +263,6 @@ export function splitCols(t: LazyTensor, sizes: readonly number[]): LazyTensor[]
       },
       share(cols),
     );
-  });
-}
-
-/** Reorders the rows of dim 0: row i of the result is row `order[i]` of `t`,
- *  like torch `t[order]`. Throws CHECKPOINT_MISMATCH when `order` is not a
- *  permutation of 0 … rows − 1. */
-export function permuteRows(t: LazyTensor, order: readonly number[]): LazyTensor {
-  if (t.shape.length === 0) throw mismatch('permuteRows', 'cannot permute a scalar');
-  const rows = t.shape[0]!;
-  const inRange = order.every((r) => Number.isInteger(r) && r >= 0 && r < rows);
-  if (order.length !== rows || new Set(order).size !== rows || !inRange) {
-    throw mismatch(
-      'permuteRows',
-      `order is not a permutation of the ${rows} rows of shape [${t.shape.join(', ')}]`,
-    );
-  }
-  const rowElems = numel(t.shape) / rows;
-  if (t.kind === 'quant') {
-    return quantTensor({
-      ...t,
-      name: `permuteRows(${t.name})`,
-      async ints() {
-        const data = await t.ints();
-        return reorderRows(data, new Int8Array(data.length), order, rowElems);
-      },
-      async scales() {
-        const data = await t.scales();
-        return reorderRows(data, allocLike(data, data.length), order, rowElems / t.groupSize);
-      },
-    });
-  }
-  return deriveFromTensors(t.shape, [t], async ([t]) => {
-    const data = await readFloats('permuteRows', t);
-    return reorderRows(data, allocLike(data, data.length), order, rowElems);
   });
 }
 

@@ -10,7 +10,6 @@ import {
 import {
   concatRows,
   dequantize,
-  permuteRows,
   readFloats,
   reshapeWeight,
   scaleWeight,
@@ -154,137 +153,6 @@ describe('splitCols', () => {
   });
 });
 
-describe('permuteRows', () => {
-  // [[1, 2], [3, 4], [5, 6]] with order [2, 0, 1] → [[5, 6], [1, 2], [3, 4]]
-  it.for(DTYPES)('reorders the rows of $dtype', async ({ dtype, type }) => {
-    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [3, 2]);
-    const out = permuteRows(t, [2, 0, 1]);
-    expect(out.shape).toEqual([3, 2]);
-    expect(out.byteLength).toBe(t.byteLength);
-    expect(await contents(out)).toEqual({ type, values: [5, 6, 1, 2, 3, 4] });
-  });
-
-  it('moves whole blocks of a 3D tensor and single elements of a 1D one', async () => {
-    const blocks = permuteRows(await source('F32', [1, 2, 3, 4], [2, 1, 2]), [1, 0]);
-    expect(blocks.shape).toEqual([2, 1, 2]);
-    expect(await contents(blocks)).toEqual({ type: 'f32', values: [3, 4, 1, 2] });
-    const elems = permuteRows(await source('F16', [1, 2, 3, 4], [4]), [0, 2, 1, 3]);
-    expect(await contents(elems)).toEqual({ type: 'f16', values: [1, 3, 2, 4] });
-  });
-
-  it.for([
-    { name: 'too few rows', order: [0, 1] },
-    { name: 'too many rows', order: [0, 1, 2, 0] },
-    { name: 'a repeated row', order: [0, 0, 1] },
-    { name: 'a row past the end', order: [0, 1, 3] },
-    { name: 'a negative row', order: [0, 1, -1] },
-    { name: 'a fractional row', order: [0, 1, 1.5] },
-  ])('throws CHECKPOINT_MISMATCH for $name', async ({ order }) => {
-    const t = await source('F32', [1, 2, 3, 4, 5, 6], [3, 2]);
-    expect(() => permuteRows(t, order)).toThrow(
-      expect.objectContaining({
-        code: 'CHECKPOINT_MISMATCH',
-        message: 'permuteRows: order is not a permutation of the 3 rows of shape [3, 2]',
-      }),
-    );
-  });
-
-  it('throws CHECKPOINT_MISMATCH for a scalar', async () => {
-    const t = await source('F32', [1], []);
-    expect(() => permuteRows(t, [])).toThrow(
-      expect.objectContaining({
-        code: 'CHECKPOINT_MISMATCH',
-        message: 'permuteRows: cannot permute a scalar',
-      }),
-    );
-  });
-});
-
-describe('scaleWeight', () => {
-  // 3 · 0.1 = 0.3, which f16 would round to 0.300048828125. The product is
-  // f32 for every source, so an f32 model loads what it did before the helper.
-  it.for([
-    { dtype: 'F32', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
-    { dtype: 'F16', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
-    { dtype: 'BF16', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
-    { dtype: 'F32', scale: [2, -1], values: [1, 2, 3, 4], want: [2, 4, -3, -4] },
-    { dtype: 'F16', scale: [2, -1], values: [1, 2, 3, 4], want: [2, 4, -3, -4] },
-    { dtype: 'F32', scale: 0.1, values: [3, 0, 0, 0], want: [Math.fround(0.3), 0, 0, 0] },
-    { dtype: 'F16', scale: 0.1, values: [3, 0, 0, 0], want: [Math.fround(0.3), 0, 0, 0] },
-  ] satisfies { dtype: Dtype; scale: number | number[]; values: number[]; want: number[] }[])(
-    'scales $dtype by $scale',
-    async ({ dtype, scale, values, want }) => {
-      const t = await source(dtype, values, [2, 2]);
-      const out = scaleWeight(t, scale);
-      expect(out.shape).toEqual([2, 2]);
-      expect(out.byteLength).toBe(t.byteLength);
-      expect(await contents(out)).toEqual({ type: 'f32', values: want });
-    },
-  );
-
-  it('throws CHECKPOINT_MISMATCH for one row scale too many', async () => {
-    const t = await source('F32', [1, 2, 3, 4], [2, 2]);
-    expect(() => scaleWeight(t, [1, 2, 3])).toThrow(
-      expect.objectContaining({
-        code: 'CHECKPOINT_MISMATCH',
-        message: expect.stringMatching(/3 row scales/),
-      }),
-    );
-  });
-});
-
-describe('transposeWeight', () => {
-  // [[1, 2, 3], [4, 5, 6]] → [[1, 4], [2, 5], [3, 6]]
-  it.for(DTYPES)('transposes a 2D $dtype tensor', async ({ dtype, type }) => {
-    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [2, 3]);
-    const out = transposeWeight(t);
-    expect(out.shape).toEqual([3, 2]);
-    expect(out.byteLength).toBe(t.byteLength);
-    expect(await contents(out)).toEqual({ type, values: [1, 4, 2, 5, 3, 6] });
-  });
-
-  it('throws CHECKPOINT_MISMATCH for a 3D tensor', async () => {
-    const t = await source('F32', new Array(8).fill(0), [2, 2, 2]);
-    expect(() => transposeWeight(t)).toThrow(
-      expect.objectContaining({
-        code: 'CHECKPOINT_MISMATCH',
-        message: expect.stringMatching(/needs a 2D tensor/),
-      }),
-    );
-  });
-});
-
-describe('reshapeWeight', () => {
-  // [2, 1, 3] → [2, 3]: an expert tensor with its expert axis folded into rows.
-  it.for(DTYPES)('reshapes $dtype, keeping the source dtype', async ({ dtype }) => {
-    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [2, 1, 3]);
-    const out = reshapeWeight(t, [2, 3]);
-    expect(out.shape).toEqual([2, 3]);
-    expect(out.byteLength).toBe(t.byteLength);
-    if (t.kind === 'quant' || out.kind === 'quant') throw new Error('expected float tensors');
-    expect([out.kind, out.dtype]).toEqual([t.kind, t.dtype]);
-    expect([...(await out.f32())]).toEqual([1, 2, 3, 4, 5, 6]);
-    if (dtype !== 'F32') expect(await out.u16()).toEqual(await t.u16());
-  });
-
-  it('keeps the f16 halfwords of a derived source', async () => {
-    const [left] = splitCols(await source('F16', [1, 2, 3, 4, 5, 6, 7, 8], [2, 1, 4]), [2, 2]);
-    const out = reshapeWeight(left!, [2, 2]);
-    expect(out.shape).toEqual([2, 2]);
-    expect(await contents(out)).toEqual({ type: 'f16', values: [1, 2, 5, 6] });
-  });
-
-  it('throws CHECKPOINT_MISMATCH when the element counts differ', async () => {
-    const t = await source('F32', [1, 2, 3, 4, 5, 6], [2, 3]);
-    expect(() => reshapeWeight(t, [4, 2])).toThrow(
-      expect.objectContaining({
-        code: 'CHECKPOINT_MISMATCH',
-        message: 'reshapeWeight: cannot reshape [2, 3] to [4, 2]',
-      }),
-    );
-  });
-});
-
 describe('weight helpers', () => {
   it('fetch nothing until an output is read, and split sources read once', async () => {
     const compute = vi.fn(async () => new Float32Array([1, 2, 3, 4]));
@@ -292,7 +160,6 @@ describe('weight helpers', () => {
     const [top, bottom] = splitRows(t, [1, 1]);
     const [left, right] = splitCols(t, [1, 1]);
     concatRows([t, t]);
-    permuteRows(t, [1, 0]);
     scaleWeight(t, 2);
     transposeWeight(t);
     reshapeWeight(t, [4]);
@@ -323,7 +190,6 @@ describe('weight helpers', () => {
   it.for([
     { name: 'concatRows', run: (t: LazyTensor) => concatRows([t]) },
     { name: 'splitRows', run: (t: LazyTensor) => splitRows(t, [1])[0]! },
-    { name: 'permuteRows', run: (t: LazyTensor) => permuteRows(t, [0]) },
     { name: 'scaleWeight', run: (t: LazyTensor) => scaleWeight(t, 2) },
   ])('$name rejects packed u32 words with CHECKPOINT_MISMATCH', async ({ name, run }) => {
     const words = derive([1], [], async () => new Uint32Array([1]));
@@ -430,16 +296,6 @@ describe.each([8, 4] as const)('int%i quantized sources', (bits) => {
     expect(() => splitCols(t, [1, 3])).toThrow(
       mismatch(/sizes \[1, 3\] split the groups of 2 columns of w\.weight/),
     );
-  });
-
-  it('permuteRows reorders ints and scales rows', async () => {
-    const out = permuteRows(await quantSource(bits, 2, 'w.weight', w), [1, 0]);
-    expect(out).toMatchObject({ kind: 'quant', shape: [2, 4], bits, groupSize: 2 });
-    expect(await quantContents(out)).toEqual({
-      ints: [5, -6, 7, -8, 1, -2, 3, -4],
-      scaleType: 'f16',
-      scales: [2, 4, 0.5, 1],
-    });
   });
 
   it.for([
@@ -562,7 +418,6 @@ describe('sources', () => {
     ['concatRows', (a, b) => concatRows([a, b, a]), ['a', 'b']],
     ['splitRows', (a) => splitRows(a, [1, 1])[1]!, ['a']],
     ['splitCols', (a) => splitCols(a, [2, 2])[1]!, ['a']],
-    ['permuteRows', (a) => permuteRows(a, [1, 0]), ['a']],
     ['scaleWeight', (a) => scaleWeight(a, 2), ['a']],
     ['reshapeWeight', (a) => reshapeWeight(a, [1, 2, 4]), ['a']],
     [
