@@ -1,5 +1,6 @@
 /** The numbers a parity test compares: how far an output is from its
- *  reference, and how a ranking differs from the reference ranking. */
+ *  reference, how a ranking differs from the reference ranking, and how
+ *  texts and the spans found in them differ from the reference's. */
 
 /** Cosine similarity of two vectors of the same length. */
 export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
@@ -180,4 +181,39 @@ export function wer(hypotheses: readonly string[], references: readonly string[]
     total += want.length;
   });
   return edits / total;
+}
+
+/** A labeled stretch of a text, from `start` up to `end`, both UTF-16
+ *  string indices. */
+export interface Span {
+  readonly label: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+/** F1 of the spans in `got` against those in `want`, text by text: a span
+ *  matches one with the same label, start and end, and each span matches
+ *  once. The matches and the spans of both sides are summed over the texts.
+ *  NaN when neither side holds a span. */
+export function spanF1(
+  got: readonly (readonly Span[])[],
+  want: readonly (readonly Span[])[],
+): number {
+  if (got.length !== want.length) {
+    throw new Error(`spanF1: spans of ${got.length} texts for ${want.length} references`);
+  }
+  const key = ({ label, start, end }: Span) => `${start}:${end}:${label}`;
+  let matches = 0;
+  let total = 0;
+  want.forEach((spans, i) => {
+    const left = new Map<string, number>();
+    for (const span of spans) left.set(key(span), (left.get(key(span)) ?? 0) + 1);
+    for (const span of got[i]!) {
+      const count = left.get(key(span)) ?? 0;
+      if (count > 0) matches++;
+      left.set(key(span), count - 1);
+    }
+    total += got[i]!.length + spans.length;
+  });
+  return (2 * matches) / total;
 }

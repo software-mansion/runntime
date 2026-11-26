@@ -7,6 +7,7 @@ import {
   missing,
   rankingDifferences,
   rankMismatches,
+  spanF1,
   summarize,
   topK,
   wer,
@@ -243,5 +244,60 @@ describe('wer', () => {
 
   it('is Infinity for words against references that hold none', () => {
     expect(wer(['one'], [''])).toBe(Infinity);
+  });
+});
+
+describe('spanF1', () => {
+  const jane = { label: 'private_person', start: 8, end: 16 };
+  const mail = { label: 'private_email', start: 20, end: 40 };
+
+  it('is 1 for the same spans in another order', () => {
+    expect(spanF1([[mail, jane], []], [[jane, mail], []])).toBe(1);
+  });
+
+  it('misses a span with another label, start or end', () => {
+    const got = [
+      { ...jane, label: 'private_url' },
+      { ...jane, start: 7 },
+      { ...jane, end: 17 },
+    ];
+    expect(spanF1([got], [[jane]])).toBe(0);
+  });
+
+  it('sums the matches and the spans over the texts', () => {
+    // Text 1: both of two match. Text 2: neither of one and two does.
+    // 2 matches, 3 spans against 4: 2·2 / 7.
+    expect(
+      spanF1(
+        [[jane, mail], [jane]],
+        [
+          [jane, mail],
+          [mail, { ...mail, end: 41 }],
+        ],
+      ),
+    ).toBe(4 / 7);
+  });
+
+  it('matches a span as often as the reference holds it', () => {
+    // Two of the three found match the reference's two: 2·2 / 5.
+    expect(spanF1([[jane, jane, jane]], [[jane, jane]])).toBe(4 / 5);
+    // One of the reference's two is found: 2·1 / 3.
+    expect(spanF1([[jane]], [[jane, jane]])).toBe(2 / 3);
+  });
+
+  it('matches a span to a span of its own text only', () => {
+    expect(spanF1([[jane], []], [[], [jane]])).toBe(0);
+  });
+
+  it('is 0 for no span against a reference that holds one', () => {
+    expect(spanF1([[]], [[jane]])).toBe(0);
+  });
+
+  it('is NaN when neither side holds a span', () => {
+    expect(spanF1([[]], [[]])).toBeNaN();
+  });
+
+  it('throws for another number of texts than references', () => {
+    expect(() => spanF1([[jane]], [[jane], []])).toThrow('spans of 1 texts for 2 references');
   });
 });

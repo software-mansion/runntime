@@ -4,10 +4,11 @@
  *  resizes its map to the photo's size; both sides are compared before
  *  that, at the model's output size. */
 import { createDepthEstimator, type DepthEstimator } from '../../../src/zoo/index.ts';
-import { openWeights, type ModelPath } from '../../../src/zoo/load.ts';
+import { openWeights } from '../../../src/zoo/load.ts';
 import { createEstimator, type Estimator } from '../../../src/zoo/depthart/estimator.ts';
 import { gpu } from '../../gpu.ts';
 import {
+  loadBoth,
   readImage,
   readJson,
   readTensors,
@@ -15,36 +16,13 @@ import {
   rows,
   runParity,
   summaryCell,
+  type Loaded,
   type Measured,
 } from '../../parity/harness.ts';
 import { cosine, summarize } from '../../parity/metrics.ts';
 import { DEPTHART_B_PARITY, DEPTHART_S_PARITY } from './parity.manifest.ts';
 
 await gpu();
-
-/** One set of weights loaded twice: the bare model for level A, the public
- *  runner for level B. */
-interface Loaded {
-  model: Estimator;
-  runner: DepthEstimator;
-  dispose(): void;
-}
-
-async function load(modelPath: ModelPath): Promise<Loaded> {
-  const model = await createEstimator(await openWeights(modelPath));
-  const runner = await createDepthEstimator({ modelPath }).catch((err: unknown) => {
-    model.dispose();
-    throw err;
-  });
-  return {
-    model,
-    runner,
-    dispose() {
-      model.dispose();
-      runner.dispose();
-    },
-  };
-}
 
 /** A map with its mean subtracted: relative depth has no fixed zero. */
 function centered(map: Float32Array): Float32Array {
@@ -79,7 +57,10 @@ for (const manifest of [DEPTHART_S_PARITY, DEPTHART_B_PARITY]) {
   // runntime returns the reference's map negated: smaller is nearer.
   const want = rows(reference.get('depth')!, images.length).map((map) => map.map((v) => -v));
 
-  const measure = async ({ model, runner }: Loaded): Promise<Measured> => {
+  const measure = async ({
+    model,
+    runner,
+  }: Loaded<Estimator, DepthEstimator>): Promise<Measured> => {
     const { inputSize } = model;
     const fromPixels: ReturnType<typeof compare>[] = [];
     const fromImage: ReturnType<typeof compare>[] = [];
@@ -116,7 +97,11 @@ for (const manifest of [DEPTHART_S_PARITY, DEPTHART_B_PARITY]) {
 
   await runParity({
     manifest,
-    load: (_config, modelPath) => load(modelPath),
+    load: (_config, modelPath) =>
+      loadBoth(
+        async () => createEstimator(await openWeights(modelPath)),
+        () => createDepthEstimator({ modelPath }),
+      ),
     measure,
     broken: {
       label: 'one norm variance reversed',

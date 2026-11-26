@@ -7,6 +7,7 @@ import { MINILM_PARITY } from '../zoo/minilm/parity.manifest.ts';
 import { MOBILENETV4_PARITY } from '../zoo/mobilenetv4/parity.manifest.ts';
 import { MOONSHINE_STREAMING_TINY_PARITY } from '../zoo/moonshine-streaming/parity.manifest.ts';
 import { MOONSHINE_BASE_PARITY, MOONSHINE_TINY_PARITY } from '../zoo/moonshine/parity.manifest.ts';
+import { PRIVACY_FILTER_PARITY } from '../zoo/privacy-filter/parity.manifest.ts';
 import {
   REVERB_FP16_PARITY,
   REVERB_FP32_PARITY,
@@ -24,6 +25,7 @@ const MANIFESTS: readonly ParityManifest[] = [
   MOONSHINE_TINY_PARITY,
   MOONSHINE_BASE_PARITY,
   MOONSHINE_STREAMING_TINY_PARITY,
+  PRIVACY_FILTER_PARITY,
   REVERB_FP32_PARITY,
   REVERB_FP16_PARITY,
   REVERB_INT8_PARITY,
@@ -34,7 +36,6 @@ const MANIFESTS: readonly ParityManifest[] = [
  *  paths. A family leaves the list with its manifest. A new model is never
  *  added here: it lands with a manifest. */
 const PENDING = [
-  'privacyFilter.PRIVACY_FILTER',
   'objectDetection.YOLO26',
   'instanceSegmentation.YOLO26_SEG',
   'keypointDetection.YOLO26_POSE',
