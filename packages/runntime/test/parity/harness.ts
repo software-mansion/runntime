@@ -110,10 +110,41 @@ export function transposedWeights(url: string, name: string): Promise<RangeSourc
   });
 }
 
-/** The file at `url` with the vector `name` back to front: a norm that
- *  gives every channel another channel's value. */
+/** The file at `url` with the elements of the float tensor `name` back to
+ *  front, whatever its shape. */
 export function reversedWeights(url: string, name: string): Promise<RangeSource> {
   return brokenWeights(url, name, (weight) => weight.slice().reverse() as typeof weight);
+}
+
+/** One set of weights loaded twice: the bare model for level A, the public
+ *  runner for level B. */
+export interface Loaded<Model, Runner> {
+  readonly model: Model;
+  readonly runner: Runner;
+  dispose(): void;
+}
+
+/** Loads the bare model, then the runner. */
+export async function loadBoth<
+  Model extends { dispose(): void },
+  Runner extends { dispose(): void },
+>(
+  loadModel: () => Promise<Model>,
+  loadRunner: () => Promise<Runner>,
+): Promise<Loaded<Model, Runner>> {
+  const model = await loadModel();
+  const runner = await loadRunner().catch((err: unknown) => {
+    model.dispose();
+    throw err;
+  });
+  return {
+    model,
+    runner,
+    dispose() {
+      model.dispose();
+      runner.dispose();
+    },
+  };
 }
 
 /** A report cell of a summary: mean / p99 / max. */

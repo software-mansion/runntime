@@ -9,6 +9,7 @@ dependencies = [
     "huggingface-hub>=2.4.0",
     "numpy>=2.0",
     "opencv-python-headless==4.10.0.84",
+    "opf",
     "pillow>=13.0.0",
     "pyarrow>=26.0.1",
     "reverb-tts==1.0.0",
@@ -19,6 +20,10 @@ dependencies = [
     "torch>=2.6",
     "transformers>=5.22",
 ]
+
+# The upstream code of the Privacy Filter. It is not on PyPI.
+[tool.uv.sources]
+opf = { git = "https://github.com/openai/privacy-filter", rev = "f7f00ca7fb869683eb732c010299d901457f19c3" }
 
 [build-system]
 requires = ["uv_build>=0.9.24,<0.10.0"]
