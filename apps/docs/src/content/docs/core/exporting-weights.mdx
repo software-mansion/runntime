@@ -158,9 +158,9 @@ Linear, `in·k` for a conv. A tensor it doesn't divide stays float. The
 runtime loads each tensor back into its layer's shape.
 
 **Which layers run quantized.** `Linear`, `Conv1d` and `ConvTranspose1d`
-run on the int weights. Any other quantized tensor, like a `Conv2d` weight
-or an embedding table you chose to quantize, is turned back into floats at
-load. It keeps the rounding of its ints, so the download is smaller but
+run on the int weights. Any other quantized tensor, like a `Conv2d` weight,
+a depthwise `Conv1d` weight or an embedding table you chose to quantize, is
+turned back into floats at load. It keeps the rounding of its ints, so the download is smaller but
 the model is no faster and uses no less memory than the float one.
 
 A `Linear` or conv weight whose shape the quantized kernels can't take

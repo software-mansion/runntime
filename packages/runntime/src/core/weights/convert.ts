@@ -116,17 +116,26 @@ export function permuteConvTransposeF16(
   return dst;
 }
 
-export function packConvHwc4F16(
-  src: Uint16Array,
+/** An array of `src`'s type, `length` zeros long. */
+function zerosLike(src: Float32Array | Uint16Array, length: number): Float32Array | Uint16Array {
+  return src instanceof Uint16Array ? new Uint16Array(length) : new Float32Array(length);
+}
+
+/** A torch [cOut, cIn, kH, kW] conv weight, f32 values or f16 bits, as the
+ *  hwc4 conv's mat4 tiles: tile (oB, iB, tap) at (oB·CI4 + iB)·kH·kW + tap,
+ *  entry iL holding the output lanes for input lane iL. Channels past cOut
+ *  and cIn are zero. */
+export function packConvHwc4(
+  src: Float32Array | Uint16Array,
   cOut: number,
   cIn: number,
   kH: number,
   kW: number,
-): Uint16Array {
+): Float32Array | Uint16Array {
   const kk = kH * kW;
   const ob = Math.ceil(cOut / 4);
   const ib = Math.ceil(cIn / 4);
-  const dst = new Uint16Array(ob * ib * kk * 16);
+  const dst = zerosLike(src, ob * ib * kk * 16);
   for (let o = 0; o < cOut; o++) {
     for (let i = 0; i < cIn; i++) {
       for (let t = 0; t < kk; t++) {
@@ -138,14 +147,18 @@ export function packConvHwc4F16(
   return dst;
 }
 
-/** A torch [cOut, cIn, 1, 1] f16 weight for the stride-1 1×1 hwc4 conv: the
- *  same mat4 tiles as packConvHwc4F16, ordered input block first, tile
- *  (iB, oB) at iB·CO4 + oB, so neighbouring output blocks read neighbouring
- *  tiles. */
-export function packConv1x1Hwc4F16(src: Uint16Array, cOut: number, cIn: number): Uint16Array {
+/** A torch [cOut, cIn, 1, 1] weight, f32 values or f16 bits, for the stride-1
+ *  1×1 hwc4 conv: the same mat4 tiles as packConvHwc4, ordered input block
+ *  first, tile (iB, oB) at iB·CO4 + oB, so neighbouring output blocks read
+ *  neighbouring tiles. */
+export function packConv1x1Hwc4(
+  src: Float32Array | Uint16Array,
+  cOut: number,
+  cIn: number,
+): Float32Array | Uint16Array {
   const ob = Math.ceil(cOut / 4);
   const ib = Math.ceil(cIn / 4);
-  const dst = new Uint16Array(ob * ib * 16);
+  const dst = zerosLike(src, ob * ib * 16);
   for (let o = 0; o < cOut; o++) {
     for (let i = 0; i < cIn; i++) {
       dst[((i >> 2) * ob + (o >> 2)) * 16 + (i & 3) * 4 + (o & 3)] = src[o * cIn + i]!;
@@ -198,9 +211,17 @@ export function packConvWinogradF16(src: Uint16Array, cOut: number, cIn: number)
   return dst;
 }
 
-export function packDwHwc4F16(src: Uint16Array, c: number, kH: number, kW: number): Uint16Array {
+/** A torch [c, 1, kH, kW] depthwise weight, f32 values or f16 bits, as one
+ *  vec4 per (channel block, tap), at cB·kH·kW + tap. Channels past c are
+ *  zero. */
+export function packDwHwc4(
+  src: Float32Array | Uint16Array,
+  c: number,
+  kH: number,
+  kW: number,
+): Float32Array | Uint16Array {
   const kk = kH * kW;
-  const dst = new Uint16Array(Math.ceil(c / 4) * kk * 4);
+  const dst = zerosLike(src, Math.ceil(c / 4) * kk * 4);
   for (let ch = 0; ch < c; ch++) {
     for (let t = 0; t < kk; t++) {
       dst[((ch >> 2) * kk + t) * 4 + (ch & 3)] = src[ch * kk + t]!;

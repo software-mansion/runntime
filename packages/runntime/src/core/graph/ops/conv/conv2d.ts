@@ -1,14 +1,17 @@
+import { RunntimeError } from '../../../error.ts';
 import { hwc4Meta, pending, Value } from '../../value.ts';
 import { ACT_CODE, type ActName, wantHwc4 } from '../shared.ts';
 
 /** The activations conv2d can fuse into its epilogue. */
 export type ConvAct = Extract<ActName, 'silu' | 'gelu' | 'relu'>;
 
-/** 2D convolution over hwc4-stored f16 activations, with a torch-shaped
- *  surface. Input and output both stay hwc4, and groups are 1 or fully
- *  depthwise. `activation` fuses silu, gelu or relu into the kernel.
- *  `winograd` runs a 3×3, stride 1, padding 1 conv as Winograd F(4×4, 3×3),
- *  with the weight packed by packConvWinogradF16. */
+/** 2D convolution over hwc4-stored activations, with a torch-shaped surface.
+ *  Input and output both stay hwc4, in the weight's dtype, f32 or f16, which
+ *  the input and the bias must share. Groups are 1 or fully depthwise.
+ *  `activation` fuses silu, gelu or relu into the kernel. `winograd` runs a
+ *  3×3, stride 1, padding 1 conv as Winograd F(4×4, 3×3), with the weight
+ *  packed by packConvWinogradF16; it is f16 only, and throws INVALID_ARGUMENT
+ *  for an f32 weight. */
 export function conv2d(
   x: Value,
   weight: Value,
@@ -35,9 +38,20 @@ export function conv2d(
     );
   }
   const wd = weight.shape.dims;
-  if (weight.shape.dtype !== 'f16' || !wd || wd.length !== 2 || weight.shape.layout !== 'hwc4') {
+  const dtype = weight.shape.dtype;
+  if (
+    (dtype !== 'f32' && dtype !== 'f16') ||
+    !wd ||
+    wd.length !== 2 ||
+    weight.shape.layout !== 'hwc4'
+  ) {
     throw new Error(
       'conv2d: weight must be the hwc4 mat4-tile packing (nn.Conv2d repacks at load) — an unpacked weight would be read as tiles',
+    );
+  }
+  if (x.shape.dtype !== dtype) {
+    throw new Error(
+      `conv2d: the ${x.shape.dtype} input must have the weight's dtype, ${dtype} (toHwc4 takes the dtype to store)`,
     );
   }
   const [cOut, cin_kk] = wd as [number, number];
@@ -46,18 +60,24 @@ export function conv2d(
       `conv2d: weight cols ${cin_kk} != C_in/groups·kH·kW = ${cIn / groups}·${kH}·${kW}`,
     );
   }
-  if (bias !== undefined && (bias.shape.dtype !== 'f16' || bias.shape.elems !== cOut)) {
-    throw new Error(`conv2d: bias must be f16 with ${cOut} elems (call model.half())`);
+  if (bias !== undefined && (bias.shape.dtype !== dtype || bias.shape.elems !== cOut)) {
+    throw new Error(`conv2d: bias must be ${dtype}, like the weight, with ${cOut} elems`);
   }
   if (opts.winograd && (kH !== 3 || kW !== 3 || stride !== 1 || padding !== 1 || groups !== 1)) {
     throw new Error(
       `conv2d: winograd needs a 3×3, stride 1, padding 1, groups 1 conv, got ${kH}×${kW} stride ${stride} padding ${padding} groups ${groups}`,
     );
   }
+  if (opts.winograd && dtype === 'f32') {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      'conv2d: winograd has no f32 kernel yet, run the model in f16 with half()',
+    );
+  }
   const hOut = Math.floor((h + 2 * padding - kH) / stride) + 1;
   const wOut = Math.floor((w + 2 * padding - kW) / stride) + 1;
   const inputs: Value[] = bias !== undefined ? [x, weight, bias] : [x, weight];
-  return pending(hwc4Meta(cOut, hOut, wOut), 'conv2dHwc4', inputs, undefined, [
+  return pending(hwc4Meta(cOut, hOut, wOut, dtype), 'conv2dHwc4', inputs, undefined, [
     kH,
     kW,
     stride,

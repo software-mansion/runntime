@@ -42,7 +42,7 @@ export {
   writeRows,
 } from './ops/shape.ts';
 export { layerNorm, logitStats, mean, rmsNorm, softmax, topk } from './ops/reduce.ts';
-export { channelAffine, toChw, toHwc4 } from './ops/hwc4.ts';
+export { channelAffine, toChw, toHwc, toHwc4 } from './ops/hwc4.ts';
 export { conv1d, gluConv1d } from './ops/conv/conv1d.ts';
 export { SSM_DIRS, SSM_STATE, ssmScanMerge, ssmScanProject, ssmSelectiveScan } from './ops/ssm.ts';
 export { type ConvAct, conv2d } from './ops/conv/conv2d.ts';

@@ -61,8 +61,8 @@ export class MobileNetV4Model extends Module {
     });
     this.norm_head = new BatchNorm2d(cfg.headHidden);
     this.classifier = new Linear(cfg.headHidden, cfg.numClasses);
-    // The trunk runs HWC4+f16: nn.Conv2d packs mat4 tiles at load, and
-    // half() flips the biases and the classifier to f16.
+    // The trunk runs HWC4+f16: half() makes the convs and the classifier
+    // f16, and nn.Conv2d packs mat4 tiles at load.
     this.half(opts.root);
   }
 

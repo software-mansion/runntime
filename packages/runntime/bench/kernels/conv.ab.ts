@@ -1,7 +1,8 @@
 /** Every conv2d kind gpu/dispatch/conv.ts can pick (1×1, split-K 1×1, tiled,
- *  generic, depthwise), the fused epilogues, conv1d, convTranspose2d and the
- *  other hwc4 image kernels. Shapes are YOLO26n at 640, MobileNetV4-S at 224,
- *  DepthART and Moonshine. */
+ *  generic, depthwise) in f16 and f32, the fused epilogues, conv1d,
+ *  convTranspose2d and the other hwc4 image kernels. Shapes are YOLO26n at
+ *  640, MobileNetV4-S at 224, DepthART, Moonshine and EmbeddingGemma 2's
+ *  audio tower. */
 import { abSuite, type AbCase, type Version } from '../ab.ts';
 import type { Value } from '../../src/core/index.ts';
 import { chw, convWeight, quantWeight, randHwc4, randMat } from './inputs.ts';
@@ -9,28 +10,36 @@ import { chw, convWeight, quantWeight, randHwc4, randMat } from './inputs.ts';
 interface Conv {
   cIn: number;
   cOut: number;
-  hw: number;
+  /** The side of a square map, or its [height, width]. */
+  hw: number | [number, number];
   k: number;
   stride?: number;
   depthwise?: boolean;
   act?: 'silu' | 'gelu' | 'relu';
   /** Adds a residual of the output's shape, which fuses into the conv. */
   residual?: boolean;
+  /** What the map, the weight and the bias store. Default f16. A base whose
+   *  conv2d reads f16 only throws on f32, which skips the case. */
+  dtype?: 'f32' | 'f16';
 }
 
 function conv2d(name: string, o: Conv): AbCase {
-  const { cIn, cOut, hw, k, stride = 1 } = o;
+  const { cIn, cOut, k, stride = 1, dtype = 'f16' } = o;
+  const [h, wide] = typeof o.hw === 'number' ? [o.hw, o.hw] : o.hw;
   const groups = o.depthwise ? cIn : 1;
   const padding = (k - 1) >> 1;
   return {
     name,
-    needs: ['shader-f16'],
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
     build: (version) => {
-      const x = randHwc4(version, cIn, hw, hw);
-      const w = convWeight(version, cOut, cIn, k, groups);
-      const bias = version.upload(version.rand(cOut), { elems: cOut, dtype: 'f16', dims: [cOut] });
-      const hOut = Math.floor((hw + 2 * padding - k) / stride) + 1;
-      const res = o.residual ? randHwc4(version, cOut, hOut, hOut) : undefined;
+      const x = randHwc4(version, cIn, h, wide, dtype);
+      const w = convWeight(version, cOut, cIn, k, groups, dtype);
+      const bias = version.upload(version.rand(cOut), { elems: cOut, dtype, dims: [cOut] });
+      const hOut = Math.floor((h + 2 * padding - k) / stride) + 1;
+      const wOut = Math.floor((wide + 2 * padding - k) / stride) + 1;
+      const res = o.residual ? randHwc4(version, cOut, hOut, wOut, dtype) : undefined;
+      // Built once here, so a base that refuses the dtype skips the case.
+      version.lib.conv2d(x, w, bias, { kernelSize: k, stride, padding, groups });
       return () => {
         const y = version.lib.conv2d(x, w, bias, {
           kernelSize: k,
@@ -59,6 +68,13 @@ function image(
       return () => op(version, x);
     },
   };
+}
+
+/** A random f32 hwc4 image. Throws on a base whose hwc4 is f16 only. */
+function f32Hwc4(version: Version, c: number, h: number, w: number): Value {
+  const x = randHwc4(version, c, h, w, 'f32');
+  if (x.shape.dtype !== 'f32') throw new Error('hwc4 stores f16 only');
+  return x;
 }
 
 function conv1d(
@@ -183,6 +199,30 @@ function gluConv1d(name: string, t: number, c: number, k: number, dtype: 'f32' |
   };
 }
 
+/** A causal depthwise conv over time: x [T, C], taps [K, C]. */
+function depthwiseConv1d(
+  name: string,
+  t: number,
+  c: number,
+  k: number,
+  dtype: 'f32' | 'f16',
+): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      const x = randMat(version, t, c, dtype);
+      const w = randMat(version, k, c, dtype);
+      const call = () =>
+        version.lib.conv1d(x, w, { kernelSize: k, stride: 1, padLeft: k - 1, groups: c });
+      // Built once here: a base without groups refuses the weight, which
+      // skips the case.
+      call();
+      return call;
+    },
+  };
+}
+
 function convTranspose2d(name: string, cIn: number, cOut: number, hw: number): AbCase {
   const k = 2;
   return {
@@ -293,6 +333,70 @@ abSuite('conv', [
     residual: true,
   }),
   conv2d('1×1 + fused residual, 64→64 @80²', { cIn: 64, cOut: 64, hw: 80, k: 1, residual: true }),
+  // EmbeddingGemma 2's two audio subsample convs, 3×3 stride 2 over [frames,
+  // mels]: 1→128 on [frames, 128], then 128→32 on [frames / 2, 64]. The F32
+  // file runs them in f32, the F16 file in f16.
+  ...(['f32', 'f16'] as const).flatMap((dtype) => [
+    conv2d(`tiled ${dtype} (16 ch/block), EmbeddingGemma 2 conv0 1→128 k3 s2, 1 s`, {
+      cIn: 1,
+      cOut: 128,
+      hw: [100, 128],
+      k: 3,
+      stride: 2,
+      dtype,
+    }),
+    conv2d(`tiled ${dtype} (16 ch/block), EmbeddingGemma 2 conv0 1→128 k3 s2, 10 s`, {
+      cIn: 1,
+      cOut: 128,
+      hw: [1000, 128],
+      k: 3,
+      stride: 2,
+      dtype,
+    }),
+    conv2d(`generic ${dtype}, EmbeddingGemma 2 conv1 128→32 k3 s2, 1 s`, {
+      cIn: 128,
+      cOut: 32,
+      hw: [50, 64],
+      k: 3,
+      stride: 2,
+      dtype,
+    }),
+    conv2d(`tiled ${dtype} (8 ch/block), EmbeddingGemma 2 conv1 128→32 k3 s2, 10 s`, {
+      cIn: 128,
+      cOut: 32,
+      hw: [500, 64],
+      k: 3,
+      stride: 2,
+      dtype,
+    }),
+  ]),
+  // The other f32 routes, at the f16 cases' shapes.
+  conv2d('1×1 f32 (8 px/thread), 32→32 @160²', {
+    cIn: 32,
+    cOut: 32,
+    hw: 160,
+    k: 1,
+    act: 'silu',
+    dtype: 'f32',
+  }),
+  conv2d('1×1 split-K f32, 80→80 @20²', { cIn: 80, cOut: 80, hw: 20, k: 1, dtype: 'f32' }),
+  conv2d('depthwise f32 (2 cols), 64ch k3 @80²', {
+    cIn: 64,
+    cOut: 64,
+    hw: 80,
+    k: 3,
+    depthwise: true,
+    act: 'silu',
+    dtype: 'f32',
+  }),
+  conv2d('tiled f32 + fused residual, 64→64 k3 @80²', {
+    cIn: 64,
+    cOut: 64,
+    hw: 80,
+    k: 3,
+    residual: true,
+    dtype: 'f32',
+  }),
   {
     name: 'two convs into a cat (copy elided), YOLO26n neck 64+64 @40²',
     needs: ['shader-f16'],
@@ -447,9 +551,18 @@ abSuite('conv', [
   ),
   convTransposeQuant('convT int8, Higgs upsampling 64→32 s3, 10 s', 80000, 64, 32, 3, 8, 32),
 
-  // gluConv1d: its own kernel.
+  // gluConv1d: the depthwise conv1d kernel with its GLU.
   gluConv1d('gluConv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5', 750, 1024, 5, 'f32'),
   gluConv1d('gluConv1d f16, EmbeddingGemma 2 audio 30 s', 750, 1024, 5, 'f16'),
+  // The same kernel without its GLU: nn.Conv1d with groups.
+  depthwiseConv1d(
+    'depthwise conv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5',
+    750,
+    1024,
+    5,
+    'f32',
+  ),
+  depthwiseConv1d('depthwise conv1d f16, EmbeddingGemma 2 audio 30 s', 750, 1024, 5, 'f16'),
 
   convTranspose2d('convTranspose2d (paired), YOLO26n-seg proto 64→64 @80²', 64, 64, 80),
   convTranspose2d('convTranspose2d (unpaired), cIn 3 @64²', 3, 8, 64),
@@ -496,6 +609,33 @@ abSuite('conv', [
     build: (version) => {
       const x = version.upload(version.rand(96 * 56 * 56), chw(96, 56, 56, 'f16'));
       return () => version.lib.toHwc4(x);
+    },
+  },
+  // The f32 conversions. A base whose hwc4 is f16 only throws, which skips them.
+  {
+    name: 'toHwc4 f32 to f32, EmbeddingGemma 2 mel frames 1ch @1000×128',
+    build: (version) => {
+      const x = version.upload(version.rand(1000 * 128), chw(1, 1000, 128));
+      const call = () => version.lib.toHwc4(x, 'f32');
+      if (call().shape.dtype !== 'f32') throw new Error('toHwc4 stores f16 only');
+      return call;
+    },
+  },
+  {
+    name: 'toChw f32 from f32, 128ch @20²',
+    build: (version) => {
+      const x = f32Hwc4(version, 128, 20, 20);
+      return () => version.lib.toChw(x, 'f32');
+    },
+  },
+  {
+    name: 'toHwc f32, EmbeddingGemma 2 conv1 output 32ch @250×32',
+    build: (version) => {
+      // A base without the op throws here, which skips the case.
+      const { toHwc: op } = version.lib;
+      if (typeof op !== 'function') throw new Error('no toHwc op');
+      const x = f32Hwc4(version, 32, 250, 32);
+      return () => op(x);
     },
   },
 ]);

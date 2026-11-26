@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toArray } from '../../../../src/core/gpu/eval.ts';
-import { layerNorm } from '../../../../src/core/graph/ops.ts';
-import { matrix } from '../../../../src/core/graph/value.ts';
+import { layerNorm, toChw, toHwc4 } from '../../../../src/core/graph/ops.ts';
+import { matrix, tensor3d } from '../../../../src/core/graph/value.ts';
 import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../../gpu.ts';
 
 const { root, ex } = await gpu();
@@ -100,6 +100,39 @@ describe('layerNorm kernel', () => {
   });
 
   it('honours eps', () => checkLayerNorm({ rows: 3, cols: 50, dtype: 'f32', eps: 0.5 }));
+
+  // An hwc4 image [C, H, W] with C a multiple of 4 is one row of C channels
+  // per pixel, so each pixel normalizes over its channels.
+  it.for(
+    (['f32', 'f16'] as const).flatMap((dtype) => [false, true].map((bias) => ({ dtype, bias }))),
+  )('$dtype normalizes an hwc4 image over its channels, bias $bias', async (c, ctx) => {
+    if (c.dtype === 'f16') requireFeature(ctx, root, 'shader-f16');
+    const [channels, h, w] = [8, 3, 5];
+    const pixels = h * w;
+    const round = c.dtype === 'f16' ? roundF16 : (v: Float32Array) => v;
+    const chw = round(randomF32(channels * pixels, 1));
+    const weight = round(randomF32(channels, 2));
+    const bias = c.bias ? round(randomF32(channels, 3)) : undefined;
+    const vector = (data: Float32Array) =>
+      upload(root, data, { ...matrix(1, channels), dtype: c.dtype });
+    const y = layerNorm(
+      toHwc4(upload(root, chw, tensor3d(channels, h, w)), c.dtype),
+      vector(weight),
+      1e-5,
+      bias && vector(bias),
+    );
+    // The reference runs on [pixel, channel] rows and goes back to CHW.
+    const rows = new Float32Array(pixels * channels);
+    for (let ch = 0; ch < channels; ch++) {
+      for (let p = 0; p < pixels; p++) rows[p * channels + ch] = chw[ch * pixels + p]!;
+    }
+    const normed = layerNormRef(rows, weight, pixels, channels, 1e-5, bias);
+    const want = new Float64Array(channels * pixels);
+    for (let ch = 0; ch < channels; ch++) {
+      for (let p = 0; p < pixels; p++) want[ch * pixels + p] = normed[p * channels + ch]!;
+    }
+    expectClose(await toArray(toChw(y, 'f32'), ex), want, TOLERANCE[c.dtype]);
+  });
 
   // x = [1, 3]: mean 2, biased variance 1, so (x − 2) / sqrt(1 + 1e-5) =
   // [-0.999995, 0.999995] as torch.nn.functional.layer_norm gives, then

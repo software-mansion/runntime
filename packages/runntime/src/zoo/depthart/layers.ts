@@ -53,7 +53,9 @@ export class BatchNormC extends Module {
     readonly eps = 1e-5,
   ) {
     super();
-    const p = () => new Parameter({ elems: channels, dtype: 'f32', dims: [channels] });
+    // Pinned: channelAffine reads them as f32.
+    const p = () =>
+      new Parameter({ elems: channels, dtype: 'f32', dims: [channels] }, undefined, true);
     this.scale = p();
     this.shift = p();
   }
@@ -160,7 +162,7 @@ export class RepDW extends Module {
     const center = centerTap(this.kH, this.kW);
     const eps = this.eps;
 
-    // f32: the loader rounds the merged taps to f16 once, for the pinned conv.
+    // f32: the loader rounds the merged taps to f16 once, for the f16 conv.
     let memo: Promise<{ w: Float32Array; b: Float32Array }> | undefined;
     const merged = () =>
       (memo ??= (async () => {

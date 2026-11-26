@@ -1218,6 +1218,46 @@ describe('Conv1d and ConvTranspose1d with a quantized weight', () => {
     expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
   });
 
+  // A depthwise conv never runs quantized, whatever its shape: 8 channels and
+  // 8 taps would fit the quantized matmul as a groups-1 conv.
+  it('loads a depthwise Conv1d weight as its dequantized floats', async () => {
+    const [channels, kernel] = [8, 8];
+    // torch [channels, kernel]: ints −30 … 33, one scale per row, (c + 1) / 4
+    const ints = Array.from({ length: channels * kernel }, (_, i) => i - 30);
+    const scales = Array.from({ length: channels }, (_, c) => (c + 1) / 4);
+    const layer = new Conv1d(channels, channels, kernel, {
+      groups: channels,
+      padLeft: kernel - 1,
+      bias: false,
+    });
+    const sd = await quantCheckpoint(8, kernel, {
+      weight: { ints, scales, shape: [channels, kernel] },
+    });
+    layer.transformStateDict(sd, '');
+    expect(shapes(layer)).toEqual({ weight: meta([kernel, channels]) });
+    expect(layer.weightScale).toBeUndefined();
+    expect(sd.quantizedAsFloat).toEqual(['weight']);
+    // tap-major [kernel, channels]: row tap, column c holds torch's (c, tap)
+    const want = Array.from({ length: kernel * channels }, (_, i) => {
+      const [tap, c] = [Math.floor(i / channels), i % channels];
+      return ints[c * kernel + tap]! * scales[c]!;
+    });
+    expect([...(await sd.tensors.get('weight')!.f32())]).toEqual(want);
+  });
+
+  it('refuses a quantized depthwise Conv1d weight of another shape', async () => {
+    const layer = new Conv1d(4, 4, 2, { groups: 4, padLeft: 1, bias: false });
+    const sd = await quantCheckpoint(8, 8, {
+      weight: { ints: new Array<number>(32).fill(1), scales: [1, 1, 1, 1], shape: [4, 8] },
+    });
+    expect(() => layer.transformStateDict(sd, '')).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'Conv1d: weight is quantized as [4, 8], expected [out, kernel] = [4, 2]',
+      }),
+    );
+  });
+
   it.each([
     { name: 'taps·in that is not a multiple of 8', cIn: 4, cOut: 4, kernel: 6 },
     { name: 'out that is not a multiple of 4', cIn: 8, cOut: 2, kernel: 4 },
@@ -1303,6 +1343,57 @@ describe('Conv1d', () => {
     expect(() => new Conv1d(1, 2, 2).transformStateDict(sd, 'c')).toThrow(
       expect.objectContaining({ code: 'CHECKPOINT_MISMATCH' }),
     );
+  });
+
+  const depthwise = (channels: number, kernel: number) =>
+    new Conv1d(channels, channels, kernel, {
+      groups: channels,
+      padLeft: kernel - 1,
+      bias: false,
+    });
+
+  it.each([
+    { name: 'groups that do not cover the channels', cIn: 8, cOut: 8, groups: 2 },
+    { name: 'depthwise groups with more outputs than inputs', cIn: 8, cOut: 16, groups: 8 },
+    { name: 'groups equal to the outputs alone', cIn: 4, cOut: 8, groups: 8 },
+  ])('rejects $name with an INVALID_ARGUMENT', ({ cIn, cOut, groups }) => {
+    expect(() => new Conv1d(cIn, cOut, 3, { groups })).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message: `Conv1d: groups=${groups} is neither 1 nor depthwise (cIn=${cIn}, cOut=${cOut})`,
+      }),
+    );
+  });
+
+  it('stores a depthwise weight tap-major as [kernelSize, channels]', () => {
+    expect(shapes(depthwise(8, 3))).toEqual({ weight: meta([3, 8]) });
+  });
+
+  it('reorders a torch [channels, 1, k] depthwise weight at load', async () => {
+    const sd = memoryStateDict({
+      'c.weight': { data: new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), shape: [4, 1, 2] },
+    });
+    depthwise(4, 2).transformStateDict(sd, 'c');
+    const w = sd.tensors.get('c.weight')!;
+    // row tap, column channel
+    expect(w.shape).toEqual([2, 4]);
+    expect(await w.f32()).toEqual(new Float32Array([1, 3, 5, 7, 2, 4, 6, 8]));
+  });
+
+  it('rejects a depthwise weight stored with every input channel', () => {
+    const sd = memoryStateDict({ 'c.weight': { data: new Float32Array(32), shape: [4, 4, 2] } });
+    expect(() => depthwise(4, 2).transformStateDict(sd, 'c')).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'Conv1d: c.weight has shape [4,4,2], expected torch layout [4, 1, 2]',
+      }),
+    );
+  });
+
+  it('runs a depthwise conv as its own op and keeps [T, channels]', () => {
+    const y = fakeLoad(depthwise(8, 3)).forward(input([10, 8]));
+    expect(y.shape).toEqual(meta([10, 8]));
+    expect(y.pending).toMatchObject({ op: 'depthwiseConv1d', attrs: [3] });
   });
 
   // torch [out 2, in 3, k 2] holding elements 0..11 loads tap-major as
@@ -1485,16 +1576,17 @@ describe('Snake', () => {
 });
 
 describe('Conv2d', () => {
-  it('declares an f16 hwc4 weight that half() and float() leave alone', () => {
+  it('declares an f32 hwc4 weight and bias that half() makes f16 and float() f32 again', () => {
     const conv = new Conv2d(8, 16, { kernelSize: 3 });
-    expect(conv.weight.shape).toEqual({
+    const weight = (dtype: 'f32' | 'f16') => ({
       elems: 16 * 72,
-      dtype: 'f16',
+      dtype,
       dims: [16, 8 * 3 * 3],
       layout: 'hwc4',
     });
-    expect(conv.weight.pinned).toBe(true);
-    expect(conv.bias!.shape).toEqual(meta([16], 'f16'));
+    expect(shapes(conv)).toEqual({ weight: weight('f32'), bias: meta([16]) });
+    expect(shapes(conv.half())).toEqual({ weight: weight('f16'), bias: meta([16], 'f16') });
+    expect(shapes(conv.float())).toEqual({ weight: weight('f32'), bias: meta([16]) });
   });
 
   it('sizes a depthwise weight per channel', () => {
@@ -1526,13 +1618,25 @@ describe('Conv2d', () => {
     expect(packed).toEqual(new Uint16Array([1, 2, 3, 4, 5, 0, 0, 0]));
   });
 
-  it('refuses f32 weights at load', () => {
-    const conv = new Conv2d(2, 2, { kernelSize: 1 });
-    expect(() => conv.weight.preprocess!(new Float32Array(4))).toThrow(/must arrive as f16 bits/);
+  it('packs f32 weights the same way, as f32', () => {
+    const packed = new Conv2d(2, 3, { kernelSize: 1 }).weight.preprocess!(
+      new Float32Array([1, 2, 3, 4, 5, 6]),
+    );
+    expect(packed).toEqual(new Float32Array([1, 3, 5, 0, 2, 4, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+  });
+
+  it('refuses an f32 weight for winograd at load', () => {
+    const conv = new Conv2d(1, 1, { kernelSize: 3, padding: 1, winograd: true });
+    expect(() => conv.weight.preprocess!(new Float32Array(9))).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message: 'Conv2d: winograd has no f32 kernel yet, run the model in f16 with half()',
+      }),
+    );
   });
 
   it('maps an hwc4 map to an hwc4 map', () => {
-    const conv = fakeLoad(new Conv2d(8, 16, { kernelSize: 3, stride: 2, padding: 1 }));
+    const conv = fakeLoad(new Conv2d(8, 16, { kernelSize: 3, stride: 2, padding: 1 }).half());
     expect(conv.forward(hwc4Input(8, 32, 32)).shape).toEqual(hwc4Input(16, 16, 16).shape);
   });
 });
@@ -1583,11 +1687,10 @@ describe('BatchNorm2d', () => {
     [`${prefix}bn.running_mean`]: bf16([1, 0]),
     [`${prefix}bn.running_var`]: bf16([3, 3]),
   });
-  // The folded weight, packed by Conv2d into one [in][out] hwc4 tile, as f16
-  // bits: 2 → 0x4000, 4 → 0x4400, 6 → 0x4600, 8 → 0x4800, 5 → 0x4500.
-  const FOLDED_WEIGHT = new Uint16Array(16);
-  FOLDED_WEIGHT.set([0x4000, 0x4600, 0, 0, 0x4400, 0x4800]);
-  const FOLDED_BIAS = new Uint16Array([0, 0x4500]);
+  // The folded weight, packed by Conv2d into one [in][out] hwc4 tile.
+  const FOLDED_WEIGHT = new Float32Array(16);
+  FOLDED_WEIGHT.set([2, 6, 0, 0, 4, 8]);
+  const FOLDED_BIAS = new Float32Array([0, 5]);
 
   class ConvBn extends Module {
     conv = new Conv2d(2, 2, { kernelSize: 1, bias: true });

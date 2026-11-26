@@ -158,6 +158,9 @@ export class DepthartModel extends Module {
     }
     this.pretrained = new Backbone(cfg);
     this.depth_head = new DepthHead(cfg.dims, cfg.features);
+    // The convs run hwc4 in f16. The norm tables and the scan parameters are
+    // pinned f32.
+    this.half();
   }
   forward(img: Value): Value {
     const raw = this.depth_head.forward(this.pretrained.forward(img), this.cfg.inputSize);

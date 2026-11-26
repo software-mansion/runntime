@@ -1,7 +1,14 @@
 /** Input builders shared by the kernel A/B cases. Random data comes from
  *  `Version.rand`, so A and B get the same numbers. */
 import type { Version } from '../ab.ts';
-import { packQuantW, type EagerDtype, type Value, type ValueMeta } from '../../src/core/index.ts';
+import {
+  packConvHwc4,
+  packDwHwc4,
+  packQuantW,
+  type EagerDtype,
+  type Value,
+  type ValueMeta,
+} from '../../src/core/index.ts';
 
 type Float = 'f32' | 'f16';
 
@@ -18,9 +25,15 @@ export function randMat(version: Version, rows: number, cols: number, dtype: Flo
   return version.upload(version.rand(rows * cols), mat(rows, cols, dtype));
 }
 
-/** A random f16 image already stored hwc4, padding lanes zero. */
-export function randHwc4(version: Version, c: number, h: number, w: number): Value {
-  const meta = version.lib.hwc4Meta(c, h, w);
+/** A random image already stored hwc4, f16 by default, padding lanes zero. */
+export function randHwc4(
+  version: Version,
+  c: number,
+  h: number,
+  w: number,
+  dtype: Float = 'f16',
+): Value {
+  const meta = version.lib.hwc4Meta(c, h, w, dtype);
   const c4 = meta.elems / (h * w);
   const vals = version.rand(h * w * c);
   const data = new Float32Array(meta.elems);
@@ -30,28 +43,32 @@ export function randHwc4(version: Version, c: number, h: number, w: number): Val
   return version.upload(data, meta);
 }
 
-/** A conv2d weight from random torch-layout [cOut, cIn/groups, k, k], packed
- *  by the version's own packer. */
+/** A conv2d weight from random torch-layout [cOut, cIn/groups, k, k]. Both
+ *  versions get it packed by this checkout's packer: the layout is the
+ *  kernels' contract, so A and B read the same tiles. */
 export function convWeight(
   version: Version,
   cOut: number,
   cIn: number,
   k: number,
   groups = 1,
+  dtype: Float = 'f16',
 ): Value {
-  const dw = groups > 1;
-  const bits = version.lib.f32ArrayToF16Bits(version.rand(cOut * (cIn / groups) * k * k)).data;
-  const packed = dw
-    ? version.lib.packDwHwc4F16(bits, cIn, k, k)
-    : version.lib.packConvHwc4F16(bits, cOut, cIn, k, k);
+  const values = version.rand(cOut * (cIn / groups) * k * k);
+  const src = dtype === 'f16' ? version.lib.f32ArrayToF16Bits(values).data : values;
+  const packed = groups > 1 ? packDwHwc4(src, cIn, k, k) : packConvHwc4(src, cOut, cIn, k, k);
   const meta: ValueMeta = {
     elems: cOut * (cIn / groups) * k * k,
-    dtype: 'f16',
+    dtype,
     dims: [cOut, (cIn / groups) * k * k],
     layout: 'hwc4',
   };
+  const { lib, root } = version;
   return version.freeAfterCase(
-    version.lib.materialized(meta, version.lib.uploadF16(version.root, packed)),
+    lib.materialized(
+      meta,
+      packed instanceof Uint16Array ? lib.uploadF16(root, packed) : lib.uploadF32(root, packed),
+    ),
   );
 }
 

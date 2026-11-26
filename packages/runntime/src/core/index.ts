@@ -7,8 +7,8 @@ export {
   f32ArrayToF16Bits,
   f16ToF32,
   f32ToF16Bits,
-  packConvHwc4F16,
-  packDwHwc4F16,
+  packConvHwc4,
+  packDwHwc4,
   permuteConvTransposeF16,
 } from './weights/convert.ts';
 export {
@@ -83,6 +83,7 @@ export {
   swigluChunk,
   tanh,
   toChw,
+  toHwc,
   toHwc4,
   avgPool2d,
   channelAffine,
@@ -154,7 +155,6 @@ export {
   concatRows,
   dequantize,
   inTorchShape,
-  permuteRows,
   reshapeWeight,
   scaleWeight,
   splitCols,

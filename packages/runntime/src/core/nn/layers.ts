@@ -24,10 +24,10 @@ import { matmulQuantTiledEligible } from '../kernels/matmul/matmulQuantTiled.ts'
 import {
   convToTapMajor,
   f16ToF32,
-  packConv1x1Hwc4F16,
-  packConvHwc4F16,
+  packConv1x1Hwc4,
+  packConvHwc4,
   packConvWinogradF16,
-  packDwHwc4F16,
+  packDwHwc4,
   permuteConvTransposeF16,
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
@@ -458,7 +458,7 @@ function quantConvFits(cIn: number, taps: number, n: number): boolean {
 }
 
 /** Strided, dilated 1D convolution over time-major [T, inChannels]. No batch
- *  dim, no groups.
+ *  dim. Groups are 1 or fully depthwise.
  *
  *  `padding` takes torch's number, 'valid' or 'same'; padLeft and padRight pad
  *  each side independently instead. span − 1 on the left is causal, with
@@ -466,12 +466,17 @@ function quantConvFits(cIn: number, taps: number, n: number): boolean {
  *  weight is stored tap-major and permutes from torch layout at load. bias and
  *  `activation` fold into the conv epilogue.
  *
- *  A quantized checkpoint weight is torch's [out, in·kernel], one scale per
- *  group of values along each row. It loads as quantW words with its f32
- *  scales in `weightScale` [in·kernel / groupSize, out]. Output channels pad
- *  up to the packing width, scales and bias with them, and are cut after the
- *  conv. A conv the quantized matmul cannot run loads a quantized weight as
- *  its dequantized floats. */
+ *  A depthwise conv, `groups` equal to both channel counts, loads torch's
+ *  [channels, 1, kernelSize] weight and runs causal only: stride 1, no
+ *  dilation, padLeft kernelSize − 1, `bias: false`, no activation, channels a
+ *  multiple of 4. forward() throws INVALID_ARGUMENT for anything else.
+ *
+ *  A quantized checkpoint weight is torch's [out, in / groups · kernel], one
+ *  scale per group of values along each row. It loads as quantW words with its
+ *  f32 scales in `weightScale` [in·kernel / groupSize, out]. Output channels
+ *  pad up to the packing width, scales and bias with them, and are cut after
+ *  the conv. A conv the quantized matmul cannot run, every depthwise one
+ *  included, loads a quantized weight as its dequantized floats. */
 export class Conv1d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
@@ -485,6 +490,9 @@ export class Conv1d extends Module {
   readonly padLeft?: number;
   readonly padRight?: number;
   readonly activation?: SlotAct;
+  readonly groups: number;
+  /** Throws INVALID_ARGUMENT for `groups` that are neither 1 nor both channel
+   *  counts. */
   constructor(
     readonly inChannels: number,
     readonly outChannels: number,
@@ -497,6 +505,7 @@ export class Conv1d extends Module {
       padLeft?: number;
       padRight?: number;
       activation?: SlotAct;
+      groups?: number;
     } = {},
   ) {
     super();
@@ -506,7 +515,14 @@ export class Conv1d extends Module {
     this.padLeft = opts.padLeft;
     this.padRight = opts.padRight;
     this.activation = opts.activation;
-    const rows = kernelSize * inChannels;
+    this.groups = opts.groups ?? 1;
+    if (this.groups !== 1 && (this.groups !== inChannels || inChannels !== outChannels)) {
+      throw new RunntimeError(
+        'INVALID_ARGUMENT',
+        `Conv1d: groups=${this.groups} is neither 1 nor depthwise (cIn=${inChannels}, cOut=${outChannels})`,
+      );
+    }
+    const rows = kernelSize * (inChannels / this.groups);
     this.weight = new Parameter(matrix(rows, outChannels));
     this.bias =
       opts.bias === false
@@ -517,16 +533,18 @@ export class Conv1d extends Module {
     const name = prefix ? `${prefix}.weight` : 'weight';
     let tensor = sd.tensors.get(name);
     if (!tensor) return; // a missing key is reported by the key check
+    const { outChannels: cOut, kernelSize: kernel } = this;
+    // Input channels each output reads.
+    const cIn = this.inChannels / this.groups;
     if (tensor.kind === 'quant') {
-      const { inChannels: cIn, outChannels: cOut, kernelSize: kernel } = this;
       checkQuantConvShape('Conv1d', name, tensor, {
         rows: cOut,
         cols: cIn * kernel,
-        layout: '[out, in·kernel]',
+        layout: this.groups === 1 ? '[out, in·kernel]' : '[out, kernel]',
       });
       const width = 32 / tensor.bits;
       const n = Math.ceil(cOut / width) * width;
-      if (quantConvFits(cIn, kernel, n)) {
+      if (this.groups === 1 && quantConvFits(cIn, kernel, n)) {
         this.loadQuantized(sd, prefix, name, tensor, n);
         return;
       }
@@ -535,28 +553,20 @@ export class Conv1d extends Module {
     // Without this a weight with equal in/out channels loads scrambled.
     if (
       tensor.shape.length !== 3 ||
-      tensor.shape[0] !== this.outChannels ||
-      tensor.shape[1] !== this.inChannels ||
-      tensor.shape[2] !== this.kernelSize
+      tensor.shape[0] !== cOut ||
+      tensor.shape[1] !== cIn ||
+      tensor.shape[2] !== kernel
     ) {
       throw new RunntimeError(
         'CHECKPOINT_MISMATCH',
         `Conv1d: ${name} has shape ${JSON.stringify(tensor.shape)}, ` +
-          `expected torch layout [${this.outChannels}, ${this.inChannels}, ${this.kernelSize}]`,
+          `expected torch layout [${cOut}, ${cIn}, ${kernel}]`,
       );
     }
     sd.tensors.set(
       name,
-      deriveFromTensors(
-        [this.kernelSize * this.inChannels, this.outChannels],
-        [tensor],
-        async ([torch]) =>
-          convToTapMajor(
-            await readFloats('Conv1d', torch),
-            this.outChannels,
-            this.inChannels,
-            this.kernelSize,
-          ),
+      deriveFromTensors([kernel * cIn, cOut], [tensor], async ([torch]) =>
+        convToTapMajor(await readFloats('Conv1d', torch), cOut, cIn, kernel),
       ),
     );
   }
@@ -626,6 +636,7 @@ export class Conv1d extends Module {
       padRight: this.padRight,
       bias: this.bias?.value,
       activation: this.activation,
+      groups: this.groups,
       ...(this.weightScale && this.quantization
         ? { scales: this.weightScale.value, ...this.quantization }
         : {}),
@@ -890,9 +901,10 @@ export class GroupNorm extends Module {
 /** 2D convolution over [C_in, H, W], matching torch.nn.Conv2d.
  *
  *  Takes and returns hwc4-stored activations, so models enter the layout once
- *  with toHwc4 and leave with toChw. Requires shader-f16. Groups are 1 or fully
- *  depthwise. BatchNorm folds in at load rather than running, so `bias: true`
- *  is normal for BN-fused checkpoints. */
+ *  with toHwc4 and leave with toChw. Weight and bias are f32 until half()
+ *  makes them f16, which needs shader-f16; the activations have the weight's
+ *  dtype. Groups are 1 or fully depthwise. BatchNorm folds in at load rather
+ *  than running, so `bias: true` is normal for BN-fused checkpoints. */
 export class Conv2d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
@@ -909,7 +921,8 @@ export class Conv2d extends Module {
       activation?: ConvAct;
       /** Runs a 3×3, stride 1, padding 1 conv as Winograd F(4×4, 3×3): a
        *  quarter of the multiplies, rounded differently in f16. The weight
-       *  packs into 4× its size. */
+       *  packs into 4× its size. f16 only: loading an f32 weight throws
+       *  INVALID_ARGUMENT. */
       winograd?: boolean;
     },
   ) {
@@ -928,22 +941,28 @@ export class Conv2d extends Module {
     this.weight = new Parameter(
       // Raw checkpoint size, which is what the loader pre-checks; the padded
       // blob from preprocess sizes the buffer instead.
-      { elems: outChannels * kk, dtype: 'f16', dims: [outChannels, kk], layout: 'hwc4' },
+      { elems: outChannels * kk, dtype: 'f32', dims: [outChannels, kk], layout: 'hwc4' },
       (data) => {
-        if (!(data instanceof Uint16Array)) {
-          throw new Error('Conv2d: weight must arrive as f16 bits (Uint16Array)');
+        if (data instanceof Uint32Array) {
+          throw new Error('Conv2d: weight must arrive as f32 values or f16 bits');
         }
-        if (winograd) return packConvWinogradF16(data, outChannels, inChannels);
-        if (pointwise) return packConv1x1Hwc4F16(data, outChannels, inChannels);
+        if (winograd) {
+          if (!(data instanceof Uint16Array)) {
+            throw new RunntimeError(
+              'INVALID_ARGUMENT',
+              'Conv2d: winograd has no f32 kernel yet, run the model in f16 with half()',
+            );
+          }
+          return packConvWinogradF16(data, outChannels, inChannels);
+        }
+        if (pointwise) return packConv1x1Hwc4(data, outChannels, inChannels);
         return dw
-          ? packDwHwc4F16(data, outChannels, kH, kW)
-          : packConvHwc4F16(data, outChannels, inChannels, kH, kW);
+          ? packDwHwc4(data, outChannels, kH, kW)
+          : packConvHwc4(data, outChannels, inChannels, kH, kW);
       },
-      true, // pinned: the conv kernels only ever read f16 weights
     );
-    // The hwc4 kernels bind nothing else, so conv-only models need no half().
     this.bias = bias
-      ? new Parameter({ elems: outChannels, dtype: 'f16', dims: [outChannels] })
+      ? new Parameter({ elems: outChannels, dtype: 'f32', dims: [outChannels] })
       : undefined;
   }
   forward(x: Value): Value {

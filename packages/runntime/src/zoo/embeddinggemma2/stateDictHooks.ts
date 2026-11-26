@@ -14,11 +14,9 @@ import {
   derive,
   f32ArrayToF16Bits,
   inTorchShape,
-  permuteRows,
   reshapeWeight,
   scaleWeight,
   splitRows,
-  transposeWeight,
   type LazyStateDict,
   type LazyTensor,
 } from '../../core/index.ts';
@@ -110,9 +108,8 @@ export function transformEmbeddingGemma2VisionStateDict(
   }
 }
 
-/** The audio tower's mapping. The two conv weights take the taps-major
- *  layout the convs read as matmuls. q, k and v run as one matmul, so they
- *  must share their bounds. Each layer's distance bias rows and q column scales
+/** The audio tower's mapping. q, k and v run as one matmul, so they must
+ *  share their bounds. Each layer's distance bias rows and q column scales
  *  are computed here, and the feed-forward residual weight folds into its
  *  post norm. */
 export function transformEmbeddingGemma2AudioStateDict(
@@ -123,8 +120,7 @@ export function transformEmbeddingGemma2AudioStateDict(
   const what = 'embeddinggemma2 audio state dict';
   const q = (name: string) => qualify(prefix, `audio_tower.${name}`);
   const put = (name: string, t: LazyTensor) => sd.tensors.set(q(name), t);
-  const { hidden, headDim, convKernel: K, window } = cfg;
-  const [c0, c1] = cfg.convChannels;
+  const { hidden, headDim, window } = cfg;
   const BOUNDS = ['input_min', 'input_max', 'output_min', 'output_max'];
   /** Rebuilds a clipped linear's bounds as f32: the CPU parameters they bind
    *  to would hold a BF16 bound as raw bits. */
@@ -137,20 +133,6 @@ export function transformEmbeddingGemma2AudioStateDict(
       );
     }
   };
-
-  // The first conv has one input channel: [c0, 9] as a linear over 3×3
-  // taps. The second reads its taps (row, column, channel) major, so each
-  // output's [c0, 9] block becomes [9, c0], one element at a time.
-  const sub = 'subsample_conv_projection.';
-  const conv0 = `${sub}layer0.conv.weight`;
-  put(conv0, reshapeWeight(take(sd, what, q(conv0)), [c0, 9]));
-  const tapsMajor = Array.from({ length: c1 * 9 * c0 }, (_, j) => {
-    const [o, k, c] = [Math.floor(j / (9 * c0)), Math.floor(j / c0) % 9, j % c0];
-    return (o * c0 + c) * 9 + k;
-  });
-  const conv1 = `${sub}layer1.conv.weight`;
-  const taps = reshapeWeight(inTorchShape(take(sd, what, q(conv1)), [c1, c0, 3, 3]), [c1 * c0 * 9]);
-  put(conv1, reshapeWeight(permuteRows(taps, tapsMajor), [c1, 9 * c0]));
 
   // Sinusoidal rows for distances 0 … window − 1: sines, then cosines.
   const half = hidden / 2;
@@ -223,10 +205,6 @@ export function transformEmbeddingGemma2AudioStateDict(
       ),
     );
 
-    // [hidden, 1, K] → [K, hidden].
-    const conv = `${L}.lconv1d.depthwise_conv1d.weight`;
-    const depthwise = inTorchShape(take(sd, what, q(conv)), [hidden, 1, K]);
-    put(conv, transposeWeight(reshapeWeight(depthwise, [hidden, K])));
     f32Bounds(`${L}.lconv1d.linear_start`);
     f32Bounds(`${L}.lconv1d.linear_end`);
   }

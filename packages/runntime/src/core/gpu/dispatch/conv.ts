@@ -8,7 +8,10 @@ import {
   convTransposeScales,
   createConv1dPipeline,
 } from '../../kernels/conv/conv1d.ts';
-import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
+import {
+  createDepthwiseConv1dPipeline,
+  depthwiseConv1dHandle,
+} from '../../kernels/conv/depthwiseConv1d.ts';
 import {
   createMatmulQuantTiledPipeline,
   matmulQuantTiledHandle,
@@ -223,15 +226,39 @@ export const gluConv1dSpec = defineSpec({
     return { kernel, lo, hi };
   },
   cfg: () => undefined,
-  pipeline: (root, dtype) => createGluConv1dPipeline(root, elemFor(dtype)),
+  pipeline: (root, dtype) => createDepthwiseConv1dPipeline(root, elemFor(dtype), true),
   encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
     const dtype = node.shape.dtype;
-    const [rows, cols] = node.shape.dims as [number, number];
+    const [rows, channels] = node.shape.dims as [number, number];
+    const { kernel, lo, hi } = attrs;
     return [
-      gluConv1dHandle(
+      depthwiseConv1dHandle(
         ctx.root,
         pipeline,
-        { rows, cols, ...attrs },
+        { rows, channels, kernel, glu: { lo, hi } },
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          w: narrowFloat(inputs[1]!, dtype),
+          out: narrowFloat(out, dtype),
+        },
+        elemFor(dtype),
+      ),
+    ];
+  },
+});
+
+export const depthwiseConv1dSpec = defineSpec({
+  attrs: (p) => ({ kernel: p.attrs![0]! }),
+  cfg: () => undefined,
+  pipeline: (root, dtype) => createDepthwiseConv1dPipeline(root, elemFor(dtype), false),
+  encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
+    const dtype = node.shape.dtype;
+    const [rows, channels] = node.shape.dims as [number, number];
+    return [
+      depthwiseConv1dHandle(
+        ctx.root,
+        pipeline,
+        { rows, channels, kernel: attrs.kernel },
         {
           x: narrowFloat(inputs[0]!, dtype),
           w: narrowFloat(inputs[1]!, dtype),
@@ -276,7 +303,7 @@ export const convTranspose2dSpec = defineSpec({
   },
 });
 
-// hwc4 family: f16 only.
+// hwc4 family: the convs and the CHW conversions run f32 or f16, the rest f16 only.
 
 function holderBlocks(
   pOut: number,
@@ -342,28 +369,35 @@ export const conv2dHwc4Spec = defineSpec({
       bmb,
     };
   },
-  pipeline: (root, _dtype, cfg) =>
-    cfg.kind === 5 ? createWinogradPipelines(root, cfg) : createConv2dHwc4Pipeline(root, cfg),
+  pipeline: (root, dtype, cfg) =>
+    cfg.kind === 5
+      ? createWinogradPipelines(root, cfg)
+      : createConv2dHwc4Pipeline(root, cfg, elemFor(dtype)),
   encode: ({ node, attrs, cfg, pipeline, inputs, out, extras, ctx }) => {
     const [, h, w] = node.pending!.inputs[0]!.shape.dims as [number, number, number];
     const pOut = node.shape.dims![1]! * node.shape.dims![2]!;
-    const buffers = {
-      x: narrow(inputs[0]!, 'f16'),
-      w: narrow(inputs[1]!, 'f16'),
-      bias: attrs.hasBias === 1 ? narrow(inputs[2]!, 'f16') : ctx.dummy('f16'),
-      res: extras?.addend !== undefined ? narrow(extras.addend, 'f16') : ctx.dummy('f16'),
-      out: narrow(out, 'f16'),
-    };
     const args = { h, w, ...holderBlocks(pOut, extras) };
     if ('mul' in pipeline) {
       // f32 scratch holds the f16 planes, two values per element.
       return winogradHandles(ctx.root, pipeline, cfg, args, {
-        ...buffers,
+        x: narrow(inputs[0]!, 'f16'),
+        w: narrow(inputs[1]!, 'f16'),
+        bias: attrs.hasBias === 1 ? narrow(inputs[2]!, 'f16') : ctx.dummy('f16'),
+        res: extras?.addend !== undefined ? narrow(extras.addend, 'f16') : ctx.dummy('f16'),
+        out: narrow(out, 'f16'),
         planesIn: ctx.scratch('winogradIn', winogradPlaneElems(h, w, cfg.cIn) / 2),
         planesOut: ctx.scratch('winogradOut', winogradPlaneElems(h, w, cfg.cOut) / 2),
       });
     }
-    return [conv2dHwc4Handle(ctx.root, pipeline, cfg, args, buffers)];
+    const dtype = floatDtype(node.shape.dtype);
+    const buffers = {
+      x: narrow(inputs[0]!, dtype),
+      w: narrow(inputs[1]!, dtype),
+      bias: attrs.hasBias === 1 ? narrow(inputs[2]!, dtype) : ctx.dummy(dtype),
+      res: extras?.addend !== undefined ? narrow(extras.addend, dtype) : ctx.dummy(dtype),
+      out: narrow(out, dtype),
+    };
+    return [conv2dHwc4Handle(ctx.root, pipeline, cfg, args, buffers, elemFor(dtype))];
   },
 });
 
@@ -554,16 +588,17 @@ export const sliceChannelsHwc4Spec = defineSpec({
 export const toHwc4Spec = defineSpec({
   attrs: () => undefined,
   cfg: (node) => ({ from: floatDtype(node.pending!.inputs[0]!.shape.dtype) }),
-  pipeline: (root, _dtype, cfg) => createToHwc4Pipeline(root, cfg.from),
+  pipeline: (root, dtype, cfg) => createToHwc4Pipeline(root, cfg.from, floatDtype(dtype)),
   encode: ({ node, cfg, pipeline, inputs, out, ctx }) => {
+    const dtype = floatDtype(node.shape.dtype);
     const [c, h, w] = node.pending!.inputs[0]!.shape.dims as [number, number, number];
     return [
       toHwc4Handle(
         ctx.root,
         pipeline,
-        cfg.from,
+        { src: cfg.from, dst: dtype },
         { c, h, w },
-        { x: narrowFloat(inputs[0]!, cfg.from), out: narrow(out, 'f16') },
+        { x: narrow(inputs[0]!, cfg.from), out: narrow(out, dtype) },
       ),
     ];
   },
@@ -571,18 +606,18 @@ export const toHwc4Spec = defineSpec({
 
 export const toChwSpec = defineSpec({
   attrs: () => undefined,
-  cfg: () => undefined,
-  pipeline: (root, dtype) => createToChwPipeline(root, floatDtype(dtype)),
-  encode: ({ node, pipeline, inputs, out, ctx }) => {
+  cfg: (node) => ({ from: floatDtype(node.pending!.inputs[0]!.shape.dtype) }),
+  pipeline: (root, dtype, cfg) => createToChwPipeline(root, cfg.from, floatDtype(dtype)),
+  encode: ({ node, cfg, pipeline, inputs, out, ctx }) => {
     const dtype = floatDtype(node.shape.dtype);
     const [c, h, w] = node.pending!.inputs[0]!.shape.dims as [number, number, number];
     return [
       toChwHandle(
         ctx.root,
         pipeline,
-        dtype,
+        { src: cfg.from, dst: dtype },
         { c, h, w },
-        { x: narrow(inputs[0]!, 'f16'), out: narrowFloat(out, dtype) },
+        { x: narrow(inputs[0]!, cfg.from), out: narrow(out, dtype) },
       ),
     ];
   },

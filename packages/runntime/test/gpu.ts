@@ -83,6 +83,16 @@ export function gpuWithoutSubgroups(): Promise<{ root: TgpuRoot; ex: RunntimeExe
   return deviceWithoutSubgroups;
 }
 
+let deviceWithoutF16: Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> | undefined;
+
+/** A second device with no optional feature, for what has to run without
+ *  `shader-f16`. Features are fixed when a device is created, so it cannot be
+ *  the one gpu() returns. */
+export function gpuWithoutF16(): Promise<{ root: TgpuRoot; ex: RunntimeExecutor }> {
+  deviceWithoutF16 ??= tgpu.init().then((root) => ({ root, ex: gpuExecutor(root) }));
+  return deviceWithoutF16;
+}
+
 /** `tensor()` whose buffer is destroyed when the test ends: uploads are
  *  outside the executor's pool, so the caller frees them. */
 export function upload(

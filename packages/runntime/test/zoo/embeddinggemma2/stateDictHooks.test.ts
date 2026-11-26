@@ -293,12 +293,15 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
   const UNTOUCHED = [
     ...CLIPPED.map((c) => `${c}.linear.weight`),
     ...FUSED.map((c) => `${c}.linear.weight`),
+    `${sub}layer0.conv.weight`,
     `${sub}layer0.norm.weight`,
+    `${sub}layer1.conv.weight`,
     `${sub}layer1.norm.weight`,
     `${sub}input_proj_linear.weight`,
     `${T}.feed_forward1.pre_layer_norm.weight`,
     `${T}.feed_forward2.pre_layer_norm.weight`,
     `${T}.lconv1d.pre_layer_norm.weight`,
+    `${T}.lconv1d.depthwise_conv1d.weight`,
     `${T}.lconv1d.conv_norm.weight`,
     `${T}.norm_pre_attn.weight`,
     `${T}.norm_post_attn.weight`,
@@ -315,15 +318,6 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
     ...Object.assign({}, ...CLIPPED.map((p) => bound(p, [-1, 1, -2, 2]))),
     ...Object.assign({}, ...FUSED.map((p) => bound(p, [-3, 3, -4, 4]))),
-    // [c0, 1, 3, 3] and [c1, c0, 3, 3], values 1 … 18.
-    [`${sub}layer0.conv.weight`]: {
-      values: Array.from({ length: 18 }, (_, i) => i + 1),
-      shape: [2, 1, 3, 3],
-    },
-    [`${sub}layer1.conv.weight`]: {
-      values: Array.from({ length: 18 }, (_, i) => i + 1),
-      shape: [1, 2, 3, 3],
-    },
     [`${T}.feed_forward1.post_layer_norm.weight`]: { values: [2, 4, 6, 8], shape: [4] },
     [`${T}.feed_forward2.post_layer_norm.weight`]: { values: [1, 3, 5, 7], shape: [4] },
     [`${T}.self_attn.q_proj.linear.weight`]: grid(0, 4, 4),
@@ -336,49 +330,22 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     },
     // softplus(0) = ln 2, so each q scale is 4^-½ = 0.5.
     [`${T}.self_attn.per_dim_scale`]: { values: [0, 0, 0, 0], shape: [4] },
-    // [hidden, 1, K]: channel c holds taps 2c + 1, 2c + 2.
-    [`${T}.lconv1d.depthwise_conv1d.weight`]: {
-      values: [1, 2, 3, 4, 5, 6, 7, 8],
-      shape: [4, 1, 2],
-    },
   };
-  it.for(DTYPES)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
+  it.for(DTYPES)('maps a $dtype checkpoint', async ({ dtype, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
-    const before = new Map(sd.tensors);
     const get = mapAndCheck(
       sd,
       (s) => transformEmbeddingGemma2AudioStateDict(s, '', cfg),
       UNTOUCHED,
       [
-        `${sub}layer0.conv.weight`,
-        `${sub}layer1.conv.weight`,
         `${T}.feed_forward1.post_layer_norm.weight`,
         `${T}.feed_forward2.post_layer_norm.weight`,
         ...[...FUSED, ...CLIPPED].flatMap((c) => BOUNDS.map((b) => `${c}.${b}`)),
         `${T}.self_attn.rel`,
         `${T}.self_attn.q_scale`,
-        `${T}.lconv1d.depthwise_conv1d.weight`,
       ],
     );
-
-    // conv0 only folds its taps: the source tensor, reshaped.
-    const source = before.get(`${sub}layer0.conv.weight`)!;
-    const conv0 = get(`${sub}layer0.conv.weight`);
-    expect(conv0.shape).toEqual([2, 9]);
-    expect(conv0.byteLength).toBe(18 * elemBytes);
-    if (source.kind === 'quant' || conv0.kind === 'quant')
-      throw new Error('expected float tensors');
-    expect([conv0.kind, conv0.dtype]).toEqual([source.kind, source.dtype]);
-
-    // Tap k of channel c moves from c·9 + k to k·2 + c.
-    const conv1 = get(`${sub}layer1.conv.weight`);
-    expect(conv1.shape).toEqual([1, 18]);
-    expect(conv1.byteLength).toBe(18 * elemBytes);
-    expect(await contents(conv1)).toEqual({
-      type,
-      values: [1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 8, 17, 9, 18],
-    });
 
     // Times the residual weight 0.5, so f32 on every checkpoint.
     for (const [name, values] of [
@@ -426,12 +393,6 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     expect(qScaleValues.type).toBe('f32');
     qScaleValues.values.forEach((v) => expect(v).toBeCloseTo(0.5, 6));
 
-    // [hidden, 1, K] → [K, hidden]: tap 0 of every channel, then tap 1.
-    const lconv = get(`${T}.lconv1d.depthwise_conv1d.weight`);
-    expect(lconv.shape).toEqual([2, 4]);
-    expect(lconv.byteLength).toBe(8 * elemBytes);
-    expect(await contents(lconv)).toEqual({ type, values: [1, 3, 5, 7, 2, 4, 6, 8] });
-
     expect(sd.totalBytes()).toBe(total);
   });
 
@@ -477,26 +438,5 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
         });
       }
     }
-  });
-
-  it('reorders the convs quantized as rows [out, everything else] by their values', async () => {
-    const conv1 = `${sub}layer1.conv.weight`;
-    const depthwise = `${T}.lconv1d.depthwise_conv1d.weight`;
-    const sd = await checkpoint('F32', CHECKPOINT);
-    await storeAsQuantizedRows(sd, conv1, CHECKPOINT[conv1]!.values, 1);
-    await storeAsQuantizedRows(sd, depthwise, CHECKPOINT[depthwise]!.values, 4);
-    transformEmbeddingGemma2AudioStateDict(sd, '', cfg);
-    // The same values as from the float checkpoint: tap k of channel c at
-    // k·2 + c, and tap 0 of every channel, then tap 1.
-    expect(sd.tensors.get(conv1)!.shape).toEqual([1, 18]);
-    expect(await contents(sd.tensors.get(conv1)!)).toEqual({
-      type: 'f32',
-      values: [1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 8, 17, 9, 18],
-    });
-    expect(sd.tensors.get(depthwise)!.shape).toEqual([2, 4]);
-    expect(await contents(sd.tensors.get(depthwise)!)).toEqual({
-      type: 'f32',
-      values: [1, 3, 5, 7, 2, 4, 6, 8],
-    });
   });
 });

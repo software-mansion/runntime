@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { channelAffine, toChw, toHwc4 } from '../../../../src/core/graph/ops.ts';
+import { channelAffine, toChw, toHwc, toHwc4 } from '../../../../src/core/graph/ops.ts';
 import { hwc4Input, input, meta } from '../values.ts';
 
 describe('toHwc4', () => {
-  it('pads channels up to a multiple of 4 and stores f16', () => {
+  it('pads channels up to a multiple of 4 and stores f16 by default', () => {
     // 5 channels take 2 blocks of 4: 3·3 pixels × 8 lanes
     expect(toHwc4(input([5, 3, 3])).shape).toEqual({
       elems: 72,
@@ -11,6 +11,17 @@ describe('toHwc4', () => {
       dims: [5, 3, 3],
       layout: 'hwc4',
     });
+  });
+
+  it.each(['f32', 'f16'] as const)('stores %s when asked, whatever the input holds', (dtype) => {
+    for (const from of ['f32', 'f16'] as const) {
+      expect(toHwc4(input([5, 3, 3], from), dtype).shape).toEqual({
+        elems: 72,
+        dtype,
+        dims: [5, 3, 3],
+        layout: 'hwc4',
+      });
+    }
   });
 
   it.each([
@@ -28,6 +39,25 @@ describe('toChw', () => {
 
   it('rejects a row-major input', () => {
     expect(() => toChw(input([5, 3, 3]), 'f32')).toThrow(/must be hwc4-stored/);
+  });
+});
+
+describe('toHwc', () => {
+  it.each(['f32', 'f16'] as const)('gives row-major [H, W, C] in the image dtype, %s', (dtype) => {
+    expect(toHwc(hwc4Input(8, 3, 5, dtype)).shape).toEqual(meta([3, 5, 8], dtype));
+  });
+
+  it('rejects a row-major input', () => {
+    expect(() => toHwc(input([8, 3, 3]))).toThrow(/must be hwc4-stored/);
+  });
+
+  it('rejects channels that are not a multiple of 4 with an INVALID_ARGUMENT', () => {
+    expect(() => toHwc(hwc4Input(5, 3, 3))).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message: 'toHwc: channels must be a multiple of 4, got 5; toChw() takes any count',
+      }),
+    );
   });
 });
 
@@ -54,5 +84,15 @@ describe('channelAffine', () => {
     },
   ])('rejects $name', ({ scale = input([5]), shift, error }) => {
     expect(() => channelAffine(x, scale, shift)).toThrow(error);
+  });
+
+  it('rejects an f32 image with an INVALID_ARGUMENT', () => {
+    expect(() => channelAffine(hwc4Input(5, 3, 3, 'f32'), input([5]))).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message:
+          'channelAffine: no f32 kernel yet for an hwc4 input, run the model in f16 with half()',
+      }),
+    );
   });
 });

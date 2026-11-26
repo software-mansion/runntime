@@ -61,34 +61,23 @@ export function visionFile(cfg: EmbeddingGemma2VisionConfig = VISION): Uint8Arra
   );
 }
 
-/** A zero checkpoint the audio tower of `cfg` loads: the convs in torch's
- *  layout, and the file's relative_k_proj and per_dim_scale in place of the
- *  rel and q_scale the hook builds from them. */
+/** A zero checkpoint the audio tower of `cfg` loads: the file's
+ *  relative_k_proj and per_dim_scale in place of the rel and q_scale the hook
+ *  builds from them. */
 export function audioFile(cfg: EmbeddingGemma2AudioConfig = AUDIO): Uint8Array {
-  const {
-    hidden,
-    headDim,
-    convKernel,
-    convChannels: [c0, c1],
-  } = cfg;
+  const { hidden, headDim } = cfg;
   const layer = (i: number) => `audio_tower.layers.${i}`;
-  const sub = 'audio_tower.subsample_conv_projection';
   return zeroCheckpoint(
     new EmbeddingGemma2AudioModel(cfg),
     layers(cfg.layers).flatMap((i) => [
       `${layer(i)}.self_attn.rel`,
       `${layer(i)}.self_attn.q_scale`,
     ]),
-    {
-      [`${sub}.layer0.conv.weight`]: [c0, 1, 3, 3],
-      [`${sub}.layer1.conv.weight`]: [c1, c0, 3, 3],
-      ...Object.fromEntries(
-        layers(cfg.layers).flatMap((i) => [
-          [`${layer(i)}.self_attn.relative_k_proj.weight`, [hidden, hidden]],
-          [`${layer(i)}.self_attn.per_dim_scale`, [headDim]],
-          [`${layer(i)}.lconv1d.depthwise_conv1d.weight`, [hidden, 1, convKernel]],
-        ]),
-      ),
-    },
+    Object.fromEntries(
+      layers(cfg.layers).flatMap((i) => [
+        [`${layer(i)}.self_attn.relative_k_proj.weight`, [hidden, hidden]],
+        [`${layer(i)}.self_attn.per_dim_scale`, [headDim]],
+      ]),
+    ),
   );
 }

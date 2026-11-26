@@ -100,8 +100,8 @@ export class Yolo26Model<T extends Yolo26Task = 'detect'> extends Module<[Value]
           : new DetectHead(numClasses, YOLO26_CONFIG.regMax, [ch(256), ch(512), ch(1024)]), // 23
     ];
     this.model = new ModuleList(layers);
-    // HWC4 + f16 throughout: Conv2d packs mat4 tiles at load, half() flips the
-    // biases and every row-major island.
+    // HWC4 + f16 throughout: half() makes the convs and every row-major
+    // island f16, and Conv2d packs mat4 tiles at load.
     this.half(opts.root);
   }
 
