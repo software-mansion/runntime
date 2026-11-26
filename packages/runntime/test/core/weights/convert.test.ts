@@ -7,10 +7,10 @@ import {
   f16ToF32,
   f32ArrayToF16Bits,
   f32ToF16Bits,
-  packConv1x1Hwc4F16,
-  packConvHwc4F16,
+  packConv1x1Hwc4,
+  packConvHwc4,
   packConvWinogradF16,
-  packDwHwc4F16,
+  packDwHwc4,
   permuteConvTransposeF16,
 } from '../../../src/core/weights/convert.ts';
 
@@ -236,7 +236,7 @@ describe('permuteConvTransposeF16', () => {
   });
 });
 
-describe('packConvHwc4F16', () => {
+describe('packConvHwc4', () => {
   // [cOut, cIn, kH*kW] -> 4x4 tiles of [in % 4][out % 4], one tile per
   // (out block, in block, tap). Channels past cOut / cIn are zero.
   function tiles(count: number, entries: Record<number, number>): Uint16Array {
@@ -284,11 +284,17 @@ describe('packConvHwc4F16', () => {
     },
     { name: 'empty', cOut: 0, cIn: 0, kH: 1, kW: 1, src: [], want: tiles(0, {}) },
   ])('$name', ({ cOut, cIn, kH, kW, src, want }) => {
-    expect(packConvHwc4F16(new Uint16Array(src), cOut, cIn, kH, kW)).toEqual(want);
+    expect(packConvHwc4(new Uint16Array(src), cOut, cIn, kH, kW)).toEqual(want);
+  });
+
+  it('packs f32 values the same way, as f32', () => {
+    const want = new Float32Array(16);
+    want.set([1.5, 3.5, 0, 0, 2.5, 4.5]);
+    expect(packConvHwc4(new Float32Array([1.5, 2.5, 3.5, 4.5]), 2, 2, 1, 1)).toEqual(want);
   });
 });
 
-describe('packConv1x1Hwc4F16', () => {
+describe('packConv1x1Hwc4', () => {
   // [cOut, cIn] -> 4x4 tiles of [in % 4][out % 4], tile (in block, out block)
   // at inBlock·CO4 + outBlock. Channels past cOut / cIn are zero.
   function tiles(count: number, entries: Record<number, number>): Uint16Array {
@@ -317,7 +323,13 @@ describe('packConv1x1Hwc4F16', () => {
     { name: 'a single weight', cOut: 1, cIn: 1, src: [7], want: tiles(1, { 0: 7 }) },
     { name: 'empty', cOut: 0, cIn: 0, src: [], want: tiles(0, {}) },
   ])('$name', ({ cOut, cIn, src, want }) => {
-    expect(packConv1x1Hwc4F16(new Uint16Array(src), cOut, cIn)).toEqual(want);
+    expect(packConv1x1Hwc4(new Uint16Array(src), cOut, cIn)).toEqual(want);
+  });
+
+  it('packs f32 values the same way, as f32', () => {
+    const want = new Float32Array(16);
+    want.set([1.5, 3.5, 0, 0, 2.5, 4.5]);
+    expect(packConv1x1Hwc4(new Float32Array([1.5, 2.5, 3.5, 4.5]), 2, 2)).toEqual(want);
   });
 });
 
@@ -377,7 +389,7 @@ describe('packConvWinogradF16', () => {
   });
 });
 
-describe('packDwHwc4F16', () => {
+describe('packDwHwc4', () => {
   // [c, kH*kW] -> [c / 4, kH*kW, 4], channels past c are zero
   it.each([
     {
@@ -399,6 +411,12 @@ describe('packDwHwc4F16', () => {
     { name: 'a single weight', c: 1, kH: 1, kW: 1, src: [7], want: [7, 0, 0, 0] },
     { name: 'empty', c: 0, kH: 1, kW: 1, src: [], want: [] },
   ])('$name', ({ c, kH, kW, src, want }) => {
-    expect(packDwHwc4F16(new Uint16Array(src), c, kH, kW)).toEqual(new Uint16Array(want));
+    expect(packDwHwc4(new Uint16Array(src), c, kH, kW)).toEqual(new Uint16Array(want));
+  });
+
+  it('packs f32 values the same way, as f32', () => {
+    expect(packDwHwc4(new Float32Array([1.5, 2.5]), 2, 1, 1)).toEqual(
+      new Float32Array([1.5, 2.5, 0, 0]),
+    );
   });
 });

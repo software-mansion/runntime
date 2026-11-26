@@ -24,10 +24,10 @@ import { matmulQuantTiledEligible } from '../kernels/matmul/matmulQuantTiled.ts'
 import {
   convToTapMajor,
   f16ToF32,
-  packConv1x1Hwc4F16,
-  packConvHwc4F16,
+  packConv1x1Hwc4,
+  packConvHwc4,
   packConvWinogradF16,
-  packDwHwc4F16,
+  packDwHwc4,
   permuteConvTransposeF16,
 } from '../weights/convert.ts';
 import { foldBnIntoConv } from '../weights/foldBn.ts';
@@ -890,9 +890,10 @@ export class GroupNorm extends Module {
 /** 2D convolution over [C_in, H, W], matching torch.nn.Conv2d.
  *
  *  Takes and returns hwc4-stored activations, so models enter the layout once
- *  with toHwc4 and leave with toChw. Requires shader-f16. Groups are 1 or fully
- *  depthwise. BatchNorm folds in at load rather than running, so `bias: true`
- *  is normal for BN-fused checkpoints. */
+ *  with toHwc4 and leave with toChw. Weight and bias are f32 until half()
+ *  makes them f16, which needs shader-f16; the activations have the weight's
+ *  dtype. Groups are 1 or fully depthwise. BatchNorm folds in at load rather
+ *  than running, so `bias: true` is normal for BN-fused checkpoints. */
 export class Conv2d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
@@ -909,7 +910,8 @@ export class Conv2d extends Module {
       activation?: ConvAct;
       /** Runs a 3×3, stride 1, padding 1 conv as Winograd F(4×4, 3×3): a
        *  quarter of the multiplies, rounded differently in f16. The weight
-       *  packs into 4× its size. */
+       *  packs into 4× its size. f16 only: loading an f32 weight throws
+       *  INVALID_ARGUMENT. */
       winograd?: boolean;
     },
   ) {
@@ -928,22 +930,28 @@ export class Conv2d extends Module {
     this.weight = new Parameter(
       // Raw checkpoint size, which is what the loader pre-checks; the padded
       // blob from preprocess sizes the buffer instead.
-      { elems: outChannels * kk, dtype: 'f16', dims: [outChannels, kk], layout: 'hwc4' },
+      { elems: outChannels * kk, dtype: 'f32', dims: [outChannels, kk], layout: 'hwc4' },
       (data) => {
-        if (!(data instanceof Uint16Array)) {
-          throw new Error('Conv2d: weight must arrive as f16 bits (Uint16Array)');
+        if (data instanceof Uint32Array) {
+          throw new Error('Conv2d: weight must arrive as f32 values or f16 bits');
         }
-        if (winograd) return packConvWinogradF16(data, outChannels, inChannels);
-        if (pointwise) return packConv1x1Hwc4F16(data, outChannels, inChannels);
+        if (winograd) {
+          if (!(data instanceof Uint16Array)) {
+            throw new RunntimeError(
+              'INVALID_ARGUMENT',
+              'Conv2d: winograd has no f32 kernel yet, run the model in f16 with half()',
+            );
+          }
+          return packConvWinogradF16(data, outChannels, inChannels);
+        }
+        if (pointwise) return packConv1x1Hwc4(data, outChannels, inChannels);
         return dw
-          ? packDwHwc4F16(data, outChannels, kH, kW)
-          : packConvHwc4F16(data, outChannels, inChannels, kH, kW);
+          ? packDwHwc4(data, outChannels, kH, kW)
+          : packConvHwc4(data, outChannels, inChannels, kH, kW);
       },
-      true, // pinned: the conv kernels only ever read f16 weights
     );
-    // The hwc4 kernels bind nothing else, so conv-only models need no half().
     this.bias = bias
-      ? new Parameter({ elems: outChannels, dtype: 'f16', dims: [outChannels] })
+      ? new Parameter({ elems: outChannels, dtype: 'f32', dims: [outChannels] })
       : undefined;
   }
   forward(x: Value): Value {

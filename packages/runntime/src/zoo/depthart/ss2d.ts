@@ -85,7 +85,9 @@ export class SS2D extends Module {
     this.out_proj = new Conv2dBN(channels, channels);
     this.out_norm = new LayerNormC(dInner);
 
-    const f32 = (elems: number) => new Parameter({ elems, dtype: 'f32', dims: [elems] });
+    // Pinned: the scan kernels read them as f32.
+    const f32 = (elems: number) =>
+      new Parameter({ elems, dtype: 'f32', dims: [elems] }, undefined, true);
     this.x_proj_weight = f32(SSM_DIRS * (dtRank + 2 * SSM_STATE) * dInner);
     this.dt_projs_weight = f32(SSM_DIRS * dInner * dtRank);
     this.dt_projs_bias = f32(SSM_DIRS * dInner);
@@ -178,8 +180,11 @@ export class LayerNormC extends Module {
   readonly bias: InstanceType<typeof Parameter>;
   constructor(readonly channels: number) {
     super();
-    this.weight = new Parameter({ elems: channels, dtype: 'f32', dims: [channels] });
-    this.bias = new Parameter({ elems: channels, dtype: 'f32', dims: [channels] });
+    // Pinned: the scan they normalize leaves f32 rows.
+    const f32 = () =>
+      new Parameter({ elems: channels, dtype: 'f32', dims: [channels] }, undefined, true);
+    this.weight = f32();
+    this.bias = f32();
   }
   forward(x: Value): Value {
     const [c, h, w] = x.shape.dims as [number, number, number];

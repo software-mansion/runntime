@@ -1,3 +1,4 @@
+import { RunntimeError } from '../../../error.ts';
 import { hwc4Meta, pending, Value } from '../../value.ts';
 import { ACT_CODE, type ActName, wantHwc4 } from '../shared.ts';
 
@@ -8,7 +9,8 @@ export type ConvAct = Extract<ActName, 'silu' | 'gelu' | 'relu'>;
  *  surface. Input and output both stay hwc4, and groups are 1 or fully
  *  depthwise. `activation` fuses silu, gelu or relu into the kernel.
  *  `winograd` runs a 3×3, stride 1, padding 1 conv as Winograd F(4×4, 3×3),
- *  with the weight packed by packConvWinogradF16. */
+ *  with the weight packed by packConvWinogradF16. Throws INVALID_ARGUMENT for
+ *  an f32 weight. */
 export function conv2d(
   x: Value,
   weight: Value,
@@ -35,6 +37,12 @@ export function conv2d(
     );
   }
   const wd = weight.shape.dims;
+  if (weight.shape.dtype === 'f32') {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      'conv2d: no f32 kernel yet, run the model in f16 with half()',
+    );
+  }
   if (weight.shape.dtype !== 'f16' || !wd || wd.length !== 2 || weight.shape.layout !== 'hwc4') {
     throw new Error(
       'conv2d: weight must be the hwc4 mat4-tile packing (nn.Conv2d repacks at load) — an unpacked weight would be read as tiles',

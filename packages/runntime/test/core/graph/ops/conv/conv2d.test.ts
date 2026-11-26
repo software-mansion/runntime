@@ -3,14 +3,10 @@ import { ACT_CODE, conv2d } from '../../../../../src/core/graph/ops.ts';
 import { pending, type Value } from '../../../../../src/core/graph/value.ts';
 import { hwc4Input, input } from '../../values.ts';
 
-/** A conv weight as nn.Conv2d packs it at load: f16 [cOut, cIn/groups·kH·kW]
+/** A conv weight as nn.Conv2d packs it at load: [cOut, cIn/groups·kH·kW]
  *  tagged hwc4. */
-function packedWeight(cOut: number, cols: number): Value {
-  return pending(
-    { elems: cOut * cols, dtype: 'f16', dims: [cOut, cols], layout: 'hwc4' },
-    'reshape',
-    [],
-  );
+function packedWeight(cOut: number, cols: number, dtype: 'f32' | 'f16' = 'f16'): Value {
+  return pending({ elems: cOut * cols, dtype, dims: [cOut, cols], layout: 'hwc4' }, 'reshape', []);
 }
 
 const plain = { stride: 1, padding: 0, groups: 1 };
@@ -160,6 +156,7 @@ describe('conv2d', () => {
       weight: packedWeight(16, 9),
       error: /weight cols 9 != C_in\/groups·kH·kW = 8·1·1/,
     },
+    { name: 'an f32 weight', weight: packedWeight(16, 8, 'f32'), error: /no f32 kernel yet/ },
     { name: 'an f32 bias', bias: input([16]), error: /bias must be f16 with 16 elems/ },
     {
       name: 'a bias of the wrong length',

@@ -116,7 +116,7 @@ async function makeConv2d(c: Conv, seed: number) {
     bias: c.bias ?? false,
     activation: c.activation,
     winograd: c.winograd,
-  });
+  }).half();
   await conv.loadStateDict(
     memoryStateDict({
       weight: { data: wt, shape: [c.cOut, c.cIn / c.groups, c.kH, c.kW] },
