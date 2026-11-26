@@ -1,9 +1,10 @@
 /** Weightless spatial ops on HWC4-stored image tensors: max pooling and
  *  nearest-neighbor upsampling. Row-major inputs must enter via toHwc4 like
- *  the convs they surround. */
+ *  the convs they surround. Their kernels read f16: an f32 image throws
+ *  INVALID_ARGUMENT. */
 
 import { hwc4Meta, pending, Value } from '../../value.ts';
-import { wantHwc4 } from '../shared.ts';
+import { wantHwc4F16 } from '../shared.ts';
 
 /** 2D max pooling: x=[C,H,W] → [C, H_out, W_out] (torch: max_pool2d).
  *  attrs: [kernelSize, stride, padding] */
@@ -11,7 +12,7 @@ export function maxPool2d(
   x: Value,
   opts: { kernelSize: number; stride: number; padding: number },
 ): Value {
-  const [c, h, w] = wantHwc4('maxPool2d', x);
+  const [c, h, w] = wantHwc4F16('maxPool2d', x);
   const { kernelSize, stride, padding } = opts;
   if (kernelSize < 1 || stride < 1 || padding < 0 || padding > kernelSize / 2) {
     throw new Error(
@@ -33,7 +34,7 @@ export function maxPool2d(
 /** Nearest-neighbor upsample: x=[C,H,W] → [C, H·scale, W·scale]. Integer scale
  *  only (torch: interpolate(mode='nearest')). attrs: [scale] */
 export function upsample2d(x: Value, opts: { scale: number }): Value {
-  const [c, h, w] = wantHwc4('upsample2d', x);
+  const [c, h, w] = wantHwc4F16('upsample2d', x);
   const { scale } = opts;
   if (!Number.isInteger(scale) || scale < 1) {
     throw new Error(`upsample2d: scale must be a positive integer, got ${scale}`);
@@ -44,7 +45,7 @@ export function upsample2d(x: Value, opts: { scale: number }): Value {
 /** Average pool, no-padding form: x=[C,H,W] → [C,H_out,W_out] with the k²
  *  divisor (torch AvgPool2d(k, s), padding 0). attrs: [kernelSize, stride] */
 export function avgPool2d(x: Value, opts: { kernelSize: number; stride?: number }): Value {
-  const [c, h, w] = wantHwc4('avgPool2d', x);
+  const [c, h, w] = wantHwc4F16('avgPool2d', x);
   const { kernelSize, stride = opts.kernelSize } = opts;
   if (kernelSize < 1 || stride < 1) {
     throw new Error(`avgPool2d: bad geometry k=${kernelSize} stride=${stride}`);
@@ -61,7 +62,7 @@ export function avgPool2d(x: Value, opts: { kernelSize: number; stride?: number 
  *  companion of padding-0 convs when the two axes need different padding.
  *  attrs: [padH, padW] */
 export function pad2d(x: Value, opts: { padH: number; padW: number }): Value {
-  const [c, h, w] = wantHwc4('pad2d', x);
+  const [c, h, w] = wantHwc4F16('pad2d', x);
   const { padH, padW } = opts;
   if (!Number.isInteger(padH) || !Number.isInteger(padW) || padH < 0 || padW < 0) {
     throw new Error(`pad2d: pads must be non-negative integers, got (${padH}, ${padW})`);
@@ -80,7 +81,7 @@ export function resizeBilinear2d(
   x: Value,
   opts: { outH: number; outW: number; mode?: 'alignCorners' | 'halfPixel' },
 ): Value {
-  const [c] = wantHwc4('resizeBilinear2d', x);
+  const [c] = wantHwc4F16('resizeBilinear2d', x);
   const { outH, outW, mode = 'alignCorners' } = opts;
   if (!Number.isInteger(outH) || !Number.isInteger(outW) || outH < 1 || outW < 1) {
     throw new Error(`resizeBilinear2d: bad output size ${outH}×${outW}`);

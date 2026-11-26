@@ -7,7 +7,7 @@ import {
   softmax,
   topk,
 } from '../../../../src/core/graph/ops.ts';
-import { input, meta } from '../values.ts';
+import { hwc4Input, input, meta } from '../values.ts';
 
 describe('reductions over the last dim', () => {
   it('mean gives one value per row, in the input dtype', () => {
@@ -91,6 +91,26 @@ describe('layerNorm', () => {
 
   it('works without a bias, with eps 1e-5 by default', () => {
     expect(layerNorm(x, input([8])).pending).toMatchObject({ scalar: 1e-5 });
+  });
+
+  it.each(['f32', 'f16'] as const)('keeps an hwc4 image hwc4, over its channels, %s', (dtype) => {
+    const image = hwc4Input(8, 3, 5, dtype);
+    expect(layerNorm(image, input([8], dtype)).shape).toEqual(image.shape);
+  });
+
+  it('rejects an hwc4 image whose channels are not a multiple of 4', () => {
+    expect(() => layerNorm(hwc4Input(6, 3, 5, 'f32'), input([6]))).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message: 'layerNorm: an hwc4 image needs channels a multiple of 4, got 6',
+      }),
+    );
+  });
+
+  it('rejects a weight per padded lane of an hwc4 image', () => {
+    expect(() => layerNorm(hwc4Input(8, 3, 5, 'f32'), input([15]))).toThrow(
+      /weight must be f32 \[N\] = 8 elems/,
+    );
   });
 
   it.each([

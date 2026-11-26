@@ -31,9 +31,9 @@ export function c4of(c: number): number {
   return Math.ceil(c / 4);
 }
 
-/** Meta for an hwc4-stored [C, H, W] f16 image tensor. */
-export function hwc4Meta(c: number, h: number, w: number): ValueMeta {
-  return { elems: h * w * c4of(c) * 4, dtype: 'f16', dims: [c, h, w], layout: 'hwc4' };
+/** Meta for an hwc4-stored [C, H, W] image tensor, f16 by default. */
+export function hwc4Meta(c: number, h: number, w: number, dtype: 'f32' | 'f16' = 'f16'): ValueMeta {
+  return { elems: h * w * c4of(c) * 4, dtype, dims: [c, h, w], layout: 'hwc4' };
 }
 
 /** Build a row-major f32 matrix shape. */

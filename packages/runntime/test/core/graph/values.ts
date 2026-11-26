@@ -19,17 +19,17 @@ export function input(dims: number[], dtype: EagerDtype = 'f32'): Value {
   return pending(meta(dims, dtype), 'reshape', []);
 }
 
-/** The meta of an hwc4-stored f16 image, [C, H, W]: channels padded up to a
- *  multiple of 4. Written out rather than taken from hwc4Meta, which the ops
- *  use, so a bug there fails here. */
-function hwc4ImageMeta(c: number, h: number, w: number): ValueMeta {
+/** The meta of an hwc4-stored image, [C, H, W], f16 by default: channels
+ *  padded up to a multiple of 4. Written out rather than taken from hwc4Meta,
+ *  which the ops use, so a bug there fails here. */
+function hwc4ImageMeta(c: number, h: number, w: number, dtype: 'f32' | 'f16' = 'f16'): ValueMeta {
   const elems = h * w * Math.ceil(c / 4) * 4;
-  return { elems, dtype: 'f16', dims: [c, h, w], layout: 'hwc4' };
+  return { elems, dtype, dims: [c, h, w], layout: 'hwc4' };
 }
 
-/** An hwc4-stored f16 image input, [C, H, W]. */
-export function hwc4Input(c: number, h: number, w: number): Value {
-  return pending(hwc4ImageMeta(c, h, w), 'toHwc4', []);
+/** An hwc4-stored image input, [C, H, W], f16 by default. */
+export function hwc4Input(c: number, h: number, w: number, dtype: 'f32' | 'f16' = 'f16'): Value {
+  return pending(hwc4ImageMeta(c, h, w, dtype), 'toHwc4', []);
 }
 
 /** An hwc4-stored f16 image, [C, H, W], already on the GPU in a stub buffer. */

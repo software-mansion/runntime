@@ -1,5 +1,6 @@
 /** Input-validation helpers shared by the op modules. */
 
+import { RunntimeError } from '../../error.ts';
 import type { EagerDtype, Value } from '../value.ts';
 
 export { ACT_CODE, type ActName, type SlotAct } from '../../kernels/activations.ts';
@@ -27,6 +28,24 @@ export function wantHwc4(name: string, x: Value): [number, number, number] {
   }
   const [c, h, w] = x.shape.dims! as [number, number, number];
   return [c, h, w];
+}
+
+/** wantHwc4 for the ops whose kernels read f16 only. Throws INVALID_ARGUMENT
+ *  for an f32 image. */
+export function wantHwc4F16(name: string, x: Value): [number, number, number] {
+  const dims = wantHwc4(name, x);
+  if (x.shape.dtype !== 'f16') {
+    throw new RunntimeError(
+      'INVALID_ARGUMENT',
+      `${name}: no f32 kernel yet for an hwc4 input, run the model in f16 with half()`,
+    );
+  }
+  return dims;
+}
+
+/** The dtype of an hwc4 image, which is always a float one. */
+export function hwc4Dtype(x: Value): 'f32' | 'f16' {
+  return x.shape.dtype === 'f32' ? 'f32' : 'f16';
 }
 
 /** The float storage dtypes an activation may carry. An op whose kernels bind

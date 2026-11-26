@@ -1,7 +1,8 @@
 /** Reductions and normalizations over the last dim. */
 
-import { pending, Value } from '../value.ts';
-import { FLOAT_DTYPES, WINDOW_INF, want2d } from './shared.ts';
+import { RunntimeError } from '../../error.ts';
+import { hwc4Meta, pending, Value, type ValueMeta } from '../value.ts';
+import { FLOAT_DTYPES, hwc4Dtype, isHwc4, WINDOW_INF, want2d, wantHwc4 } from './shared.ts';
 
 /** Mean over the last axis: [M,N] to [M,1]. */
 export function mean(x: Value): Value {
@@ -39,9 +40,31 @@ export function softmax(
 }
 
 /** Fused LayerNorm over the last dim, with torch's biased 1/N variance. eps
- *  rides the uniform, so it never keys a pipeline. */
+ *  rides the uniform, so it never keys a pipeline.
+ *
+ *  An hwc4 image [C, H, W] normalizes each pixel over its channels and stays
+ *  hwc4, like torch's LayerNorm on the image permuted to [H, W, C]. Throws
+ *  INVALID_ARGUMENT unless its C is a multiple of 4: a padding lane would
+ *  take the bias. */
 export function layerNorm(x: Value, weight: Value, eps = 1e-5, bias?: Value): Value {
-  const [m, n, dtype] = want2d('layerNorm', x, FLOAT_DTYPES);
+  let n: number;
+  let out: ValueMeta;
+  if (isHwc4(x)) {
+    const [c, h, w] = wantHwc4('layerNorm', x);
+    if (c % 4 !== 0) {
+      throw new RunntimeError(
+        'INVALID_ARGUMENT',
+        `layerNorm: an hwc4 image needs channels a multiple of 4, got ${c}`,
+      );
+    }
+    n = c;
+    out = hwc4Meta(c, h, w, hwc4Dtype(x));
+  } else {
+    const [m, cols, dtype] = want2d('layerNorm', x, FLOAT_DTYPES);
+    n = cols;
+    out = { elems: m * n, dtype, dims: [m, n] };
+  }
+  const { dtype } = out;
   if (weight.shape.dtype !== dtype || weight.shape.elems !== n) {
     throw new Error(
       `layerNorm: weight must be ${dtype} [N] = ${n} elems, got (${weight.shape.elems},${weight.shape.dtype})`,
@@ -54,7 +77,7 @@ export function layerNorm(x: Value, weight: Value, eps = 1e-5, bias?: Value): Va
   }
   if (!(eps > 0)) throw new Error(`layerNorm: eps must be positive, got ${eps}`);
   const inputs = bias !== undefined ? [x, weight, bias] : [x, weight];
-  return pending({ elems: m * n, dtype, dims: [m, n] }, 'layerNorm', inputs, eps);
+  return pending(out, 'layerNorm', inputs, eps);
 }
 
 /** RMSNorm over the last dim in one dispatch: x · rsqrt(mean(x²) + eps) ·

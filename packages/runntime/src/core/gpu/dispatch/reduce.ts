@@ -75,7 +75,9 @@ export const layerNormSpec = defineSpec({
   cfg: () => undefined,
   pipeline: (root, dtype) => createLayerNormPipeline(root, elemFor(dtype)),
   encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
-    const [rows, cols] = node.shape.dims as [number, number];
+    // An hwc4 image is one row per pixel: the op lets in whole channel blocks only.
+    const cols = node.shape.dims![node.shape.layout === 'hwc4' ? 0 : 1]!;
+    const rows = node.shape.elems / cols;
     const dtype = node.shape.dtype;
     const bias = attrs.hasBias ? narrowFloat(inputs[2]!, dtype) : ctx.dummy(floatDtype(dtype));
     return [

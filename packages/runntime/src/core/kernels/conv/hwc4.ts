@@ -14,13 +14,18 @@
  *  literals and branches prune. Input h and w stay a runtime uniform.
  *
  *  Per-element kernels take the channel block as the fastest index, so
- *  neighbouring threads touch neighbouring vec4s. */
+ *  neighbouring threads touch neighbouring vec4s.
+ *
+ *  The convs and the CHW conversions also run on f32: the same layout in
+ *  vec4<f32>, with every sum in f32. Winograd and the other kernels are f16
+ *  only. */
 
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type F16Buffer,
   type F32Buffer,
+  type FloatBuffer,
   flatIndex,
   flatWorkgroupId,
   type KernelHandle,
@@ -28,20 +33,23 @@ import {
   WORKGROUP_SIZE,
 } from '../common.ts';
 import { ACT_CODE, gelu } from '../activations.ts';
+import { type Elem, F16_ELEM, F32_ELEM } from '../elem.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 export const WG_1X1 = 256;
 
 const ConvDims = d.struct({ h: d.u32, w: d.u32, outC4: d.u32, outOffB: d.u32 });
 
-const convLayout = tgpu.bindGroupLayout({
-  x: { storage: d.arrayOf(d.vec4h), access: 'readonly' },
-  w: { storage: d.arrayOf(d.vec4h), access: 'readonly' },
-  bias: { storage: d.arrayOf(d.f16), access: 'readonly' },
-  res: { storage: d.arrayOf(d.vec4h), access: 'readonly' }, // residual addend (dummy when hasAdd=0)
-  out: { storage: d.arrayOf(d.vec4h), access: 'mutable' },
-  dims: { uniform: ConvDims },
-});
+const makeConvLayout = (elem: Elem) =>
+  tgpu.bindGroupLayout({
+    x: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
+    w: { storage: d.arrayOf(elem.vec4), access: 'readonly' },
+    bias: { storage: d.arrayOf(elem.scalar), access: 'readonly' },
+    res: { storage: d.arrayOf(elem.vec4), access: 'readonly' }, // residual addend (dummy when hasAdd=0)
+    out: { storage: d.arrayOf(elem.vec4), access: 'mutable' },
+    dims: { uniform: ConvDims },
+  });
+const convLayouts = { f32: makeConvLayout(F32_ELEM), f16: makeConvLayout(F16_ELEM) };
 
 export interface Conv2dHwc4Cfg {
   cIn: number;
@@ -66,17 +74,19 @@ export interface Conv2dHwc4Cfg {
   bmb?: number;
 }
 
-const makeEpilogue = (cfg: Conv2dHwc4Cfg) => {
+const makeEpilogue = (cfg: Conv2dHwc4Cfg, elem: Elem) => {
   const { cOut, hasBias, hasAct, hasAdd } = cfg;
   const co4 = Math.ceil(cOut / 4);
   const aligned = cOut % 4 === 0;
-  return (acc: d.v4h, oB: number, pxOut: number): d.v4h => {
+  const convLayout = convLayouts[elem.key];
+  const { scalar, vec4 } = elem;
+  return (acc: d.v4f, oB: number, pxOut: number): d.v4f => {
     'use gpu';
-    let r = acc * d.f16(1);
+    let r = acc * scalar(1);
     if (hasBias === 1) {
       const c0 = oB * 4;
       if (aligned) {
-        r += d.vec4h(
+        r += vec4(
           convLayout.$.bias[c0]!,
           convLayout.$.bias[c0 + 1]!,
           convLayout.$.bias[c0 + 2]!,
@@ -84,8 +94,8 @@ const makeEpilogue = (cfg: Conv2dHwc4Cfg) => {
         );
       }
       if (!aligned) {
-        const zero = d.f16(0);
-        r += d.vec4h(
+        const zero = scalar(0);
+        r += vec4(
           std.select(zero, convLayout.$.bias[std.min(c0, cOut - 1)]!, c0 < cOut),
           std.select(zero, convLayout.$.bias[std.min(c0 + 1, cOut - 1)]!, c0 + 1 < cOut),
           std.select(zero, convLayout.$.bias[std.min(c0 + 2, cOut - 1)]!, c0 + 2 < cOut),
@@ -93,19 +103,19 @@ const makeEpilogue = (cfg: Conv2dHwc4Cfg) => {
         );
       }
     }
-    // Re-implemented in f16 here; ACTIVATIONS' bodies are all f32.
+    // Re-implemented in the storage type here; ACTIVATIONS' bodies are all f32.
     if (hasAct === ACT_CODE.silu) {
-      r = r / (d.vec4h(1) + std.exp(d.vec4h(0) - r));
+      r = r / (vec4(1) + std.exp(vec4(0) - r));
     }
     if (hasAct === ACT_CODE.gelu) {
-      r = d.vec4h(gelu(d.vec4f(r)));
+      r = vec4(gelu(d.vec4f(r)));
     }
     if (hasAct === ACT_CODE.relu) {
-      r = std.max(r, d.vec4h(0));
+      r = std.max(r, vec4(0));
     }
     if (hasAdd === 1) {
       // torch's x + cv(x) order: the addend lands after bias and act.
-      r += d.vec4h(convLayout.$.res[pxOut * co4 + oB]!);
+      r += vec4(convLayout.$.res[pxOut * co4 + oB]!);
     }
     return r;
   };
@@ -124,8 +134,9 @@ export function directCols(co4: number, hOut: number, wOut: number): number {
 }
 
 /** Direct conv. A thread computes `cols` neighbouring output columns of one
- *  channel block, so each input row it loads serves every tap of every column. */
-export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
+ *  channel block, so each input row it loads serves every tap of every column.
+ *  Sums in the storage type. */
+export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg, elem: Elem) => {
   const { kH, kW, stride, padding } = cfg;
   const ci4 = Math.ceil(cfg.cIn / 4);
   const co4 = Math.ceil(cfg.cOut / 4);
@@ -133,7 +144,9 @@ export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
   const cols = cfg.cols ?? 1;
   const span = kW + (cols - 1) * stride;
   const narrowOut = co4 <= DIRECT_NARROW_BLOCKS;
-  const epilogue = makeEpilogue(cfg);
+  const convLayout = convLayouts[elem.key];
+  const { vec4 } = elem;
+  const epilogue = makeEpilogue(cfg, elem);
   return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
     workgroupSize: [WORKGROUP_SIZE],
@@ -154,17 +167,17 @@ export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
     const ox0 = (narrowOut ? std.intdiv(idx, co4) % wRuns : idx % wRuns) * cols;
     const oy = narrowOut ? std.intdiv(idx, co4 * wRuns) : std.intdiv(idx, wRuns) % hOut;
 
-    const accs = d.arrayOf(d.vec4h, cols)();
+    const accs = d.arrayOf(vec4, cols)();
     for (const ky of tgpu.unroll(std.range(kH))) {
       const iyP = oy * stride + ky;
       if (iyP >= padding && iyP < dims.h + padding) {
         const rowBase = (iyP - padding) * dims.w;
         for (let iB = d.u32(0); iB < ci4; iB++) {
-          const xs = d.arrayOf(d.vec4h, span)();
+          const xs = d.arrayOf(vec4, span)();
           for (const s of tgpu.unroll(std.range(span))) {
             const ixP = ox0 * stride + s;
             if (ixP >= padding && ixP < dims.w + padding) {
-              xs[s] = d.vec4h(convLayout.$.x[(rowBase + ixP - padding) * ci4 + iB]!);
+              xs[s] = vec4(convLayout.$.x[(rowBase + ixP - padding) * ci4 + iB]!);
             }
           }
           for (const kx of tgpu.unroll(std.range(kW))) {
@@ -196,7 +209,7 @@ export const makeConvGenericKernel = (cfg: Conv2dHwc4Cfg) => {
 // Runs a full conv as a matrix multiply. A workgroup computes 64 output
 // pixels × up to 64 output channels: it loads a block of weights and input
 // pixels into workgroup memory once, and every thread reuses them. Sums in
-// f16. convTiledBlocks picks the convs that use it.
+// the storage type. convTiledBlocks picks the convs that use it.
 //
 // Based on webgpu-kernels/ai.onnx.Conv (conv-1x1-gemm-tiled-reg).
 
@@ -235,7 +248,7 @@ export function convTiledBlocks(cOut: number, outPixels: number, k: number): num
   return workgroups >= TILED_MIN_WORKGROUPS && (wide || narrow || deep) ? bmb : 0;
 }
 
-const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
+const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg, elem: Elem) => {
   const { kH, kW, stride, padding } = cfg;
   const ci4 = Math.ceil(cfg.cIn / 4);
   const co4 = Math.ceil(cfg.cOut / 4);
@@ -246,9 +259,13 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
   const TILED_THREADS = TILED_WG_X * (TILED_BMB / 2);
   const TILED_A_LOADS = (TILED_BKG * TILED_BMB * 4) / TILED_THREADS;
   const TILED_B_LOADS = (TILED_BKG * TILED_BN) / TILED_THREADS;
-  const tiledA = tgpu.workgroupVar(d.arrayOf(d.vec4h, TILED_BKG * TILED_BMB * 4));
-  const tiledB = tgpu.workgroupVar(d.arrayOf(d.vec4h, TILED_BKG * TILED_BN));
-  const epilogue = makeEpilogue(cfg);
+  const convLayout = convLayouts[elem.key];
+  const { vec4 } = elem;
+  // In f32 at 16 blocks the two take 16384 bytes, WebGPU's default limit on
+  // workgroup storage.
+  const tiledA = tgpu.workgroupVar(d.arrayOf(vec4, TILED_BKG * TILED_BMB * 4));
+  const tiledB = tgpu.workgroupVar(d.arrayOf(vec4, TILED_BKG * TILED_BN));
+  const epilogue = makeEpilogue(cfg, elem);
   return tgpu.computeFn({
     in: { lid: d.builtin.localInvocationIndex, wid: d.builtin.workgroupId },
     workgroupSize: [TILED_THREADS],
@@ -263,7 +280,7 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
     const nBase = wid.x * TILED_BN;
     const oBase = wid.y * TILED_BMB;
 
-    const accs = d.arrayOf(d.vec4h, 8)();
+    const accs = d.arrayOf(vec4, 8)();
 
     for (const t of std.range(tiles)) {
       const kg0 = t * TILED_BKG;
@@ -277,11 +294,11 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
         const oB = oBase + oBl;
         const tap = std.intdiv(kg, ci4);
         const iB = kg % ci4;
-        let v = d.vec4h();
+        let v = vec4();
         if (kg < kGroups && oB < co4) {
-          v = d.vec4h(convLayout.$.w[((oB * ci4 + iB) * kk + tap) * 4 + iL]!);
+          v = vec4(convLayout.$.w[((oB * ci4 + iB) * kk + tap) * 4 + iL]!);
         }
-        tiledA.$[e] = d.vec4h(v);
+        tiledA.$[e] = vec4(v);
       }
       // Input pixels for this K block. Zero in the padding and past the last pixel.
       for (const i of tgpu.unroll(std.range(TILED_B_LOADS))) {
@@ -298,7 +315,7 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
         const ox = n % wOut;
         const iyP = oy * stride + ky;
         const ixP = ox * stride + kx;
-        let v = d.vec4h();
+        let v = vec4();
         if (
           kg < kGroups &&
           n < nPix &&
@@ -307,23 +324,23 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
           ixP >= padding &&
           ixP < dims.w + padding
         ) {
-          v = d.vec4h(convLayout.$.x[((iyP - padding) * dims.w + (ixP - padding)) * ci4 + iB]!);
+          v = vec4(convLayout.$.x[((iyP - padding) * dims.w + (ixP - padding)) * ci4 + iB]!);
         }
-        tiledB.$[kgl * TILED_BN + px] = d.vec4h(v);
+        tiledB.$[kgl * TILED_BN + px] = vec4(v);
       }
       std.workgroupBarrier();
 
       for (const kgl of std.range(TILED_BKG)) {
-        const xs = d.arrayOf(d.vec4h, 4)();
+        const xs = d.arrayOf(vec4, 4)();
         for (const j of tgpu.unroll(std.range(4))) {
-          xs[j] = d.vec4h(tiledB.$[kgl * TILED_BN + tx * 4 + j]!);
+          xs[j] = vec4(tiledB.$[kgl * TILED_BN + tx * 4 + j]!);
         }
         for (const o of tgpu.unroll(std.range(2))) {
           const wb = (kgl * TILED_BMB + ty * 2 + o) * 4;
-          const w0 = d.vec4h(tiledA.$[wb]!);
-          const w1 = d.vec4h(tiledA.$[wb + 1]!);
-          const w2 = d.vec4h(tiledA.$[wb + 2]!);
-          const w3 = d.vec4h(tiledA.$[wb + 3]!);
+          const w0 = vec4(tiledA.$[wb]!);
+          const w1 = vec4(tiledA.$[wb + 1]!);
+          const w2 = vec4(tiledA.$[wb + 2]!);
+          const w3 = vec4(tiledA.$[wb + 3]!);
           for (const j of tgpu.unroll(std.range(4))) {
             const xv = xs[j]!;
             accs[o * 4 + j] = accs[o * 4 + j]! + xv.x * w0 + xv.y * w1 + xv.z * w2 + xv.w * w3;
@@ -339,7 +356,7 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
         const n = nBase + tx * 4 + j;
         if (oB < co4 && n < nPix) {
           convLayout.$.out[n * dims.outC4 + dims.outOffB + oB] = epilogue(
-            d.vec4h(accs[o * 4 + j]!),
+            vec4(accs[o * 4 + j]!),
             oB,
             n,
           );
@@ -349,9 +366,9 @@ const makeConvTiledKernel = (cfg: Conv2dHwc4Cfg) => {
   });
 };
 
-/** Input blocks the 1×1 conv sums in f16 before adding the partial into its
- *  f32 sum, longest first: whichever divides CI4. Short f16 runs keep the
- *  speed of f16 math and most of the precision of f32 sums. */
+/** Input blocks the 1×1 conv sums in the storage type before adding the
+ *  partial into its f32 sum, longest first: whichever divides CI4. Short f16
+ *  runs keep the speed of f16 math and most of the precision of f32 sums. */
 const CONV1X1_FLUSH_STEPS = [8, 4, 2, 1];
 
 /** Below this many threads a 1×1 conv has too few SIMD groups to hide load
@@ -365,13 +382,15 @@ export function conv1x1Unroll(ci4: number, threads: number): number {
   return ci4 % 4 === 0 ? 4 : ci4 % 2 === 0 ? 2 : 1;
 }
 
-export const makeConv1x1Kernel = (cfg: Conv2dHwc4Cfg) => {
+export const makeConv1x1Kernel = (cfg: Conv2dHwc4Cfg, elem: Elem) => {
   const ci4 = Math.ceil(cfg.cIn / 4);
   const co4 = Math.ceil(cfg.cOut / 4);
   const pxT = cfg.pxT === 8 ? 8 : 4;
   const kU = cfg.kU ?? 1;
   const flush = CONV1X1_FLUSH_STEPS.find((c) => ci4 % c === 0 && c % kU === 0)!;
-  const epilogue = makeEpilogue(cfg);
+  const convLayout = convLayouts[elem.key];
+  const { vec4 } = elem;
+  const epilogue = makeEpilogue(cfg, elem);
   return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
     workgroupSize: [WORKGROUP_SIZE],
@@ -388,17 +407,17 @@ export const makeConv1x1Kernel = (cfg: Conv2dHwc4Cfg) => {
 
     const accs = d.arrayOf(d.vec4f, pxT)();
     for (let c0 = d.u32(0); c0 < ci4; c0 += flush) {
-      const part = d.arrayOf(d.vec4h, pxT)();
+      const part = d.arrayOf(vec4, pxT)();
       for (let iB0 = c0; iB0 < c0 + flush; iB0 += kU) {
-        const ws = d.arrayOf(d.vec4h, kU * 4)();
-        const xs = d.arrayOf(d.vec4h, kU * pxT)();
+        const ws = d.arrayOf(vec4, kU * 4)();
+        const xs = d.arrayOf(vec4, kU * pxT)();
         for (const u of tgpu.unroll(std.range(kU))) {
           const tb = ((iB0 + u) * co4 + oB) * 4;
           for (const l of tgpu.unroll(std.range(4))) {
-            ws[u * 4 + l] = d.vec4h(convLayout.$.w[tb + l]!);
+            ws[u * 4 + l] = vec4(convLayout.$.w[tb + l]!);
           }
           for (const k of tgpu.unroll(std.range(pxT))) {
-            xs[u * pxT + k] = d.vec4h(convLayout.$.x[(p0 + k) * ci4 + iB0 + u]!);
+            xs[u * pxT + k] = vec4(convLayout.$.x[(p0 + k) * ci4 + iB0 + u]!);
           }
         }
         for (const u of tgpu.unroll(std.range(kU))) {
@@ -419,13 +438,15 @@ export const makeConv1x1Kernel = (cfg: Conv2dHwc4Cfg) => {
     }
     const ob0 = dims.outOffB + oB;
     for (const k of tgpu.unroll(std.range(pxT))) {
-      convLayout.$.out[(p0 + k) * dims.outC4 + ob0] = epilogue(d.vec4h(accs[k]!), oB, p0 + k);
+      convLayout.$.out[(p0 + k) * dims.outC4 + ob0] = epilogue(vec4(accs[k]!), oB, p0 + k);
     }
   });
 };
 
 const SMALL_1X1_PXT = 4;
-const smallPartial = tgpu.workgroupVar(d.arrayOf(d.vec4h, WG_1X1 * SMALL_1X1_PXT));
+const makeSmallPartial = (elem: Elem) =>
+  tgpu.workgroupVar(d.arrayOf(elem.vec4, WG_1X1 * SMALL_1X1_PXT));
+const smallPartials = { f32: makeSmallPartial(F32_ELEM), f16: makeSmallPartial(F16_ELEM) };
 
 export function small1x1Lanes(cIn: number): number {
   const ci4 = Math.ceil(cIn / 4);
@@ -440,14 +461,17 @@ export function conv1x1Kind(hw: number, cOut: number): 1 | 3 {
   return (hw / 4) * co4 < SMALL_1X1_MAX_TILE_THREADS ? 3 : 1;
 }
 
-export const makeConv1x1SmallKernel = (cfg: Conv2dHwc4Cfg) => {
+export const makeConv1x1SmallKernel = (cfg: Conv2dHwc4Cfg, elem: Elem) => {
   const ci4 = Math.ceil(cfg.cIn / 4);
   const co4 = Math.ceil(cfg.cOut / 4);
   const SMALL_1X1_KS = cfg.ks ?? small1x1Lanes(cfg.cIn);
   const SMALL_1X1_OL = WG_1X1 / SMALL_1X1_KS;
   const SMALL_1X1_LOG2_KS = Math.log2(SMALL_1X1_KS);
   const oGroups = Math.ceil(co4 / SMALL_1X1_OL);
-  const epilogue = makeEpilogue(cfg);
+  const convLayout = convLayouts[elem.key];
+  const smallPartial = smallPartials[elem.key];
+  const { vec4 } = elem;
+  const epilogue = makeEpilogue(cfg, elem);
   return tgpu.computeFn({
     in: { wid: d.builtin.workgroupId, lid: d.builtin.localInvocationIndex },
     workgroupSize: [WG_1X1],
@@ -460,7 +484,7 @@ export const makeConv1x1SmallKernel = (cfg: Conv2dHwc4Cfg) => {
     const oB = (wid.x % oGroups) * SMALL_1X1_OL + oLane;
     const p0 = std.intdiv(wid.x, oGroups) * SMALL_1X1_PXT;
 
-    const accs = d.arrayOf(d.vec4h, SMALL_1X1_PXT)();
+    const accs = d.arrayOf(vec4, SMALL_1X1_PXT)();
     if (oB < co4) {
       for (let iB = kLane; iB < ci4; iB += SMALL_1X1_KS) {
         const tb = (iB * co4 + oB) * 4;
@@ -477,7 +501,7 @@ export const makeConv1x1SmallKernel = (cfg: Conv2dHwc4Cfg) => {
       }
     }
     for (const k of tgpu.unroll(std.range(SMALL_1X1_PXT))) {
-      smallPartial.$[lid * SMALL_1X1_PXT + k] = d.vec4h(accs[k]!);
+      smallPartial.$[lid * SMALL_1X1_PXT + k] = vec4(accs[k]!);
     }
     std.workgroupBarrier();
     // Tree fold over kLane: (kLane, oLane) lives at tid = oLane·KS + kLane,
@@ -526,13 +550,15 @@ export function depthwiseCols(kW: number, wOut: number): number {
  *  by every tap. Sums in f32.
  *
  *  Based on webgpu-kernels/ai.onnx.Conv (conv2d-grouped-large-w4). */
-const makeConvDwKernel = (cfg: Conv2dHwc4Cfg) => {
+const makeConvDwKernel = (cfg: Conv2dHwc4Cfg, elem: Elem) => {
   const { kH, kW, stride, padding } = cfg;
   const cols = cfg.dwCols ?? 1;
   const c4n = Math.ceil(cfg.cOut / 4);
   const kk = kH * kW;
   const span = kW + (cols - 1) * stride;
-  const epilogue = makeEpilogue(cfg);
+  const convLayout = convLayouts[elem.key];
+  const { vec4 } = elem;
+  const epilogue = makeEpilogue(cfg, elem);
   return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
     workgroupSize: [WORKGROUP_SIZE],
@@ -577,7 +603,7 @@ const makeConvDwKernel = (cfg: Conv2dHwc4Cfg) => {
       if (ox < wOut) {
         const pxOut = oy * wOut + ox;
         convLayout.$.out[pxOut * dims.outC4 + dims.outOffB + cB] = epilogue(
-          d.vec4h(accs[c]!),
+          vec4(accs[c]!),
           cB,
           pxOut,
         );
@@ -629,6 +655,10 @@ const WINOGRAD_PAIRS = 16;
 const WINOGRAD_LANES = 6;
 const winogradRows = tgpu.workgroupVar(d.arrayOf(d.vec4f, WINOGRAD_PAIRS * 36));
 
+/** The Winograd kernels are f16 only. */
+const winogradLayout = convLayouts.f16;
+const winogradVec4 = F16_ELEM.vec4;
+
 const makeWinogradInKernel = (cfg: Conv2dHwc4Cfg) => {
   const ci4 = Math.ceil(cfg.cIn / 4);
   return tgpu.computeFn({
@@ -636,7 +666,7 @@ const makeWinogradInKernel = (cfg: Conv2dHwc4Cfg) => {
     workgroupSize: [WINOGRAD_PAIRS * WINOGRAD_LANES],
   })(({ lid, wid }) => {
     'use gpu';
-    const dims = convLayout.$.dims;
+    const dims = winogradLayout.$.dims;
     const tilesX = std.intdiv(dims.w + 3, 4);
     const tiles = tilesX * std.intdiv(dims.h + 3, 4);
     const p = lid % WINOGRAD_PAIRS;
@@ -654,7 +684,7 @@ const makeWinogradInKernel = (cfg: Conv2dHwc4Cfg) => {
       for (const c of tgpu.unroll(std.range(6))) {
         const xP = x0 + c;
         if (xP >= 1 && xP <= dims.w) {
-          xs[c] = d.vec4f(convLayout.$.x[((yP - 1) * dims.w + xP - 1) * ci4 + iB]!);
+          xs[c] = d.vec4f(winogradLayout.$.x[((yP - 1) * dims.w + xP - 1) * ci4 + iB]!);
         }
       }
     }
@@ -674,7 +704,7 @@ const makeWinogradInKernel = (cfg: Conv2dHwc4Cfg) => {
         winogradRows.$[sb + 30 + lane]!,
       );
       for (const r of tgpu.unroll(std.range(6))) {
-        convLayout.$.out[((r * 6 + lane) * tiles + t) * ci4 + iB] = d.vec4h(col[r]!);
+        winogradLayout.$.out[((r * 6 + lane) * tiles + t) * ci4 + iB] = winogradVec4(col[r]!);
       }
     }
   });
@@ -690,7 +720,7 @@ const makeWinogradMulKernel = (cfg: Conv2dHwc4Cfg) => {
     workgroupSize: [WORKGROUP_SIZE],
   })(({ gid }) => {
     'use gpu';
-    const dims = convLayout.$.dims;
+    const dims = winogradLayout.$.dims;
     const tiles = std.intdiv(dims.w + 3, 4) * std.intdiv(dims.h + 3, 4);
     const groups = std.intdiv(tiles + WINOGRAD_MUL_TILES - 1, WINOGRAD_MUL_TILES);
     const idx = flatIndex(gid);
@@ -705,19 +735,19 @@ const makeWinogradMulKernel = (cfg: Conv2dHwc4Cfg) => {
     const accs = d.arrayOf(d.vec4f, WINOGRAD_MUL_TILES)();
     for (let iB = d.u32(0); iB < ci4; iB++) {
       const wb = ((k * ci4 + iB) * co4 + oB) * 4;
-      const w0 = convLayout.$.w[wb]!;
-      const w1 = convLayout.$.w[wb + 1]!;
-      const w2 = convLayout.$.w[wb + 2]!;
-      const w3 = convLayout.$.w[wb + 3]!;
+      const w0 = winogradLayout.$.w[wb]!;
+      const w1 = winogradLayout.$.w[wb + 1]!;
+      const w2 = winogradLayout.$.w[wb + 2]!;
+      const w3 = winogradLayout.$.w[wb + 3]!;
       for (const j of tgpu.unroll(std.range(WINOGRAD_MUL_TILES))) {
         // Clamped so a partial last group reads valid tiles; its extra sums are never stored.
-        const xv = convLayout.$.x[(plane + std.min(t0 + j, tiles - 1)) * ci4 + iB]!;
+        const xv = winogradLayout.$.x[(plane + std.min(t0 + j, tiles - 1)) * ci4 + iB]!;
         accs[j] = accs[j]! + d.vec4f(xv.x * w0 + xv.y * w1 + xv.z * w2 + xv.w * w3);
       }
     }
     for (const j of tgpu.unroll(std.range(WINOGRAD_MUL_TILES))) {
       if (t0 + j < tiles) {
-        convLayout.$.out[(plane + t0 + j) * co4 + oB] = d.vec4h(accs[j]!);
+        winogradLayout.$.out[(plane + t0 + j) * co4 + oB] = winogradVec4(accs[j]!);
       }
     }
   });
@@ -726,13 +756,13 @@ const makeWinogradMulKernel = (cfg: Conv2dHwc4Cfg) => {
 /** Aᵀ·m·A, then the conv epilogue on each of the tile's 16 pixels. */
 const makeWinogradOutKernel = (cfg: Conv2dHwc4Cfg) => {
   const co4 = Math.ceil(cfg.cOut / 4);
-  const epilogue = makeEpilogue(cfg);
+  const epilogue = makeEpilogue(cfg, F16_ELEM);
   return tgpu.computeFn({
     in: { lid: d.builtin.localInvocationIndex, wid: d.builtin.workgroupId },
     workgroupSize: [WINOGRAD_PAIRS * WINOGRAD_LANES],
   })(({ lid, wid }) => {
     'use gpu';
-    const dims = convLayout.$.dims;
+    const dims = winogradLayout.$.dims;
     const tilesX = std.intdiv(dims.w + 3, 4);
     const tiles = tilesX * std.intdiv(dims.h + 3, 4);
     const p = lid % WINOGRAD_PAIRS;
@@ -745,7 +775,7 @@ const makeWinogradOutKernel = (cfg: Conv2dHwc4Cfg) => {
     const ms = d.arrayOf(d.vec4f, 6)();
     if (live) {
       for (const c of tgpu.unroll(std.range(6))) {
-        ms[c] = d.vec4f(convLayout.$.x[((lane * 6 + c) * tiles + t) * co4 + oB]!);
+        ms[c] = d.vec4f(winogradLayout.$.x[((lane * 6 + c) * tiles + t) * co4 + oB]!);
       }
     }
     const row = winogradOutRow(ms[0]!, ms[1]!, ms[2]!, ms[3]!, ms[4]!, ms[5]!);
@@ -769,8 +799,8 @@ const makeWinogradOutKernel = (cfg: Conv2dHwc4Cfg) => {
         const y = y0 + r;
         if (y < dims.h) {
           const px = y * dims.w + x;
-          convLayout.$.out[px * dims.outC4 + dims.outOffB + oB] = epilogue(
-            d.vec4h(col[r]!),
+          winogradLayout.$.out[px * dims.outC4 + dims.outOffB + oB] = epilogue(
+            winogradVec4(col[r]!),
             oB,
             px,
           );
@@ -823,14 +853,14 @@ export function winogradHandles(
     makeHandle(
       pipelines.input,
       'conv2d_hwc4_wgIn',
-      cachedBindGroup(root, convLayout, { x, w: weight, bias, res, out: planesIn, dims }),
+      cachedBindGroup(root, winogradLayout, { x, w: weight, bias, res, out: planesIn, dims }),
       Math.ceil((tiles * ci4) / WINOGRAD_PAIRS),
       `conv2d_hwc4_wgIn ${shape}`,
     ),
     makeHandle(
       pipelines.mul,
       'conv2d_hwc4_wgMul',
-      cachedBindGroup(root, convLayout, {
+      cachedBindGroup(root, winogradLayout, {
         x: planesIn,
         w: weight,
         bias,
@@ -844,7 +874,7 @@ export function winogradHandles(
     makeHandle(
       pipelines.output,
       'conv2d_hwc4_wgOut',
-      cachedBindGroup(root, convLayout, { x: planesOut, w: weight, bias, res, out, dims }),
+      cachedBindGroup(root, winogradLayout, { x: planesOut, w: weight, bias, res, out, dims }),
       Math.ceil((tiles * co4) / WINOGRAD_PAIRS),
       `conv2d_hwc4_wgOut ${shape}`,
     ),
@@ -861,36 +891,45 @@ const HWC4_ACTS: readonly number[] = [ACT_CODE.none, ACT_CODE.silu, ACT_CODE.gel
 function checkHwc4Act(cfg: Conv2dHwc4Cfg): void {
   if (!HWC4_ACTS.includes(cfg.hasAct)) {
     throw new Error(
-      `conv2d hwc4: no f16 body for activation code ${cfg.hasAct} — this kernel fuses only none/silu/gelu/relu (ACT_CODE)`,
+      `conv2d hwc4: no body for activation code ${cfg.hasAct} — this kernel fuses only none/silu/gelu/relu (ACT_CODE)`,
     );
   }
 }
 
-export function createConv2dHwc4Pipeline(root: TgpuRoot, cfg: Conv2dHwc4Cfg) {
+/** The pipeline of one conv route, reading and writing `elem` storage. */
+export function createConv2dHwc4Pipeline(root: TgpuRoot, cfg: Conv2dHwc4Cfg, elem: Elem) {
   checkHwc4Act(cfg);
   // The split-K kernel's entrypoint takes workgroup builtins, the others a
   // global id; the two signatures do not unify in one expression.
   if (cfg.kind === 3) {
-    return root.createComputePipeline({ compute: makeConv1x1SmallKernel(cfg) });
+    return root.createComputePipeline({ compute: makeConv1x1SmallKernel(cfg, elem) });
   }
   if (cfg.kind === 4) {
-    return root.createComputePipeline({ compute: makeConvTiledKernel(cfg) });
+    return root.createComputePipeline({ compute: makeConvTiledKernel(cfg, elem) });
   }
   const kernel =
     cfg.kind === 1
-      ? makeConv1x1Kernel(cfg)
+      ? makeConv1x1Kernel(cfg, elem)
       : cfg.kind === 2
-        ? makeConvDwKernel(cfg)
-        : makeConvGenericKernel(cfg);
+        ? makeConvDwKernel(cfg, elem)
+        : makeConvGenericKernel(cfg, elem);
   return root.createComputePipeline({ compute: kernel });
 }
 
+/** One conv dispatch. Every buffer holds `elem` storage. */
 export function conv2dHwc4Handle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createConv2dHwc4Pipeline>,
   cfg: Conv2dHwc4Cfg,
   args: { h: number; w: number; outC4?: number; outOffB?: number },
-  buffers: { x: F16Buffer; w: F16Buffer; bias: F16Buffer; res: F16Buffer; out: F16Buffer },
+  buffers: {
+    x: FloatBuffer;
+    w: FloatBuffer;
+    bias: FloatBuffer;
+    res: FloatBuffer;
+    out: FloatBuffer;
+  },
+  elem: Elem,
 ): KernelHandle {
   const { h, w } = args;
   const co4 = Math.ceil(cfg.cOut / 4);
@@ -900,7 +939,7 @@ export function conv2dHwc4Handle(
     outC4: args.outC4 ?? co4,
     outOffB: args.outOffB ?? 0,
   });
-  const bindGroup = cachedBindGroup(root, convLayout, { ...buffers, dims });
+  const bindGroup = cachedBindGroup(root, convLayouts[elem.key], { ...buffers, dims });
   const shape = `${cfg.cIn}>${cfg.cOut}@${h}x${w}`;
   if (cfg.kind === 1) {
     const threads = ((h * w) / (cfg.pxT === 8 ? 8 : 4)) * co4;
@@ -1335,16 +1374,25 @@ export function copyChHwc4Handle(
 
 const ConvertDims = d.struct({ c: d.u32, h: d.u32, w: d.u32 });
 
-const makeToHwc4Layout = (srcF16: boolean) =>
-  tgpu.bindGroupLayout({
-    x: { storage: d.arrayOf(srcF16 ? d.f16 : d.f32), access: 'readonly' },
-    out: { storage: d.arrayOf(d.vec4h), access: 'mutable' },
-    dims: { uniform: ConvertDims },
-  });
-const toHwc4Layouts = { f32: makeToHwc4Layout(false), f16: makeToHwc4Layout(true) };
+type FloatKey = 'f32' | 'f16';
 
-const makeToHwc4Kernel = (srcKey: 'f32' | 'f16') => {
-  const layout = toHwc4Layouts[srcKey];
+/** One value per source and destination dtype, read as [src][dst]. */
+function perDtypePair<T>(make: (src: Elem, dst: Elem) => T): Record<FloatKey, Record<FloatKey, T>> {
+  const from = (src: Elem) => ({ f32: make(src, F32_ELEM), f16: make(src, F16_ELEM) });
+  return { f32: from(F32_ELEM), f16: from(F16_ELEM) };
+}
+
+const toHwc4Layouts = perDtypePair((src, dst) =>
+  tgpu.bindGroupLayout({
+    x: { storage: d.arrayOf(src.scalar), access: 'readonly' },
+    out: { storage: d.arrayOf(dst.vec4), access: 'mutable' },
+    dims: { uniform: ConvertDims },
+  }),
+);
+
+const toHwc4Kernels = perDtypePair((src, dst) => {
+  const layout = toHwc4Layouts[src.key][dst.key];
+  const { scalar, vec4 } = dst;
   return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
     workgroupSize: [WORKGROUP_SIZE],
@@ -1360,29 +1408,28 @@ const makeToHwc4Kernel = (srcKey: 'f32' | 'f16') => {
     const px = std.intdiv(idx, c4);
     const cB = idx % c4;
     const c0 = cB * 4;
-    const zero = d.f16(0);
+    const zero = scalar(0);
     const last = dims.c - 1;
-    layout.$.out[px * c4 + cB] = d.vec4h(
-      std.select(zero, d.f16(layout.$.x[std.min(c0, last) * p + px]!), c0 < dims.c),
-      std.select(zero, d.f16(layout.$.x[std.min(c0 + 1, last) * p + px]!), c0 + 1 < dims.c),
-      std.select(zero, d.f16(layout.$.x[std.min(c0 + 2, last) * p + px]!), c0 + 2 < dims.c),
-      std.select(zero, d.f16(layout.$.x[std.min(c0 + 3, last) * p + px]!), c0 + 3 < dims.c),
+    layout.$.out[px * c4 + cB] = vec4(
+      std.select(zero, scalar(layout.$.x[std.min(c0, last) * p + px]!), c0 < dims.c),
+      std.select(zero, scalar(layout.$.x[std.min(c0 + 1, last) * p + px]!), c0 + 1 < dims.c),
+      std.select(zero, scalar(layout.$.x[std.min(c0 + 2, last) * p + px]!), c0 + 2 < dims.c),
+      std.select(zero, scalar(layout.$.x[std.min(c0 + 3, last) * p + px]!), c0 + 3 < dims.c),
     );
   });
-};
-const toHwc4Kernels = { f32: makeToHwc4Kernel('f32'), f16: makeToHwc4Kernel('f16') };
+});
 
-const makeToChwLayout = (dstF16: boolean) =>
+const toChwLayouts = perDtypePair((src, dst) =>
   tgpu.bindGroupLayout({
-    x: { storage: d.arrayOf(d.vec4h), access: 'readonly' },
-    out: { storage: d.arrayOf(dstF16 ? d.f16 : d.f32), access: 'mutable' },
+    x: { storage: d.arrayOf(src.vec4), access: 'readonly' },
+    out: { storage: d.arrayOf(dst.scalar), access: 'mutable' },
     dims: { uniform: ConvertDims },
-  });
-const toChwLayouts = { f32: makeToChwLayout(false), f16: makeToChwLayout(true) };
+  }),
+);
 
-const makeToChwKernel = (dstKey: 'f32' | 'f16') => {
-  const layout = toChwLayouts[dstKey];
-  const store = dstKey === 'f16' ? d.f16 : d.f32;
+const toChwKernels = perDtypePair((src, dst) => {
+  const layout = toChwLayouts[src.key][dst.key];
+  const store = dst.scalar;
   return tgpu.computeFn({
     in: { gid: d.builtin.globalInvocationId },
     workgroupSize: [WORKGROUP_SIZE],
@@ -1405,27 +1452,29 @@ const makeToChwKernel = (dstKey: 'f32' | 'f16') => {
       }
     }
   });
-};
-const toChwKernels = { f32: makeToChwKernel('f32'), f16: makeToChwKernel('f16') };
+});
 
-export function createToHwc4Pipeline(root: TgpuRoot, srcKey: 'f32' | 'f16') {
-  return root.createComputePipeline({ compute: toHwc4Kernels[srcKey] });
+/** CHW `src` values to an hwc4 image stored as `dst`. */
+export function createToHwc4Pipeline(root: TgpuRoot, src: FloatKey, dst: FloatKey) {
+  return root.createComputePipeline({ compute: toHwc4Kernels[src][dst] });
 }
 
-export function createToChwPipeline(root: TgpuRoot, dstKey: 'f32' | 'f16') {
-  return root.createComputePipeline({ compute: toChwKernels[dstKey] });
+/** An hwc4 image stored as `src` to CHW `dst` values. */
+export function createToChwPipeline(root: TgpuRoot, src: FloatKey, dst: FloatKey) {
+  return root.createComputePipeline({ compute: toChwKernels[src][dst] });
 }
 
 export function toHwc4Handle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createToHwc4Pipeline>,
-  srcKey: 'f32' | 'f16',
+  dtypes: { src: FloatKey; dst: FloatKey },
   args: { c: number; h: number; w: number },
-  buffers: { x: F32Buffer | F16Buffer; out: F16Buffer },
+  buffers: { x: FloatBuffer; out: FloatBuffer },
 ): KernelHandle {
   const { c, h, w } = args;
   const dims = cachedUniform(root, ConvertDims, { c, h, w });
-  const bindGroup = cachedBindGroup(root, toHwc4Layouts[srcKey], { ...buffers, dims });
+  const layout = toHwc4Layouts[dtypes.src][dtypes.dst];
+  const bindGroup = cachedBindGroup(root, layout, { ...buffers, dims });
   const threads = h * w * Math.ceil(c / 4);
   return makeHandle(pipeline, 'toHwc4', bindGroup, Math.ceil(threads / WORKGROUP_SIZE));
 }
@@ -1433,13 +1482,14 @@ export function toHwc4Handle(
 export function toChwHandle(
   root: TgpuRoot,
   pipeline: ReturnType<typeof createToChwPipeline>,
-  dstKey: 'f32' | 'f16',
+  dtypes: { src: FloatKey; dst: FloatKey },
   args: { c: number; h: number; w: number },
-  buffers: { x: F16Buffer; out: F32Buffer | F16Buffer },
+  buffers: { x: FloatBuffer; out: FloatBuffer },
 ): KernelHandle {
   const { c, h, w } = args;
   const dims = cachedUniform(root, ConvertDims, { c, h, w });
-  const bindGroup = cachedBindGroup(root, toChwLayouts[dstKey], { ...buffers, dims });
+  const layout = toChwLayouts[dtypes.src][dtypes.dst];
+  const bindGroup = cachedBindGroup(root, layout, { ...buffers, dims });
   const threads = h * w * Math.ceil(c / 4);
   return makeHandle(pipeline, 'toChw', bindGroup, Math.ceil(threads / WORKGROUP_SIZE));
 }

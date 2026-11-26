@@ -13,30 +13,57 @@ import {
   slice,
   softmax,
   toChw,
+  toHwc,
   toHwc4,
   upsample2d,
 } from '../../../../src/core/graph/ops.ts';
 import { c4of, hwc4Meta, tensor3d, type Value } from '../../../../src/core/graph/value.ts';
 import { Conv2d } from '../../../../src/core/nn/layers.ts';
 import { memoryStateDict } from '../../../../src/core/weights/safetensors.ts';
-import { expectClose, gpu, randomF32, requireFeature, roundF16, upload } from '../../../gpu.ts';
+import {
+  expectClose,
+  gpu,
+  gpuWithoutF16,
+  randomF32,
+  requireFeature,
+  roundF16,
+  upload,
+} from '../../../gpu.ts';
 import { ACTIVATION_REF } from '../matmul/checkMatmul.ts';
 
-const { root, ex } = await gpu();
+const main = await gpu();
+const { root, ex } = main;
 
-/** Every hwc4 kernel stores f16. */
+/** The dtypes an hwc4 image stores. The convs and the CHW conversions run
+ *  both, every other hwc4 kernel f16 only. */
+type Dtype = 'f32' | 'f16';
+const DTYPES = ['f16', 'f32'] as const;
+
 const needF16 = (ctx: TestContext) => requireFeature(ctx, root, 'shader-f16');
 
-/** Random [C, H, W] values, rounded to the f16 that toHwc4 stores. */
-const image = (c: number, h: number, w: number, seed: number) =>
-  roundF16(randomF32(c * h * w, seed));
+/** Skips an f16 case on a device without shader-f16. f32 needs no feature. */
+const need = (ctx: TestContext, dtype: Dtype) => {
+  if (dtype === 'f16') needF16(ctx);
+};
 
-/** CHW f32 data into hwc4 storage, through toHwc4. */
-const hwc4 = (x: Float32Array, c: number, h: number, w: number) =>
-  toHwc4(upload(root, x, tensor3d(c, h, w)));
+/** Random [C, H, W] values, rounded to f16 where toHwc4 stores f16. */
+const image = (c: number, h: number, w: number, seed: number, dtype: Dtype = 'f16') => {
+  const x = randomF32(c * h * w, seed);
+  return dtype === 'f16' ? roundF16(x) : x;
+};
+
+/** CHW f32 data into hwc4 storage of `dtype`, through toHwc4. */
+const hwc4 = (
+  x: Float32Array,
+  c: number,
+  h: number,
+  w: number,
+  dtype: Dtype = 'f16',
+  device = main,
+) => toHwc4(upload(device.root, x, tensor3d(c, h, w)), dtype);
 
 /** Back to CHW f32, the padding lanes dropped. */
-const read = (y: Value) => toArray(toChw(y, 'f32'), ex);
+const read = (y: Value, device = main) => toArray(toChw(y, 'f32'), device.ex);
 
 const EXACT = { atol: 0, rtol: 0 };
 
@@ -101,13 +128,14 @@ function conv2dRef(
   return out;
 }
 
-/** An nn.Conv2d, which packs the weight for the route it takes, with random
- *  f16 weights scaled by 1/sqrt(K) so every output stays near 1, where f16
- *  sums are good to ~1e-3. */
-async function makeConv2d(c: Conv, seed: number) {
+/** An nn.Conv2d of `dtype`, which packs the weight for the route it takes,
+ *  with random weights scaled by 1/sqrt(K) so every output stays near 1,
+ *  where f16 sums are good to ~1e-3. An f16 conv gets weights rounded to f16. */
+async function makeConv2d(c: Conv, seed: number, dtype: Dtype = 'f16', device = main) {
   const k = (c.cIn / c.groups) * c.kH * c.kW;
-  const wt = roundF16(randomF32(c.cOut * k, seed).map((v) => v / Math.sqrt(k)));
-  const bias = c.bias ? roundF16(randomF32(c.cOut, seed + 1)) : undefined;
+  const round = dtype === 'f16' ? roundF16 : (x: Float32Array) => x;
+  const wt = round(randomF32(c.cOut * k, seed).map((v) => v / Math.sqrt(k)));
+  const bias = c.bias ? round(randomF32(c.cOut, seed + 1)) : undefined;
   const conv = new Conv2d(c.cIn, c.cOut, {
     kernelSize: [c.kH, c.kW],
     stride: c.stride,
@@ -116,33 +144,46 @@ async function makeConv2d(c: Conv, seed: number) {
     bias: c.bias ?? false,
     activation: c.activation,
     winograd: c.winograd,
-  }).half();
+  });
+  if (dtype === 'f16') conv.half();
   await conv.loadStateDict(
     memoryStateDict({
       weight: { data: wt, shape: [c.cOut, c.cIn / c.groups, c.kH, c.kW] },
       ...(bias ? { bias } : {}),
     }),
+    { root: device.root },
   );
   onTestFinished(() => conv.dispose());
   return { conv, wt, bias };
 }
 
-/** Every route but depthwise sums in f16, which drifts with the square root of
- *  K. The Winograd transforms scale values by up to 100 before the f16 planes. */
-function convTol(c: Conv) {
+/** In f16 every route but depthwise sums in f16, which drifts with the square
+ *  root of K. The Winograd transforms scale values by up to 100 before the f16
+ *  planes. In f32 every sum is f32. */
+function convTol(c: Conv, dtype: Dtype = 'f16') {
+  if (dtype === 'f32') return { atol: 1e-5, rtol: 1e-4 };
   if (c.winograd) return { atol: 3e-2, rtol: 2e-2 };
   return { atol: 2e-3 + 1e-3 * Math.sqrt((c.cIn / c.groups) * c.kH * c.kW), rtol: 1e-2 };
 }
 
-async function checkConv2d(c: Conv): Promise<void> {
-  const x = image(c.cIn, c.h, c.w, 1);
-  const { conv, wt, bias } = await makeConv2d(c, 2);
+async function checkConv2d(c: Conv, dtype: Dtype = 'f16', device = main): Promise<void> {
+  const x = image(c.cIn, c.h, c.w, 1, dtype);
+  const { conv, wt, bias } = await makeConv2d(c, 2, dtype, device);
   const { hOut, wOut } = outSize(c);
-  const residual = c.residual ? image(c.cOut, hOut, wOut, 4) : undefined;
-  const y = conv.forward(hwc4(x, c.cIn, c.h, c.w));
-  const got = await read(residual ? add(hwc4(residual, c.cOut, hOut, wOut), y) : y);
-  expectClose(got, conv2dRef(x, wt, c, bias, residual), convTol(c));
+  const residual = c.residual ? image(c.cOut, hOut, wOut, 4, dtype) : undefined;
+  const y = conv.forward(hwc4(x, c.cIn, c.h, c.w, dtype, device));
+  const sum = residual ? add(hwc4(residual, c.cOut, hOut, wOut, dtype, device), y) : y;
+  expectClose(await read(sum, device), conv2dRef(x, wt, c, bias, residual), convTol(c, dtype));
 }
+
+/** Each case in both dtypes. Winograd has no f32 kernel. */
+const inBothDtypes = <T extends { c: Conv }>(cases: readonly T[]) =>
+  cases.flatMap((each) =>
+    DTYPES.filter((dtype) => dtype === 'f16' || !each.c.winograd).map((dtype) => ({
+      ...each,
+      dtype,
+    })),
+  );
 
 /** max over the taps inside x, as torch's max_pool2d pads with -inf. */
 function maxPoolRef(
@@ -181,7 +222,8 @@ describe('hwc4 kernels', () => {
     // Routes are picked in gpu/dispatch/conv.ts: winograd when opted in on the
     // module; a 1×1, stride 1, padding 0, groups 1 conv takes 1x1 or 1x1s by
     // conv1x1Kind; any other groups-1 conv takes tiled when convTiledBlocks
-    // says so and direct otherwise; groups = C_in takes depthwise.
+    // says so and direct otherwise; groups = C_in takes depthwise. An f32
+    // conv takes the same route as the f16 one, and winograd is f16 only.
     const ROUTES: { name: string; c: Conv }[] = [
       // direct: CO4 <= 8 orders threads block-first; columns per thread are
       // the most of 4, 2, 1 that keep 16384 threads.
@@ -417,9 +459,9 @@ describe('hwc4 kernels', () => {
         },
       },
     ];
-    it.for(ROUTES)('$name', async ({ c }, ctx) => {
-      needF16(ctx);
-      await checkConv2d(c);
+    it.for(inBothDtypes(ROUTES))('$name, $dtype', async ({ c, dtype }, ctx) => {
+      need(ctx, dtype);
+      await checkConv2d(c, dtype);
     });
 
     // Every epilogue on every route: act(conv + bias) + residual.
@@ -471,11 +513,22 @@ describe('hwc4 kernels', () => {
         },
       },
     ];
-    it.for(SHAPES.flatMap((s) => EPILOGUES.map((e) => ({ ...s, ...e }))))(
-      '$route with $name',
-      async ({ c, opts }, ctx) => {
-        needF16(ctx);
-        await checkConv2d({ ...c, ...opts });
+    it.for(inBothDtypes(SHAPES.flatMap((s) => EPILOGUES.map((e) => ({ ...s, ...e })))))(
+      '$route with $name, $dtype',
+      async ({ c, opts, dtype }, ctx) => {
+        need(ctx, dtype);
+        await checkConv2d({ ...c, ...opts }, dtype);
+      },
+    );
+
+    // The f32 kernels have no f16 type in their shaders: every f32 route, its
+    // epilogue and both CHW conversions compile and run without shader-f16.
+    it.for(SHAPES.filter((s) => !s.c.winograd))(
+      '$route in f32 on a device without shader-f16',
+      async ({ c }) => {
+        const device = await gpuWithoutF16();
+        expect(device.root.enabledFeatures.has('shader-f16')).toBe(false);
+        await checkConv2d({ ...c, bias: true, activation: 'gelu', residual: true }, 'f32', device);
       },
     );
 
@@ -546,19 +599,20 @@ describe('hwc4 kernels', () => {
     // grid row repeats the first, so the pixels past 65535·4 are never
     // written. Turn into a plain `it` with the fix.
     // 1x1s: H·W % 4 != 0
-    it.fails('a 513×513 map (1x1s)', async (ctx) => {
-      needF16(ctx);
-      await checkConv2d({
-        cIn: 4,
-        cOut: 4,
-        h: 513,
-        w: 513,
-        kH: 1,
-        kW: 1,
-        stride: 1,
-        padding: 0,
-        groups: 1,
-      });
+    it.fails.for(DTYPES)('a 513×513 map (1x1s), %s', async (dtype, ctx) => {
+      need(ctx, dtype);
+      await checkConv2d(
+        { cIn: 4, cOut: 4, h: 513, w: 513, kH: 1, kW: 1, stride: 1, padding: 0, groups: 1 },
+        dtype,
+      );
+    });
+
+    // direct: 2^24 output values, past where an f32 index stops being exact
+    it('a 2048×2048 map, f32 (direct, 4 columns)', async () => {
+      await checkConv2d(
+        { cIn: 1, cOut: 4, h: 2048, w: 2048, kH: 3, kW: 3, stride: 1, padding: 1, groups: 1 },
+        'f32',
+      );
     });
 
     it('rejects an empty input with an INVALID_ARGUMENT', () => {
@@ -567,10 +621,10 @@ describe('hwc4 kernels', () => {
       );
     });
 
-    const weightOf = (cOut: number, cols: number, layout?: 'hwc4') =>
+    const weightOf = (cOut: number, cols: number, layout?: 'hwc4', dtype: Dtype = 'f16') =>
       upload(root, new Float32Array(c4of(cOut) * 16 * cols), {
         elems: c4of(cOut) * 16 * cols,
-        dtype: 'f16',
+        dtype,
         dims: [cOut, cols],
         layout,
       });
@@ -599,12 +653,32 @@ describe('hwc4 kernels', () => {
       ).toThrow(/groups=2 is neither 1 nor depthwise/);
     });
 
-    it('refuses an f32 bias', (ctx) => {
+    it('refuses an f32 bias for an f16 weight', (ctx) => {
       needF16(ctx);
       const x = hwc4(new Float32Array(4 * 9), 4, 3, 3);
       const bias = upload(root, new Float32Array(4), { elems: 4, dtype: 'f32' });
       expect(() => conv2d(x, weightOf(4, 36, 'hwc4'), bias, geometry)).toThrow(
-        /bias must be f16 with 4 elems/,
+        /bias must be f16, like the weight, with 4 elems/,
+      );
+    });
+
+    it('refuses an f16 input for an f32 weight', (ctx) => {
+      needF16(ctx);
+      const x = hwc4(new Float32Array(4 * 9), 4, 3, 3);
+      expect(() => conv2d(x, weightOf(4, 36, 'hwc4', 'f32'), undefined, geometry)).toThrow(
+        /the f16 input must have the weight's dtype, f32/,
+      );
+    });
+
+    it('refuses winograd for an f32 weight with an INVALID_ARGUMENT', () => {
+      const x = hwc4(new Float32Array(4 * 9), 4, 3, 3, 'f32');
+      expect(() =>
+        conv2d(x, weightOf(4, 36, 'hwc4', 'f32'), undefined, { ...geometry, winograd: true }),
+      ).toThrow(
+        expect.objectContaining({
+          code: 'INVALID_ARGUMENT',
+          message: 'conv2d: winograd has no f32 kernel yet, run the model in f16 with half()',
+        }),
       );
     });
   });
@@ -777,31 +851,90 @@ describe('hwc4 kernels', () => {
       const x = upload(root, new Float32Array(16 * 4), hwc4Meta(4, 4, 4));
       expect(() => op(x)).toThrow(err);
     });
+
+    // Their kernels read f16 only.
+    it.each([
+      {
+        name: 'maxPool2d',
+        op: (x: Value) => maxPool2d(x, { kernelSize: 2, stride: 2, padding: 0 }),
+      },
+      { name: 'avgPool2d', op: (x: Value) => avgPool2d(x, { kernelSize: 2 }) },
+      { name: 'pad2d', op: (x: Value) => pad2d(x, { padH: 1, padW: 1 }) },
+      { name: 'upsample2d', op: (x: Value) => upsample2d(x, { scale: 2 }) },
+      { name: 'resizeBilinear2d', op: (x: Value) => resizeBilinear2d(x, { outH: 2, outW: 2 }) },
+      { name: 'slice', op: (x: Value) => slice(x, 0, 0, 4) },
+      { name: 'cat', op: (x: Value) => cat([x, x], 0) },
+      {
+        name: 'channelAffine',
+        op: (x: Value) =>
+          channelAffine(x, upload(root, new Float32Array(8), { elems: 8, dtype: 'f32' })),
+      },
+    ])('$name refuses an f32 image with an INVALID_ARGUMENT', ({ op }) => {
+      const x = upload(root, new Float32Array(16 * 8), hwc4Meta(8, 4, 4, 'f32'));
+      expect(() => op(x)).toThrow(
+        expect.objectContaining({
+          code: 'INVALID_ARGUMENT',
+          message: expect.stringMatching(/no f32 kernel yet for an hwc4 input/),
+        }),
+      );
+    });
   });
 
   describe('layout and channel ops', () => {
     it.for(
-      (['f32', 'f16'] as const).flatMap((from) =>
-        (['f32', 'f16'] as const).flatMap((to) =>
-          [
-            { c: 1, h: 1, w: 1 },
-            { c: 5, h: 3, w: 7 },
-            { c: 8, h: 4, w: 4 },
-            // c4 = 3: a block count that f32 division can split wrong.
-            { c: 10, h: 3, w: 5 },
-          ].map((s) => ({ from, to, ...s })),
+      DTYPES.flatMap((from) =>
+        DTYPES.flatMap((stored) =>
+          DTYPES.flatMap((to) =>
+            [
+              { c: 1, h: 1, w: 1 },
+              { c: 5, h: 3, w: 7 },
+              { c: 8, h: 4, w: 4 },
+              // c4 = 3: a block count that f32 division can split wrong.
+              { c: 10, h: 3, w: 5 },
+            ].map((s) => ({ from, stored, to, ...s })),
+          ),
         ),
       ),
     )(
-      'toHwc4 from $from and toChw to $to round-trip [$c, $h, $w]',
-      async ({ from, to, c, h, w }, ctx) => {
-        needF16(ctx);
+      'toHwc4 from $from, stored $stored, and toChw to $to round-trip [$c, $h, $w]',
+      async ({ from, stored, to, c, h, w }, ctx) => {
+        if ([from, stored, to].includes('f16')) needF16(ctx);
+        // Rounded to f16, so the trip is exact whichever step stores f16.
         const x = image(c, h, w, 1);
-        const stored = toHwc4(upload(root, x, { ...tensor3d(c, h, w), dtype: from }));
-        expect(stored.shape).toEqual(hwc4Meta(c, h, w));
-        expectClose(await toArray(toChw(stored, to), ex), x, EXACT);
+        const y = toHwc4(upload(root, x, { ...tensor3d(c, h, w), dtype: from }), stored);
+        expect(y.shape).toEqual(hwc4Meta(c, h, w, stored));
+        expectClose(await toArray(toChw(y, to), ex), x, EXACT);
       },
     );
+
+    it('toHwc4 stores f16 by default', () => {
+      const x = upload(root, new Float32Array(12), tensor3d(3, 2, 2));
+      expect(toHwc4(x).shape).toEqual(hwc4Meta(3, 2, 2, 'f16'));
+    });
+
+    // toHwc gives [H, W, C]: element (y, x, ch) is CHW's (ch, y, x).
+    it.for(DTYPES)('toHwc gives the image as row-major [H, W, C], %s', async (dtype, ctx) => {
+      need(ctx, dtype);
+      const [c, h, w] = [8, 3, 5];
+      const x = image(c, h, w, 1, dtype);
+      const y = toHwc(hwc4(x, c, h, w, dtype));
+      expect(y.shape).toEqual({ elems: h * w * c, dtype, dims: [h, w, c] });
+      const want = new Float32Array(h * w * c);
+      for (let ch = 0; ch < c; ch++) {
+        for (let p = 0; p < h * w; p++) want[p * c + ch] = x[ch * h * w + p]!;
+      }
+      expectClose(await toArray(y, ex), want, EXACT);
+    });
+
+    it('toHwc refuses channels that are not a multiple of 4 with an INVALID_ARGUMENT', () => {
+      const x = upload(root, new Float32Array(8 * 4), hwc4Meta(6, 2, 2, 'f32'));
+      expect(() => toHwc(x)).toThrow(
+        expect.objectContaining({
+          code: 'INVALID_ARGUMENT',
+          message: 'toHwc: channels must be a multiple of 4, got 6; toChw() takes any count',
+        }),
+      );
+    });
 
     it.for([false, true])('channelAffine, shift %s', async (withShift, ctx) => {
       needF16(ctx);

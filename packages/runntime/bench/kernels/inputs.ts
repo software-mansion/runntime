@@ -25,9 +25,15 @@ export function randMat(version: Version, rows: number, cols: number, dtype: Flo
   return version.upload(version.rand(rows * cols), mat(rows, cols, dtype));
 }
 
-/** A random f16 image already stored hwc4, padding lanes zero. */
-export function randHwc4(version: Version, c: number, h: number, w: number): Value {
-  const meta = version.lib.hwc4Meta(c, h, w);
+/** A random image already stored hwc4, f16 by default, padding lanes zero. */
+export function randHwc4(
+  version: Version,
+  c: number,
+  h: number,
+  w: number,
+  dtype: Float = 'f16',
+): Value {
+  const meta = version.lib.hwc4Meta(c, h, w, dtype);
   const c4 = meta.elems / (h * w);
   const vals = version.rand(h * w * c);
   const data = new Float32Array(meta.elems);

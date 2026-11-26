@@ -156,12 +156,32 @@ describe('conv2d', () => {
       weight: packedWeight(16, 9),
       error: /weight cols 9 != C_in\/groups·kH·kW = 8·1·1/,
     },
-    { name: 'an f32 weight', weight: packedWeight(16, 8, 'f32'), error: /no f32 kernel yet/ },
-    { name: 'an f32 bias', bias: input([16]), error: /bias must be f16 with 16 elems/ },
+    {
+      name: 'an f32 weight on an f16 input',
+      weight: packedWeight(16, 8, 'f32'),
+      error: /the f16 input must have the weight's dtype, f32/,
+    },
+    {
+      name: 'an f16 weight on an f32 input',
+      x: hwc4Input(8, 6, 6, 'f32'),
+      error: /the f32 input must have the weight's dtype, f16/,
+    },
+    {
+      name: 'an f32 bias on an f16 weight',
+      bias: input([16]),
+      error: /bias must be f16, like the weight, with 16 elems/,
+    },
+    {
+      name: 'an f16 bias on an f32 weight',
+      x: hwc4Input(8, 6, 6, 'f32'),
+      weight: packedWeight(16, 8, 'f32'),
+      bias: input([16], 'f16'),
+      error: /bias must be f32, like the weight, with 16 elems/,
+    },
     {
       name: 'a bias of the wrong length',
       bias: input([8], 'f16'),
-      error: /bias must be f16 with 16 elems/,
+      error: /bias must be f16, like the weight, with 16 elems/,
     },
   ])('rejects $name', ({ x, weight, bias, kernelSize = 1, groups = 1, error }) => {
     expect(() =>
@@ -171,6 +191,31 @@ describe('conv2d', () => {
         groups,
       }),
     ).toThrow(error);
+  });
+
+  it('gives an f32 map from an f32 weight, input and bias', () => {
+    const c = conv2d(hwc4Input(8, 6, 6, 'f32'), packedWeight(16, 72, 'f32'), input([16]), {
+      ...plain,
+      kernelSize: 3,
+      padding: 1,
+    });
+    expect(c.shape).toEqual(hwc4Input(16, 6, 6, 'f32').shape);
+  });
+
+  it('rejects winograd on an f32 weight with an INVALID_ARGUMENT', () => {
+    expect(() =>
+      conv2d(hwc4Input(8, 6, 6, 'f32'), packedWeight(16, 72, 'f32'), undefined, {
+        ...plain,
+        kernelSize: 3,
+        padding: 1,
+        winograd: true,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_ARGUMENT',
+        message: 'conv2d: winograd has no f32 kernel yet, run the model in f16 with half()',
+      }),
+    );
   });
 
   it('rejects depthwise groups when out channels differ from in channels', () => {

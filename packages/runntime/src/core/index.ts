@@ -83,6 +83,7 @@ export {
   swigluChunk,
   tanh,
   toChw,
+  toHwc,
   toHwc4,
   avgPool2d,
   channelAffine,

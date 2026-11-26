@@ -2,7 +2,7 @@
  *  plus reshape, transpose, row writes and row gathers. */
 
 import { hwc4Meta, pending, Value } from '../value.ts';
-import { FLOAT_DTYPES, isHwc4, normDim, want2d, want3d, wantHwc4 } from './shared.ts';
+import { FLOAT_DTYPES, isHwc4, normDim, want2d, want3d, wantHwc4F16 } from './shared.ts';
 
 export function reshape(x: Value, newDims: number[]): Value {
   if (x.shape.layout !== undefined) {
@@ -202,7 +202,7 @@ function concatChannels(x: Value, y: Value): Value {
 
 /** HWC4 channel slice; start and width must both be multiples of 4. */
 function sliceChannelsHwc4(x: Value, start: number, end: number): Value {
-  const [c, h, w] = x.shape.dims! as [number, number, number];
+  const [c, h, w] = wantHwc4F16('slice', x);
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > c || start >= end) {
     throw new Error(`slice: bad range [${start}, ${end}) for ${c} channels`);
   }
@@ -216,8 +216,8 @@ function sliceChannelsHwc4(x: Value, start: number, end: number): Value {
 
 /** HWC4 channel concat; each side's channel count must be a multiple of 4. */
 function concatChannelsHwc4(x: Value, y: Value): Value {
-  const [c1, h1, w1] = wantHwc4('cat.a', x);
-  const [c2, h2, w2] = wantHwc4('cat.b', y);
+  const [c1, h1, w1] = wantHwc4F16('cat.a', x);
+  const [c2, h2, w2] = wantHwc4F16('cat.b', y);
   if (h1 !== h2 || w1 !== w2) {
     throw new Error(`cat: spatial mismatch - a=${x.shape.dims}, b=${y.shape.dims}`);
   }
