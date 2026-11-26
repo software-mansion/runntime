@@ -29,8 +29,10 @@ def main() -> None:
 
     with torch.inference_mode():
         reference = model(pixels).numpy()
-        # The same model and pixels in f64 give the reference noise.
+        # The same model and pixels in f64 give the reference noise, and in
+        # f16 the f16 noise. f64 holds the f32 weights exactly.
         double = model.double()(pixels.double()).numpy()
+        half = model.half()(pixels.half()).float().numpy()
     save(
         "mobilenetv4",
         {"images": paths},
@@ -47,6 +49,10 @@ def main() -> None:
             "noise": {
                 "error": noise(reference, double),
                 "cosineDistance": cosine_noise(centered(reference.astype(np.float64)), centered(double)),
+            },
+            "noiseF16": {
+                "error": noise(half, double),
+                "cosineDistance": cosine_noise(centered(half.astype(np.float64)), centered(double)),
             },
         },
         ["torch", "timm", "torchvision", "pillow"],

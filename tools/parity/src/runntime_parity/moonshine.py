@@ -77,10 +77,11 @@ def gap(logits: NDArray[np.floating], top: NDArray[np.intp]) -> NDArray[np.float
     return logits[steps, top[:, 0]] - logits[steps, top[:, 1]]
 
 
-def noises(reference: Outputs, double: Outputs) -> dict[str, float]:
-    """The reference noise of each metric: the largest difference between
-    the f32 and the f64 outputs over the clips."""
-    pairs = list(zip(reference, double, strict=True))
+def noises(outputs: Outputs, double: Outputs, reference: Outputs) -> dict[str, float]:
+    """The noise of each metric: the largest difference between `outputs`
+    and the f64 outputs over the clips. The logit gap is between the two
+    tokens `reference` scores highest."""
+    pairs = list(zip(outputs, double, strict=True))
     tops = [np.argsort(-logits, axis=1)[:, :2] for _, logits in reference]
     return {
         "encoderError": max(noise(a, b) for (a, _), (b, _) in pairs),
@@ -118,6 +119,11 @@ def save_reference(reference: Reference, teacher_forced: TeacherForced) -> None:
     del model
     gc.collect()
     double = teacher_forced(load(reference, double=True), inputs, tokens)
+    # The same model in f16 gives the f16 noise, its outputs as f32.
+    gc.collect()
+    half = [
+        (a.astype(np.float32), b.astype(np.float32)) for a, b in teacher_forced(load(reference).half(), inputs, tokens)
+    ]
 
     tensors: dict[str, NDArray] = {}
     for i, (clip, ids, (states, logits)) in enumerate(zip(clips, tokens, outputs, strict=True)):
@@ -135,7 +141,8 @@ def save_reference(reference: Reference, teacher_forced: TeacherForced) -> None:
             "dtype": "f32",
             "inputs": librispeech.ATTRIBUTION | {"count": len(clips)},
             "settings": {"maxSeconds": reference.max_seconds, "tokensPerSecond": TOKENS_PER_SECOND},
-            "noise": noises(outputs, double),
+            "noise": noises(outputs, double, outputs),
+            "noiseF16": noises(half, double, outputs),
         },
         ["torch", "transformers"],
         outputs={"texts": texts},

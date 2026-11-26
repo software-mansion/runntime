@@ -56,11 +56,12 @@ def save(  # noqa: PLR0913
 ) -> None:
     """Writes `inputs.json`, `reference.safetensors` and `meta.json`, with the
     version of Python and of each library in `libraries`, and `outputs.json`
-    when the task outputs are not tensors. Refuses a noise of 0 in `meta`: a
-    threshold in multiples of it is 0."""
-    for name, value in meta["noise"].items():
-        if value == 0:
-            raise RuntimeError(f"the reference noise of {name} is 0")
+    when the task outputs are not tensors. Refuses a noise of 0 in `meta`,
+    f32 or f16: a threshold in multiples of it is 0."""
+    for key in ("noise", "noiseF16"):
+        for name, value in meta.get(key, {}).items():
+            if value == 0:
+                raise RuntimeError(f"the reference {key} of {name} is 0")
     out = references_dir(family)
     (out / "inputs.json").write_text(json.dumps(inputs, ensure_ascii=False, indent=2))
     save_file(tensors, out / "reference.safetensors")

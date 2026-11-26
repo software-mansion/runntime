@@ -5,6 +5,7 @@ passages from sentence-transformers, in f32.
 """
 
 import numpy as np
+import torch
 from numpy.typing import NDArray
 from sentence_transformers import SentenceTransformer
 
@@ -29,12 +30,12 @@ def truncated(texts: list[str]) -> int:
     return sum(length > model.max_seq_length for length in lengths)
 
 
-def embed(texts: list[str], double: bool = False) -> NDArray[np.floating]:
-    """The embeddings of `texts` on the CPU: in f32, or in f64 with `double`."""
-    model = SentenceTransformer(REPO, revision=REVISION, device="cpu")
-    if double:
-        model = model.double()
-    return model.encode(texts, batch_size=1, normalize_embeddings=True, convert_to_tensor=True).numpy()
+def embed(texts: list[str], dtype: torch.dtype = torch.float32) -> NDArray[np.floating]:
+    """The embeddings of `texts` on the CPU, computed in `dtype`. f16 ones
+    come back as f32."""
+    model = SentenceTransformer(REPO, revision=REVISION, device="cpu").to(dtype)
+    embeddings = model.encode(texts, batch_size=1, normalize_embeddings=True, convert_to_tensor=True)
+    return (embeddings.float() if dtype == torch.float16 else embeddings).numpy()
 
 
 def main() -> None:
@@ -44,8 +45,9 @@ def main() -> None:
     reference = {"queries": embed(queries), "passages": embed(passages)}
     scores = reference["queries"] @ reference["passages"].T
     ranking = np.argsort(-scores, axis=1, kind="stable")[:, :TOP_K].astype(np.int32)
-    # The same model in f64 gives the reference noise.
-    double = {"queries": embed(queries, double=True), "passages": embed(passages, double=True)}
+    # The same model in f64 gives the reference noise, and in f16 the f16 noise.
+    double = {"queries": embed(queries, torch.float64), "passages": embed(passages, torch.float64)}
+    half = {"queries": embed(queries, torch.float16), "passages": embed(passages, torch.float16)}
     save(
         "minilm",
         {"queries": queries, "passages": passages},
@@ -60,6 +62,11 @@ def main() -> None:
                 "error": max(noise(reference[name], double[name]) for name in reference),
                 "cosineDistance": max(cosine_noise(reference[name], double[name]) for name in reference),
                 "score": noise(scores, double["queries"] @ double["passages"].T),
+            },
+            "noiseF16": {
+                "error": max(noise(half[name], double[name]) for name in half),
+                "cosineDistance": max(cosine_noise(half[name], double[name]) for name in half),
+                "score": noise(half["queries"] @ half["passages"].T, double["queries"] @ double["passages"].T),
             },
         },
         ["torch", "sentence-transformers", "transformers"],
