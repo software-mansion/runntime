@@ -458,7 +458,7 @@ function quantConvFits(cIn: number, taps: number, n: number): boolean {
 }
 
 /** Strided, dilated 1D convolution over time-major [T, inChannels]. No batch
- *  dim, no groups.
+ *  dim. Groups are 1 or fully depthwise.
  *
  *  `padding` takes torch's number, 'valid' or 'same'; padLeft and padRight pad
  *  each side independently instead. span − 1 on the left is causal, with
@@ -466,12 +466,17 @@ function quantConvFits(cIn: number, taps: number, n: number): boolean {
  *  weight is stored tap-major and permutes from torch layout at load. bias and
  *  `activation` fold into the conv epilogue.
  *
- *  A quantized checkpoint weight is torch's [out, in·kernel], one scale per
- *  group of values along each row. It loads as quantW words with its f32
- *  scales in `weightScale` [in·kernel / groupSize, out]. Output channels pad
- *  up to the packing width, scales and bias with them, and are cut after the
- *  conv. A conv the quantized matmul cannot run loads a quantized weight as
- *  its dequantized floats. */
+ *  A depthwise conv, `groups` equal to both channel counts, loads torch's
+ *  [channels, 1, kernelSize] weight and runs causal only: stride 1, no
+ *  dilation, padLeft kernelSize − 1, `bias: false`, no activation, channels a
+ *  multiple of 4. forward() throws INVALID_ARGUMENT for anything else.
+ *
+ *  A quantized checkpoint weight is torch's [out, in / groups · kernel], one
+ *  scale per group of values along each row. It loads as quantW words with its
+ *  f32 scales in `weightScale` [in·kernel / groupSize, out]. Output channels
+ *  pad up to the packing width, scales and bias with them, and are cut after
+ *  the conv. A conv the quantized matmul cannot run, every depthwise one
+ *  included, loads a quantized weight as its dequantized floats. */
 export class Conv1d extends Module {
   readonly weight: Parameter;
   readonly bias?: Parameter;
@@ -485,6 +490,9 @@ export class Conv1d extends Module {
   readonly padLeft?: number;
   readonly padRight?: number;
   readonly activation?: SlotAct;
+  readonly groups: number;
+  /** Throws INVALID_ARGUMENT for `groups` that are neither 1 nor both channel
+   *  counts. */
   constructor(
     readonly inChannels: number,
     readonly outChannels: number,
@@ -497,6 +505,7 @@ export class Conv1d extends Module {
       padLeft?: number;
       padRight?: number;
       activation?: SlotAct;
+      groups?: number;
     } = {},
   ) {
     super();
@@ -506,7 +515,14 @@ export class Conv1d extends Module {
     this.padLeft = opts.padLeft;
     this.padRight = opts.padRight;
     this.activation = opts.activation;
-    const rows = kernelSize * inChannels;
+    this.groups = opts.groups ?? 1;
+    if (this.groups !== 1 && (this.groups !== inChannels || inChannels !== outChannels)) {
+      throw new RunntimeError(
+        'INVALID_ARGUMENT',
+        `Conv1d: groups=${this.groups} is neither 1 nor depthwise (cIn=${inChannels}, cOut=${outChannels})`,
+      );
+    }
+    const rows = kernelSize * (inChannels / this.groups);
     this.weight = new Parameter(matrix(rows, outChannels));
     this.bias =
       opts.bias === false
@@ -517,16 +533,18 @@ export class Conv1d extends Module {
     const name = prefix ? `${prefix}.weight` : 'weight';
     let tensor = sd.tensors.get(name);
     if (!tensor) return; // a missing key is reported by the key check
+    const { outChannels: cOut, kernelSize: kernel } = this;
+    // Input channels each output reads.
+    const cIn = this.inChannels / this.groups;
     if (tensor.kind === 'quant') {
-      const { inChannels: cIn, outChannels: cOut, kernelSize: kernel } = this;
       checkQuantConvShape('Conv1d', name, tensor, {
         rows: cOut,
         cols: cIn * kernel,
-        layout: '[out, in·kernel]',
+        layout: this.groups === 1 ? '[out, in·kernel]' : '[out, kernel]',
       });
       const width = 32 / tensor.bits;
       const n = Math.ceil(cOut / width) * width;
-      if (quantConvFits(cIn, kernel, n)) {
+      if (this.groups === 1 && quantConvFits(cIn, kernel, n)) {
         this.loadQuantized(sd, prefix, name, tensor, n);
         return;
       }
@@ -535,28 +553,20 @@ export class Conv1d extends Module {
     // Without this a weight with equal in/out channels loads scrambled.
     if (
       tensor.shape.length !== 3 ||
-      tensor.shape[0] !== this.outChannels ||
-      tensor.shape[1] !== this.inChannels ||
-      tensor.shape[2] !== this.kernelSize
+      tensor.shape[0] !== cOut ||
+      tensor.shape[1] !== cIn ||
+      tensor.shape[2] !== kernel
     ) {
       throw new RunntimeError(
         'CHECKPOINT_MISMATCH',
         `Conv1d: ${name} has shape ${JSON.stringify(tensor.shape)}, ` +
-          `expected torch layout [${this.outChannels}, ${this.inChannels}, ${this.kernelSize}]`,
+          `expected torch layout [${cOut}, ${cIn}, ${kernel}]`,
       );
     }
     sd.tensors.set(
       name,
-      deriveFromTensors(
-        [this.kernelSize * this.inChannels, this.outChannels],
-        [tensor],
-        async ([torch]) =>
-          convToTapMajor(
-            await readFloats('Conv1d', torch),
-            this.outChannels,
-            this.inChannels,
-            this.kernelSize,
-          ),
+      deriveFromTensors([kernel * cIn, cOut], [tensor], async ([torch]) =>
+        convToTapMajor(await readFloats('Conv1d', torch), cOut, cIn, kernel),
       ),
     );
   }
@@ -626,6 +636,7 @@ export class Conv1d extends Module {
       padRight: this.padRight,
       bias: this.bias?.value,
       activation: this.activation,
+      groups: this.groups,
       ...(this.weightScale && this.quantization
         ? { scales: this.weightScale.value, ...this.quantization }
         : {}),

@@ -38,6 +38,7 @@ import {
   conv1dSpec,
   conv2dHwc4Spec,
   convTranspose2dSpec,
+  depthwiseConv1dSpec,
   gluConv1dSpec,
   maxPool2dHwc4Spec,
   pad2dHwc4Spec,
@@ -103,6 +104,7 @@ export const specs = {
   // conv
   conv1d: conv1dSpec,
   gluConv1d: gluConv1dSpec,
+  depthwiseConv1d: depthwiseConv1dSpec,
   convTranspose2d: convTranspose2dSpec,
   conv2dHwc4: conv2dHwc4Spec,
   maxPool2dHwc4: maxPool2dHwc4Spec,

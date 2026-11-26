@@ -82,6 +82,7 @@ export type OpName =
   // conv
   | 'conv1d'
   | 'gluConv1d'
+  | 'depthwiseConv1d'
   | 'convTranspose2d'
   | 'conv2dHwc4'
   | 'maxPool2dHwc4'

@@ -199,6 +199,30 @@ function gluConv1d(name: string, t: number, c: number, k: number, dtype: 'f32' |
   };
 }
 
+/** A causal depthwise conv over time: x [T, C], taps [K, C]. */
+function depthwiseConv1d(
+  name: string,
+  t: number,
+  c: number,
+  k: number,
+  dtype: 'f32' | 'f16',
+): AbCase {
+  return {
+    name,
+    needs: dtype === 'f16' ? ['shader-f16'] : [],
+    build: (version) => {
+      const x = randMat(version, t, c, dtype);
+      const w = randMat(version, k, c, dtype);
+      const call = () =>
+        version.lib.conv1d(x, w, { kernelSize: k, stride: 1, padLeft: k - 1, groups: c });
+      // Built once here: a base without groups refuses the weight, which
+      // skips the case.
+      call();
+      return call;
+    },
+  };
+}
+
 function convTranspose2d(name: string, cIn: number, cOut: number, hw: number): AbCase {
   const k = 2;
   return {
@@ -527,9 +551,18 @@ abSuite('conv', [
   ),
   convTransposeQuant('convT int8, Higgs upsampling 64→32 s3, 10 s', 80000, 64, 32, 3, 8, 32),
 
-  // gluConv1d: its own kernel.
+  // gluConv1d: the depthwise conv1d kernel with its GLU.
   gluConv1d('gluConv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5', 750, 1024, 5, 'f32'),
   gluConv1d('gluConv1d f16, EmbeddingGemma 2 audio 30 s', 750, 1024, 5, 'f16'),
+  // The same kernel without its GLU: nn.Conv1d with groups.
+  depthwiseConv1d(
+    'depthwise conv1d, EmbeddingGemma 2 audio 30 s, 1024 channels k5',
+    750,
+    1024,
+    5,
+    'f32',
+  ),
+  depthwiseConv1d('depthwise conv1d f16, EmbeddingGemma 2 audio 30 s', 750, 1024, 5, 'f16'),
 
   convTranspose2d('convTranspose2d (paired), YOLO26n-seg proto 64→64 @80²', 64, 64, 80),
   convTranspose2d('convTranspose2d (unpaired), cIn 3 @64²', 3, 8, 64),

@@ -183,6 +183,70 @@ describe('conv1d', () => {
   });
 });
 
+describe('conv1d, depthwise', () => {
+  // x is [T, C]; w is tap-major [kernelSize, C]
+  const C = 8;
+  const K = 3;
+  const causal = { kernelSize: K, stride: 1, padLeft: K - 1, groups: C };
+
+  it.each(['f32', 'f16'] as const)('keeps [T, C] and carries the kernel size, %s', (dtype) => {
+    const c = conv1d(input([T, C], dtype), input([K, C], dtype), causal);
+    expect(c.shape).toEqual(meta([T, C], dtype));
+    expect(c.pending).toMatchObject({ op: 'depthwiseConv1d', attrs: [K] });
+  });
+
+  it('runs a single frame', () => {
+    expect(conv1d(input([1, C]), input([K, C]), causal).shape).toEqual(meta([1, C]));
+  });
+
+  it.each([
+    {
+      name: 'groups that are not C_in',
+      opts: { groups: 4 },
+      error: /groups must be 1 or C_in = 8/,
+    },
+    {
+      name: 'a weight with every input channel',
+      w: input([K * C, C]),
+      error: /a depthwise weight must be \[kernelSize, C_in\] = \[3, 8\], not \[24, 8\]/,
+    },
+    {
+      name: 'a quantW weight',
+      w: quantWeight(K, C, 8),
+      error: /a depthwise conv takes a float weight/,
+    },
+    { name: 'stride 2', opts: { stride: 2 }, error: /runs causal only/ },
+    { name: 'a dilation', opts: { dilation: 2 }, error: /runs causal only/ },
+    { name: 'no padding', opts: { padLeft: undefined }, error: /runs causal only/ },
+    { name: 'a padLeft short of kernelSize − 1', opts: { padLeft: 1 }, error: /runs causal only/ },
+    { name: 'a padRight', opts: { padRight: 1 }, error: /runs causal only/ },
+    {
+      name: "'same' padding",
+      opts: { padLeft: undefined, padding: 'same' as const },
+      error: /runs causal only/,
+    },
+    { name: 'a bias', opts: { bias: input([C]) }, error: /runs causal only/ },
+    { name: 'an activation', opts: { activation: 'gelu' as const }, error: /runs causal only/ },
+    {
+      name: 'channels that are not a multiple of 4',
+      x: input([T, 6]),
+      w: input([K, 6]),
+      opts: { groups: 6 },
+      error: /needs C_in a multiple of 4, not 6/,
+    },
+  ])('rejects $name with an INVALID_ARGUMENT', ({ x: xIn, w, opts, error }) => {
+    expect(() => conv1d(xIn ?? input([T, C]), w ?? input([K, C]), { ...causal, ...opts })).toThrow(
+      expect.objectContaining({ code: 'INVALID_ARGUMENT', message: expect.stringMatching(error) }),
+    );
+  });
+
+  it('rejects a weight of another dtype', () => {
+    expect(() => conv1d(input([T, C]), input([K, C], 'f16'), causal)).toThrow(
+      /weight dtype f16 must match the input's f32/,
+    );
+  });
+});
+
 describe('gluConv1d', () => {
   it('halves the columns and keeps the frames', () => {
     const c = gluConv1d(input([T, 16]), input([5, 8]), { lo: -2, hi: 2 });

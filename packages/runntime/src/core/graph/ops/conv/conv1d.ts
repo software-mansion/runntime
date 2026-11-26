@@ -1,3 +1,4 @@
+import { RunntimeError } from '../../../error.ts';
 import { pending, Value } from '../../value.ts';
 import {
   MATMUL_QUANT_TILED_BK,
@@ -22,7 +23,12 @@ import { ACT_CODE, FLOAT_DTYPES, want2d, wantQuantW, type SlotAct } from '../sha
  *  [C_in·kernelSize / groupSize, C_out]. `transposedKernel` marks the weight
  *  of a ConvTranspose1d with that kernel, run as this conv: torch rows are
  *  [C_in, out·transposedKernel] with out = C_out·kernelSize /
- *  transposedKernel a multiple of 4, and the scales are stored as is. */
+ *  transposedKernel a multiple of 4, and the scales are stored as is.
+ *
+ *  `groups` is 1, or C_in for a depthwise conv, whose w is tap-major
+ *  [kernelSize, C_in]. A depthwise conv runs causal only: stride 1, no
+ *  dilation, padLeft kernelSize − 1, no bias, activation or quantW weight,
+ *  and C_in a multiple of 4. Anything else throws INVALID_ARGUMENT. */
 export function conv1d(
   x: Value,
   w: Value,
@@ -39,9 +45,11 @@ export function conv1d(
     bits?: 8 | 4;
     groupSize?: number;
     transposedKernel?: number;
+    groups?: number;
   },
 ): Value {
   const { kernelSize, stride, padding, bias, activation, scales, bits, groupSize } = opts;
+  if (opts.groups !== undefined && opts.groups !== 1) return depthwiseConv1d(x, w, opts);
   const transposedKernel = opts.transposedKernel ?? 0;
   const dilation = opts.dilation ?? 1;
   if (padding !== undefined && (opts.padLeft !== undefined || opts.padRight !== undefined)) {
@@ -140,6 +148,43 @@ export function conv1d(
       transposedKernel,
     ],
   );
+}
+
+/** conv1d's depthwise case: each channel of x [T, C] mixes its own last
+ *  kernelSize frames with w tap-major [kernelSize, C]. */
+function depthwiseConv1d(x: Value, w: Value, opts: Parameters<typeof conv1d>[2]): Value {
+  const [t, c, dtype] = want2d('conv1d', x, FLOAT_DTYPES);
+  const { kernelSize, groups } = opts;
+  const refuse = (what: string) =>
+    new RunntimeError('INVALID_ARGUMENT', `conv1d: ${what}, got groups ${groups}`);
+  if (groups !== c) throw refuse(`groups must be 1 or C_in = ${c}`);
+  if (w.shape.dtype === 'quantW' || opts.scales) {
+    throw refuse('a depthwise conv takes a float weight, not a quantW one');
+  }
+  const [wRows, wCols, wDtype] = want2d('conv1d.w', w, FLOAT_DTYPES);
+  if (wRows !== kernelSize || wCols !== c) {
+    throw refuse(
+      `a depthwise weight must be [kernelSize, C_in] = [${kernelSize}, ${c}], not [${wRows}, ${wCols}]`,
+    );
+  }
+  if (wDtype !== dtype) {
+    throw new Error(`conv1d: weight dtype ${wDtype} must match the input's ${dtype}`);
+  }
+  const causal =
+    opts.stride === 1 &&
+    (opts.dilation ?? 1) === 1 &&
+    opts.padding === undefined &&
+    opts.padLeft === kernelSize - 1 &&
+    (opts.padRight ?? 0) === 0;
+  if (!causal || opts.bias || opts.activation) {
+    throw refuse(
+      `a depthwise conv runs causal only: stride 1, no dilation, padLeft kernelSize − 1 = ${kernelSize - 1}, no padRight, bias or activation`,
+    );
+  }
+  if (c % 4 !== 0) throw refuse(`a depthwise conv needs C_in a multiple of 4, not ${c}`);
+  return pending({ elems: t * c, dtype, dims: [t, c] }, 'depthwiseConv1d', [x, w], undefined, [
+    kernelSize,
+  ]);
 }
 
 /** Throws unless `scales` hold one scale per groupSize values of each torch

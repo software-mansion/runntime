@@ -8,7 +8,10 @@ import {
   convTransposeScales,
   createConv1dPipeline,
 } from '../../kernels/conv/conv1d.ts';
-import { createGluConv1dPipeline, gluConv1dHandle } from '../../kernels/conv/gluConv1d.ts';
+import {
+  createDepthwiseConv1dPipeline,
+  depthwiseConv1dHandle,
+} from '../../kernels/conv/depthwiseConv1d.ts';
 import {
   createMatmulQuantTiledPipeline,
   matmulQuantTiledHandle,
@@ -223,15 +226,39 @@ export const gluConv1dSpec = defineSpec({
     return { kernel, lo, hi };
   },
   cfg: () => undefined,
-  pipeline: (root, dtype) => createGluConv1dPipeline(root, elemFor(dtype)),
+  pipeline: (root, dtype) => createDepthwiseConv1dPipeline(root, elemFor(dtype), true),
   encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
     const dtype = node.shape.dtype;
-    const [rows, cols] = node.shape.dims as [number, number];
+    const [rows, channels] = node.shape.dims as [number, number];
+    const { kernel, lo, hi } = attrs;
     return [
-      gluConv1dHandle(
+      depthwiseConv1dHandle(
         ctx.root,
         pipeline,
-        { rows, cols, ...attrs },
+        { rows, channels, kernel, glu: { lo, hi } },
+        {
+          x: narrowFloat(inputs[0]!, dtype),
+          w: narrowFloat(inputs[1]!, dtype),
+          out: narrowFloat(out, dtype),
+        },
+        elemFor(dtype),
+      ),
+    ];
+  },
+});
+
+export const depthwiseConv1dSpec = defineSpec({
+  attrs: (p) => ({ kernel: p.attrs![0]! }),
+  cfg: () => undefined,
+  pipeline: (root, dtype) => createDepthwiseConv1dPipeline(root, elemFor(dtype), false),
+  encode: ({ node, attrs, pipeline, inputs, out, ctx }) => {
+    const dtype = node.shape.dtype;
+    const [rows, channels] = node.shape.dims as [number, number];
+    return [
+      depthwiseConv1dHandle(
+        ctx.root,
+        pipeline,
+        { rows, channels, kernel: attrs.kernel },
         {
           x: narrowFloat(inputs[0]!, dtype),
           w: narrowFloat(inputs[1]!, dtype),
