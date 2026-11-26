@@ -3,7 +3,6 @@ CC BY 2.0 from the COCO site, saved once as PNG so the reference and the
 browser read the same pixels."""
 
 import functools
-import hashlib
 import io
 import json
 import urllib.request
@@ -12,7 +11,7 @@ import zipfile
 import numpy as np
 from PIL import Image
 
-from .common import references_dir
+from .common import checked, references_dir
 
 # COCO 2017 (Lin et al., 2014). The site serves plain HTTP only, so every
 # file is checked against its sha256.
@@ -97,17 +96,10 @@ class _HttpFile(io.RawIOBase):
         return len(data)
 
 
-def _checked(what: str, data: bytes, sha256: str) -> bytes:
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != sha256:
-        raise RuntimeError(f"{what} has sha256 {digest}, expected {sha256}")
-    return data
-
-
 @functools.cache
 def _annotations() -> dict[str, list[dict[str, object]]]:
     with zipfile.ZipFile(io.BufferedReader(_HttpFile(ANNOTATIONS_ZIP), buffer_size=1 << 20)) as archive:
-        return json.loads(_checked(ANNOTATIONS, archive.read(ANNOTATIONS), ANNOTATIONS_SHA256))
+        return json.loads(checked(ANNOTATIONS, archive.read(ANNOTATIONS), ANNOTATIONS_SHA256))
 
 
 def coco_images(count: int = len(IMAGES)) -> tuple[list[str], list[Image.Image], list[dict[str, object]]]:
@@ -123,7 +115,7 @@ def coco_images(count: int = len(IMAGES)) -> tuple[list[str], list[Image.Image],
     for entry in chosen:
         url = f"{SITE}/val2017/{entry['file_name']}"
         with urllib.request.urlopen(url) as response:
-            jpeg = _checked(url, response.read(), IMAGES[entry["id"]])
+            jpeg = checked(url, response.read(), IMAGES[entry["id"]])
         # From the bare pixels, so the PNG carries no color profile.
         image = Image.fromarray(np.asarray(Image.open(io.BytesIO(jpeg)).convert("RGB")))
         name = f"{entry['id']}.png"

@@ -1,6 +1,7 @@
 /** Every entry in `models` has a parity manifest, with inputs and
  *  thresholds. Runs without a GPU, so CI holds a new model to it. */
 import { describe, expect, it } from 'vitest';
+import { DEPTHART_B_PARITY, DEPTHART_S_PARITY } from '../zoo/depthart/parity.manifest.ts';
 import { EMBEDDINGGEMMA2_PARITY } from '../zoo/embeddinggemma2/parity.manifest.ts';
 import { MINILM_PARITY } from '../zoo/minilm/parity.manifest.ts';
 import { MOBILENETV4_PARITY } from '../zoo/mobilenetv4/parity.manifest.ts';
@@ -15,6 +16,8 @@ import {
 import { covers, modelEntries, type ParityManifest } from './manifest.ts';
 
 const MANIFESTS: readonly ParityManifest[] = [
+  DEPTHART_S_PARITY,
+  DEPTHART_B_PARITY,
   EMBEDDINGGEMMA2_PARITY,
   MINILM_PARITY,
   MOBILENETV4_PARITY,
@@ -35,7 +38,6 @@ const PENDING = [
   'objectDetection.YOLO26',
   'instanceSegmentation.YOLO26_SEG',
   'keypointDetection.YOLO26_POSE',
-  'depthEstimation.DEPTHART',
 ];
 
 const variants = MANIFESTS.flatMap((manifest) => manifest.variants);
