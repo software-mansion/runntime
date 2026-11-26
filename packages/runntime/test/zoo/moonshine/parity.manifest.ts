@@ -5,12 +5,13 @@ import { models } from '../../../src/zoo/models.ts';
 import { COSINE_WITHIN_NOISE, WITHIN_NOISE, type ParityManifest } from '../../parity/manifest.ts';
 
 const DEFAULTS = 'methodology default';
+const SIZES = { TINY: 'tiny', BASE: 'base' } as const;
 
-const manifest = <S extends 'TINY' | 'BASE'>(size: S, revision: string) =>
+const manifest = <S extends keyof typeof SIZES>(size: S, revision: string) =>
   ({
-    family: `moonshine-${size.toLowerCase() as Lowercase<S>}`,
+    family: `moonshine-${SIZES[size]}`,
     reference: {
-      repo: `UsefulSensors/moonshine-${size.toLowerCase() as Lowercase<S>}`,
+      repo: `UsefulSensors/moonshine-${SIZES[size]}`,
       revision,
       dtype: 'f32',
     },
