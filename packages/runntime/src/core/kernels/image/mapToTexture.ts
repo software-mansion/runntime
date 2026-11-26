@@ -4,6 +4,7 @@
 import tgpu, { common, d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { WORKGROUP_SIZE, type F32Buffer } from '../common.ts';
+import { compilePipelines } from '../../gpu/asyncCompile.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** `minmax` 1 maps the map's own [min, max] to [0, 1]. */
@@ -98,7 +99,20 @@ export function createMapToTexture(root: TgpuRoot) {
       targets: { format },
     });
   const drawPipelines = new Map<GPUTextureFormat, ReturnType<typeof drawPipelineFor>>();
+  const drawPipeline = (format: GPUTextureFormat) => {
+    let pipeline = drawPipelines.get(format);
+    if (!pipeline) {
+      pipeline = drawPipelineFor(format);
+      drawPipelines.set(format, pipeline);
+    }
+    return pipeline;
+  };
   return {
+    /** Compiles the range pipeline and the draw pipeline for `format`
+     *  without blocking, for the load-time warm-up. A target of another
+     *  format compiles its draw pipeline on its first encode(). */
+    compile: (format: GPUTextureFormat): Promise<void> =>
+      compilePipelines([rangePipeline, drawPipeline(format)]),
     /** Draws `map`, `[height, width]` f32, over all of `target` mip 0. */
     encode(
       encoder: GPUCommandEncoder,
@@ -115,11 +129,6 @@ export function createMapToTexture(root: TgpuRoot) {
         rangePipeline.with(pass).with(bindGroup).dispatchWorkgroups(1);
         pass.end();
       }
-      let pipeline = drawPipelines.get(target.format);
-      if (!pipeline) {
-        pipeline = drawPipelineFor(target.format);
-        drawPipelines.set(target.format, pipeline);
-      }
       const view = target.createView({
         dimension: '2d',
         baseMipLevel: 0,
@@ -127,7 +136,7 @@ export function createMapToTexture(root: TgpuRoot) {
         baseArrayLayer: 0,
         arrayLayerCount: 1,
       });
-      pipeline
+      drawPipeline(target.format)
         .with(encoder)
         .with(cachedBindGroup(root, drawLayout, { map, range, params }))
         .withColorAttachment({ view, loadOp: 'clear', storeOp: 'store' })

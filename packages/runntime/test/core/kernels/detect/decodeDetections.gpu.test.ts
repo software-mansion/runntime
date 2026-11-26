@@ -1,5 +1,5 @@
 import { d } from 'typegpu';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { F32Buffer, U32Buffer } from '../../../../src/core/kernels/common.ts';
 import {
   createDecodeDetections,
@@ -28,6 +28,8 @@ interface Case {
   maskSize?: number;
   /** Rounds the logits to this many steps per unit, so cells tie. */
   quantize?: number;
+  /** Calls compile() first: encode() must then compile nothing. */
+  compiled?: boolean;
 }
 
 interface Det {
@@ -262,6 +264,12 @@ const CASES: Case[] = [
   },
 ];
 
+// compile() takes the task's pipelines: the mask one only for segment.
+for (const task of ['detect', 'pose', 'segment']) {
+  const first = CASES.find((c) => c.task === task)!;
+  CASES.push({ ...first, name: `${task}, after compile()`, compiled: true });
+}
+
 describe('decodeDetections', () => {
   it.each(CASES)('$name', async (c) => {
     const { task, inputSize: size, numClasses, numExtra, maskSize = 0 } = c;
@@ -300,6 +308,9 @@ describe('decodeDetections', () => {
       staging.destroy();
     });
 
+    if (c.compiled) await decode.compile();
+    const blocking = vi.spyOn(root.device, 'createComputePipeline');
+    onTestFinished(() => blocking.mockRestore());
     const encoder = root.device.createCommandEncoder();
     decode.encode(
       encoder,
@@ -309,6 +320,7 @@ describe('decodeDetections', () => {
       out,
       { ...c, cropFraction: c.cropFraction ?? 1, maskSize },
     );
+    expect(blocking.mock.calls.length > 0).toBe(c.compiled !== true);
     encoder.copyBufferToBuffer(out, 0, staging, 0, bytes);
     root.device.queue.submit([encoder.finish()]);
     await staging.mapAsync(GPUMapMode.READ);

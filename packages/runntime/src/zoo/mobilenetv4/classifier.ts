@@ -11,6 +11,7 @@ import {
   tensor3d,
   uploadF32,
   warmUp,
+  withAsyncCompile,
   writeF32,
   type F32Buffer,
   type LazyStateDict,
@@ -73,11 +74,16 @@ export async function createClassifier(
   try {
     await model.loadStateDict(sd, { onProgress: opts.onProgress });
     const input = materialized(tensor3d(3, size, size), buffer);
-    const cap = ex.captureFrame(() => {
-      const logits = model.forward(input);
-      evalValues([logits], ex);
-      return logits;
-    });
+    const record = () =>
+      ex.captureFrame(() => {
+        const logits = model.forward(input);
+        evalValues([logits], ex);
+        return logits;
+      });
+    // The recording submit is the pipelines' first use, so it is warm-up work.
+    const cap = opts.warmUp !== false ? withAsyncCompile(root.device, record) : record();
+    // encode() is safe from the first call: the recorded pipelines are compiled.
+    await cap.ready;
     let queue: Promise<unknown> = Promise.resolve();
     const run = (pixels: Float32Array) => {
       if (disposed)
