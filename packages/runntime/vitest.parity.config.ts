@@ -26,7 +26,8 @@ export default defineConfig({
     // One file at a time: each loads whole models onto the one GPU.
     fileParallelism: false,
     testTimeout: 300_000,
-    hookTimeout: 300_000,
+    // A hook downloads a whole model, gigabytes for the largest.
+    hookTimeout: 1_800_000,
     browser: {
       enabled: true,
       headless: true,

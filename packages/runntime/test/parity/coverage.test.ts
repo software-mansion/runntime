@@ -1,17 +1,21 @@
 /** Every entry in `models` has a parity manifest, with inputs and
  *  thresholds. Runs without a GPU, so CI holds a new model to it. */
 import { describe, expect, it } from 'vitest';
+import { EMBEDDINGGEMMA2_PARITY } from '../zoo/embeddinggemma2/parity.manifest.ts';
 import { MINILM_PARITY } from '../zoo/minilm/parity.manifest.ts';
 import { MOBILENETV4_PARITY } from '../zoo/mobilenetv4/parity.manifest.ts';
 import { covers, modelEntries, type ParityManifest } from './manifest.ts';
 
-const MANIFESTS: readonly ParityManifest[] = [MINILM_PARITY, MOBILENETV4_PARITY];
+const MANIFESTS: readonly ParityManifest[] = [
+  EMBEDDINGGEMMA2_PARITY,
+  MINILM_PARITY,
+  MOBILENETV4_PARITY,
+];
 
 /** Families in `models` without a manifest, by the start of their entries'
  *  paths. A family leaves the list with its manifest. A new model is never
  *  added here: it lands with a manifest. */
 const PENDING = [
-  'embedding.EMBEDDINGGEMMA_2',
   'privacyFilter.PRIVACY_FILTER',
   'speechToText.MOONSHINE',
   'speechToText.MOONSHINE_STREAMING',
