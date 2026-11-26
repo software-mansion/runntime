@@ -153,6 +153,91 @@ describe('splitCols', () => {
   });
 });
 
+describe('scaleWeight', () => {
+  // 3 · 0.1 = 0.3, which f16 would round to 0.300048828125. The product is
+  // f32 for every source, so an f32 model loads what it did before the helper.
+  it.for([
+    { dtype: 'F32', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
+    { dtype: 'F16', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
+    { dtype: 'BF16', scale: 0.5, values: [1, 2, 3, 4], want: [0.5, 1, 1.5, 2] },
+    { dtype: 'F32', scale: [2, -1], values: [1, 2, 3, 4], want: [2, 4, -3, -4] },
+    { dtype: 'F16', scale: [2, -1], values: [1, 2, 3, 4], want: [2, 4, -3, -4] },
+    { dtype: 'F32', scale: 0.1, values: [3, 0, 0, 0], want: [Math.fround(0.3), 0, 0, 0] },
+    { dtype: 'F16', scale: 0.1, values: [3, 0, 0, 0], want: [Math.fround(0.3), 0, 0, 0] },
+  ] satisfies { dtype: Dtype; scale: number | number[]; values: number[]; want: number[] }[])(
+    'scales $dtype by $scale',
+    async ({ dtype, scale, values, want }) => {
+      const t = await source(dtype, values, [2, 2]);
+      const out = scaleWeight(t, scale);
+      expect(out.shape).toEqual([2, 2]);
+      expect(out.byteLength).toBe(t.byteLength);
+      expect(await contents(out)).toEqual({ type: 'f32', values: want });
+    },
+  );
+
+  it('throws CHECKPOINT_MISMATCH for one row scale too many', async () => {
+    const t = await source('F32', [1, 2, 3, 4], [2, 2]);
+    expect(() => scaleWeight(t, [1, 2, 3])).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(/3 row scales/),
+      }),
+    );
+  });
+});
+
+describe('transposeWeight', () => {
+  // [[1, 2, 3], [4, 5, 6]] → [[1, 4], [2, 5], [3, 6]]
+  it.for(DTYPES)('transposes a 2D $dtype tensor', async ({ dtype, type }) => {
+    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [2, 3]);
+    const out = transposeWeight(t);
+    expect(out.shape).toEqual([3, 2]);
+    expect(out.byteLength).toBe(t.byteLength);
+    expect(await contents(out)).toEqual({ type, values: [1, 4, 2, 5, 3, 6] });
+  });
+
+  it('throws CHECKPOINT_MISMATCH for a 3D tensor', async () => {
+    const t = await source('F32', new Array(8).fill(0), [2, 2, 2]);
+    expect(() => transposeWeight(t)).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: expect.stringMatching(/needs a 2D tensor/),
+      }),
+    );
+  });
+});
+
+describe('reshapeWeight', () => {
+  // [2, 1, 3] → [2, 3]: an expert tensor with its expert axis folded into rows.
+  it.for(DTYPES)('reshapes $dtype, keeping the source dtype', async ({ dtype }) => {
+    const t = await source(dtype, [1, 2, 3, 4, 5, 6], [2, 1, 3]);
+    const out = reshapeWeight(t, [2, 3]);
+    expect(out.shape).toEqual([2, 3]);
+    expect(out.byteLength).toBe(t.byteLength);
+    if (t.kind === 'quant' || out.kind === 'quant') throw new Error('expected float tensors');
+    expect([out.kind, out.dtype]).toEqual([t.kind, t.dtype]);
+    expect([...(await out.f32())]).toEqual([1, 2, 3, 4, 5, 6]);
+    if (dtype !== 'F32') expect(await out.u16()).toEqual(await t.u16());
+  });
+
+  it('keeps the f16 halfwords of a derived source', async () => {
+    const [left] = splitCols(await source('F16', [1, 2, 3, 4, 5, 6, 7, 8], [2, 1, 4]), [2, 2]);
+    const out = reshapeWeight(left!, [2, 2]);
+    expect(out.shape).toEqual([2, 2]);
+    expect(await contents(out)).toEqual({ type: 'f16', values: [1, 2, 5, 6] });
+  });
+
+  it('throws CHECKPOINT_MISMATCH when the element counts differ', async () => {
+    const t = await source('F32', [1, 2, 3, 4, 5, 6], [2, 3]);
+    expect(() => reshapeWeight(t, [4, 2])).toThrow(
+      expect.objectContaining({
+        code: 'CHECKPOINT_MISMATCH',
+        message: 'reshapeWeight: cannot reshape [2, 3] to [4, 2]',
+      }),
+    );
+  });
+});
+
 describe('weight helpers', () => {
   it('fetch nothing until an output is read, and split sources read once', async () => {
     const compute = vi.fn(async () => new Float32Array([1, 2, 3, 4]));
