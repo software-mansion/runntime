@@ -124,12 +124,10 @@ describe('rope kernel', () => {
     await checkRope({ rows, cols, headDim: 64 });
   });
 
-  // Known bug: the kernel splits the flat pair index into row and pair with
-  // d.u32(idx / pairs), which TypeGPU compiles to u32(f32(idx) / f32(pairs)).
-  // f32 counts exactly only up to 2^24, so past 2^24 pairs rows come out
-  // wrong. f16 is the dtype whose 2^25 elements still fit one binding. Turn
-  // into a plain `it` with the fix.
-  it.fails('f16 past 2^24 pairs', async (ctx) => {
+  // f32 counts exactly only up to 2^24, so the flat pair index past it must be
+  // split with integer division or rows come out wrong. f16 is the dtype
+  // whose 2^25 elements still fit one binding.
+  it('f16 past 2^24 pairs', async (ctx) => {
     requireFeature(ctx, root, 'shader-f16');
     const rows = 2 ** 14 + 1;
     const cols = 2048;

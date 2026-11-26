@@ -4,14 +4,13 @@
  *  tensors around them. Names are all-MiniLM-L6-v2's, shortened; the floats
  *  are F16 as `--f16` stores them. */
 const rows = [
-  { name: '…word_embeddings.weight', dtype: 'F16', shape: '[30522, 384]', loads: 'float' },
   { name: '…query.weight', dtype: 'I8', shape: '[384, 384]', loads: 'int8 weight', quant: true },
   { name: '…query.weight_scale', dtype: 'F16', shape: '[384, 12]', loads: 'its scales', quant: true },
   { name: '…query.bias', dtype: 'F16', shape: '[384]', loads: 'float' },
   { name: '…LayerNorm.weight', dtype: 'F16', shape: '[384]', loads: 'float' },
 ];
 const rowHeight = 30;
-const top = 84;
+const top = 66;
 const height = top + rows.length * rowHeight + 14;
 ---
 
@@ -23,9 +22,8 @@ const height = top + rows.length * rowHeight + 14;
 >
   <rect class="file" x="0.5" y="0.5" width="399" height={height - 1} rx="6"></rect>
   <text class="header" x="12" y="22">__metadata__ runntime.quant =</text>
-  <text class="header strong" x="12" y="42">{'{'}"version":1,"bits":8,</text>
-  <text class="header strong" x="12" y="60">"groupSize":32,"scheme":"symmetric"{'}'}</text>
-  <line class="rule" x1="0" y1="72" x2="400" y2="72"></line>
+  <text class="header strong" x="12" y="42">{'{'}"version":1,"scheme":"symmetric"{'}'}</text>
+  <line class="rule" x1="0" y1="54" x2="400" y2="54"></line>
   {
     rows.map((row, i) => {
       const y = top + i * rowHeight + 12;

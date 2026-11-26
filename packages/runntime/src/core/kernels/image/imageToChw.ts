@@ -4,6 +4,7 @@
 import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import { flatIndex, WORKGROUP_SIZE, type F32Buffer, type U32Buffer } from '../common.ts';
+import { compilePipelines } from '../../gpu/asyncCompile.ts';
 import { cachedBindGroup, cachedUniform } from '../../gpu/dispatchCache.ts';
 
 /** How the image is fitted into the input, as the CPU preprocessor's
@@ -103,7 +104,7 @@ const makeImageToChwKernel = (source: typeof textureSource) =>
       offset = ((side - img) / 2) * scale;
     }
 
-    const o = d.vec2f(d.f32(idx % P.outW), d.f32(d.u32(idx / P.outW)));
+    const o = d.vec2f(d.f32(idx % P.outW), d.f32(std.intdiv(idx, P.outW)));
     // Image coordinate of this input pixel's center, in image pixels.
     const s = (o + 0.5 - offset) / scale;
     let v = d.vec3f(P.padR, P.padG, P.padB);
@@ -151,6 +152,8 @@ export function createImageToChw(root: TgpuRoot) {
   // back onto the image reads it from here.
   const size: U32Buffer = root.createBuffer(d.arrayOf(d.u32, 2)).$usage('storage');
   return {
+    /** Compiles both pipelines without blocking, for the load-time warm-up. */
+    compile: (): Promise<void> => compilePipelines([pipelines.texture, pipelines.external]),
     /** `[width, height]` of the image the last encode() read, written by
      *  the pass that encode() records. */
     size,

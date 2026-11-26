@@ -13,9 +13,7 @@
 import {
   concatRows,
   derive,
-  floatTensor,
   permuteRows,
-  scaleWeight,
   type LazyStateDict,
   type LazyTensor,
 } from '../../core/index.ts';
@@ -36,7 +34,7 @@ function centeredHead(t: LazyTensor, from: number, books: number, cfg: ReverbCon
   const rows = headRows(books, codes);
   return derive(
     [rows, hidden],
-    [floatTensor(WHAT, t)],
+    [t],
     ([src]) => {
       const out = new Float32Array(rows * hidden);
       const mean = new Float64Array(hidden);
@@ -101,10 +99,10 @@ export function transformReverbStateDict(
     );
     const qn = take(`${attn}.q_norm.weight`);
     const kn = take(`${attn}.k_norm.weight`);
-    const qScaled = scaleWeight(rope(qn), d ** -0.5);
+    const q = rope(qn);
     const k = rope(kn);
     const norms = concatRows([
-      ...Array<LazyTensor>(heads).fill(qScaled),
+      ...Array<LazyTensor>(heads).fill(q),
       ...Array<LazyTensor>(kvHeads).fill(k),
     ]);
     // concatRows reads a part listed several times once.

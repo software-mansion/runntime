@@ -4,24 +4,14 @@
  *  checkpoint. The pooler and `position_ids`, which the model never reads,
  *  are dropped.
  *
- *  The constant token-type row folds into the position table, and q/k/v fuse
- *  into one weight with the score scale split across the q and k parts, so
- *  the scale-free kernel still computes q·kᵀ/√headDim.
+ *  The constant token-type row folds into the position table.
  *
- *  Weights stay in torch layout for the core Linear hook to transpose. The
- *  fused q/k/v and the position sum are f32 even from an F16 checkpoint, so
- *  an f32 model loads exact values and an f16 model rounds once in the
- *  loader. Derived byteLengths carry the source file bytes, so load progress
- *  counts every byte the model reads. */
+ *  The position sum is f32 even from an F16 checkpoint, so an f32 model
+ *  loads exact values and an f16 model rounds once in the loader. Derived
+ *  byteLengths carry the source file bytes, so load progress counts every
+ *  byte the model reads. */
 
-import {
-  concatRows,
-  derive,
-  floatTensor,
-  scaleWeight,
-  type LazyStateDict,
-  type LazyTensor,
-} from '../../core/index.ts';
+import { derive, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
 import { checkpointMismatch } from '../errors.ts';
 import type { MinilmConfig } from './config.ts';
 
@@ -42,8 +32,6 @@ export function transformMinilmStateDict(
   cfg: MinilmConfig,
 ): void {
   const q = (name: string) => qualify(prefix, name);
-  // qkScale on q and k each — their product is the 1/√headDim score scale.
-  const qkScale = cfg.headDim ** -0.25;
 
   for (const unread of ['pooler.dense.weight', 'pooler.dense.bias', 'embeddings.position_ids']) {
     sd.tensors.delete(q(unread));
@@ -55,31 +43,10 @@ export function transformMinilmStateDict(
   const tokenType = take(sd, q('embeddings.token_type_embeddings.weight'));
   sd.tensors.set(
     positions,
-    derive(
-      position.shape,
-      [floatTensor(WHAT, position), floatTensor(WHAT, tokenType)],
-      ([pos, type]) => {
-        const out = new Float32Array(pos.length);
-        for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
-        return out;
-      },
-    ),
+    derive(position.shape, [position, tokenType], ([pos, type]) => {
+      const out = new Float32Array(pos.length);
+      for (let i = 0; i < pos.length; i++) out[i] = pos[i]! + type[i % cfg.hidden]!;
+      return out;
+    }),
   );
-
-  for (let i = 0; i < cfg.layers; i++) {
-    const self = q(`encoder.layer.${i}.attention.self`);
-    // query|key|value → one torch-layout [3·hidden, hidden] weight and
-    // [3·hidden] bias: the three parts stacked row-wise, q/k pre-scaled.
-    for (const suffix of ['weight', 'bias']) {
-      const part = (p: string) => take(sd, `${self}.${p}.${suffix}`);
-      sd.tensors.set(
-        `${self}.qkv.${suffix}`,
-        concatRows([
-          scaleWeight(part('query'), qkScale),
-          scaleWeight(part('key'), qkScale),
-          part('value'),
-        ]),
-      );
-    }
-  }
 }

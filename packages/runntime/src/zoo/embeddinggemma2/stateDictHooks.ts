@@ -12,8 +12,8 @@
 import {
   concatRows,
   derive,
-  floatTensor,
   f32ArrayToF16Bits,
+  inTorchShape,
   permuteRows,
   reshapeWeight,
   scaleWeight,
@@ -45,16 +45,13 @@ function take(sd: LazyStateDict, what: string, name: string): LazyTensor {
 const ones = (n: number) =>
   derive([n], [], () => f32ArrayToF16Bits(new Float32Array(n).fill(1)).data);
 
-/** q, k and v in one weight. q and k rows go from the checkpoint's
- *  half-split rope layout to the kernel's interleaved pairs, per `block`
- *  rows. */
-function fusedQkv(wq: LazyTensor, wk: LazyTensor, wv: LazyTensor, block: number): LazyTensor {
-  const rope = (w: LazyTensor) => permuteRows(w, ropeOrder(w.shape[0]!, block));
-  return concatRows([rope(wq), rope(wk), wv]);
-}
+/** A q or k projection with its rows moved from the checkpoint's half-split
+ *  rope layout to the kernel's interleaved pairs, per `block` rows. */
+const interleaved = (w: LazyTensor, block: number): LazyTensor =>
+  permuteRows(w, ropeOrder(w.shape[0]!, block));
 
-/** q_norm and k_norm tiled over their heads and interleaved like
- *  fusedQkv, ones for v. */
+/** q_norm and k_norm tiled over their heads and interleaved like the q and
+ *  k projections, ones for v. */
 function fusedQkvNorm(
   nq: LazyTensor,
   nk: LazyTensor,
@@ -90,7 +87,9 @@ export function transformEmbeddingGemma2StateDict(
     const L = `layers.${i}`;
     const { headDim: d, kvHeads } = cfg.attention[type];
     const attn = (n: string) => take(sd, what, q(`${L}.self_attn.${n}.weight`));
-    put(`${L}.self_attn.qkv.weight`, fusedQkv(attn('q_proj'), attn('k_proj'), attn('v_proj'), d));
+    for (const n of ['q_proj', 'k_proj']) {
+      put(`${L}.self_attn.${n}.weight`, interleaved(attn(n), d));
+    }
     put(
       `${L}.self_attn.qkv_norm`,
       fusedQkvNorm(attn('q_norm'), attn('k_norm'), cfg.heads, kvHeads, d),
@@ -99,7 +98,7 @@ export function transformEmbeddingGemma2StateDict(
     // Derived, so the CPU parameter binds f32 rather than raw bf16 bits.
     put(
       `${L}.layer_scalar`,
-      derive([1], [floatTensor(what, s)], ([value]) => value),
+      derive([1], [s], ([value]) => value),
     );
   }
   const ple = 'ple.per_layer_model_projection.weight';
@@ -120,22 +119,25 @@ export function transformEmbeddingGemma2VisionStateDict(
   const { hidden, heads, headDim: d, positions } = cfg;
 
   // [2, positions, hidden]: the x table, then the y table.
-  const [x, y] = splitRows(take(sd, what, q('patch_embedder.position_embedding_table')), [1, 1]);
+  const table = take(sd, what, q('patch_embedder.position_embedding_table'));
+  const [x, y] = splitRows(inTorchShape(table, [2, positions, hidden]), [1, 1]);
   put('patch_embedder.pos_x.weight', reshapeWeight(x!, [positions, hidden]));
   put('patch_embedder.pos_y.weight', reshapeWeight(y!, [positions, hidden]));
 
   for (let i = 0; i < cfg.layers; i++) {
     const A = `encoder.layers.${i}.self_attn`;
     const attn = (n: string) => take(sd, what, q(`${A}.${n}.weight`));
-    const proj = (n: string) => take(sd, what, q(`${A}.${n}.linear.weight`));
-    put(`${A}.qkv.weight`, fusedQkv(proj('q_proj'), proj('k_proj'), proj('v_proj'), d / 2));
+    for (const n of ['q_proj', 'k_proj']) {
+      const name = `${A}.${n}.linear.weight`;
+      put(name, interleaved(take(sd, what, q(name)), d / 2));
+    }
     put(`${A}.qkv_norm`, fusedQkvNorm(attn('q_norm'), attn('k_norm'), heads, heads, d / 2));
   }
 }
 
 /** The audio tower's mapping. The two conv weights take the taps-major
- *  layout the convs read as matmuls. q, k and v fuse into one weight and
- *  share their bounds. Each layer's distance bias rows and q column scales
+ *  layout the convs read as matmuls. q, k and v run as one matmul, so they
+ *  must share their bounds. Each layer's distance bias rows and q column scales
  *  are computed here, and the feed-forward residual weight folds into its
  *  post norm. */
 export function transformEmbeddingGemma2AudioStateDict(
@@ -156,7 +158,7 @@ export function transformEmbeddingGemma2AudioStateDict(
       const t = take(sd, what, q(`${linear}.${b}`));
       put(
         `${linear}.${b}`,
-        derive([1], [floatTensor(what, t)], ([value]) => value),
+        derive([1], [t], ([value]) => value),
       );
     }
   };
@@ -172,7 +174,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     return (o * c0 + c) * 9 + k;
   });
   const conv1 = `${sub}layer1.conv.weight`;
-  const taps = reshapeWeight(take(sd, what, q(conv1)), [c1 * c0 * 9]);
+  const taps = reshapeWeight(inTorchShape(take(sd, what, q(conv1)), [c1, c0, 3, 3]), [c1 * c0 * 9]);
   put(conv1, reshapeWeight(permuteRows(taps, tapsMajor), [c1, 9 * c0]));
 
   // Sinusoidal rows for distances 0 … window − 1: sines, then cosines.
@@ -198,24 +200,27 @@ export function transformEmbeddingGemma2AudioStateDict(
     }
 
     const A = `${L}.self_attn`;
+    // The fused projection clamps with q's bounds, so all three must agree.
     const parts = ['q_proj', 'k_proj', 'v_proj'];
-    put(
-      `${A}.qkv.linear.weight`,
-      concatRows(parts.map((n) => take(sd, what, q(`${A}.${n}.linear.weight`)))),
-    );
-    // One set of bounds for the fused projection, checked to agree.
     for (const b of BOUNDS) {
-      const bounds = parts.map((n) => floatTensor(what, take(sd, what, q(`${A}.${n}.${b}`))));
-      put(
-        `${A}.qkv.${b}`,
-        derive([1], bounds, (each) => {
-          const values = each.map((bound) => bound[0]!);
-          if (values.some((v) => v !== values[0])) {
-            throw checkpointMismatch(what, `${q(A)}: q, k and v have different ${b}`);
-          }
-          return Float32Array.of(values[0]!);
-        }),
-      );
+      const bounds = parts.map((n) => take(sd, what, q(`${A}.${n}.${b}`)));
+      for (const [j, n] of parts.entries()) {
+        put(
+          `${A}.${n}.${b}`,
+          derive(
+            [1],
+            bounds,
+            (each) => {
+              const values = each.map((bound) => bound[0]!);
+              if (values.some((v) => v !== values[0])) {
+                throw checkpointMismatch(what, `${q(A)}: q, k and v have different ${b}`);
+              }
+              return Float32Array.of(values[0]!);
+            },
+            bounds[j]!.byteLength,
+          ),
+        );
+      }
     }
     f32Bounds(`${A}.post`);
     // rel and q_scale stay f32 on purpose: the attention kernel reads them as
@@ -223,7 +228,7 @@ export function transformEmbeddingGemma2AudioStateDict(
     const rk = take(sd, what, q(`${A}.relative_k_proj.weight`));
     put(
       `${A}.rel`,
-      derive([window, hidden], [floatTensor(what, rk)], ([w]) => {
+      derive([window, hidden], [rk], ([w]) => {
         const out = new Float32Array(window * hidden);
         for (let j = 0; j < window; j++) {
           for (let o = 0; o < hidden; o++) {
@@ -238,14 +243,15 @@ export function transformEmbeddingGemma2AudioStateDict(
     const dimScale = take(sd, what, q(`${A}.per_dim_scale`));
     put(
       `${A}.q_scale`,
-      derive([headDim], [floatTensor(what, dimScale)], ([scale]) =>
+      derive([headDim], [dimScale], ([scale]) =>
         scale.map((x) => qScale * Math.log1p(Math.exp(x))),
       ),
     );
 
     // [hidden, 1, K] → [K, hidden].
     const conv = `${L}.lconv1d.depthwise_conv1d.weight`;
-    put(conv, transposeWeight(reshapeWeight(take(sd, what, q(conv)), [hidden, K])));
+    const depthwise = inTorchShape(take(sd, what, q(conv)), [hidden, 1, K]);
+    put(conv, transposeWeight(reshapeWeight(depthwise, [hidden, K])));
     f32Bounds(`${L}.lconv1d.linear_start`);
     f32Bounds(`${L}.lconv1d.linear_end`);
   }

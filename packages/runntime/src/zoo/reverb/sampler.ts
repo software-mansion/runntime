@@ -2,8 +2,8 @@
  *
  *  Main passes fill codebooks 0–1. Each commits the best scored masked slots
  *  (confidence − codebook penalty + Gumbel noise), most in the last pass.
- *  Every pass but the last then re-masks a quarter as many of the least
- *  confident earlier commits.
+ *  Every pass but the last then re-masks a quarter as many earlier commits
+ *  as it makes: those whose code the pass finds least likely.
  *
  *  Two polish passes fill the rest: codebooks 2–3 from the first, 4–7 from
  *  the second guided against the first. */
@@ -30,6 +30,9 @@ export const POLISH_BIAS = 1;
 export interface SlotStats {
   best: Int32Array;
   confidence: Float32Array;
+  /** The log-probability of the code each slot holds, [books, frames]; for
+   *  a masked slot, the mask's. A main pass reads it to re-mask. */
+  heldConfidence?: Float32Array;
 }
 
 /** Rounds halves to even. */
@@ -90,6 +93,8 @@ export function mainPassUpdate(
   steps: number,
   random: () => number,
 ): void {
+  const { heldConfidence } = coarse;
+  if (!heldConfidence) throw new Error('mainPassUpdate: coarse stats need heldConfidence');
   const slots = COARSE_CODEBOOKS * frames;
   const last = step === steps - 1;
   let masked = 0;
@@ -109,8 +114,8 @@ export function mainPassUpdate(
   let revealedCount = 0;
   for (let i = 0; i < slots; i++) revealedCount += revealed[i]!;
   const count = Math.min(roundHalfEven(REMASK_RATIO * k), revealedCount);
-  const negConfidence = Float32Array.from(coarse.confidence, (c) => -c);
-  for (const i of topIndices(negConfidence, count, (i) => revealed[i] === 1)) tokens[i] = MASK;
+  const doubt = Float32Array.from(heldConfidence, (c) => -c);
+  for (const i of topIndices(doubt, count, (i) => revealed[i] === 1)) tokens[i] = MASK;
 }
 
 /** Copies fine codebooks [from, to) of `best` [books, frames] into tokens. */

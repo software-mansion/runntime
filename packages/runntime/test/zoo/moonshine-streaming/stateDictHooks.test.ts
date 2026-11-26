@@ -3,14 +3,13 @@ import { MOONSHINE_STREAMING_SMALL } from '../../../src/zoo/moonshine-streaming/
 import { transformStreamingStateDict } from '../../../src/zoo/moonshine-streaming/stateDictHooks.ts';
 import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
 
-// The hook reads only the layer counts, head dims and hidden sizes. Encoder
-// headDim 4 makes the q scale 1/√4 = 0.5, exact in f16. The hidden sizes
-// differ, as in the small model, so the decoder projection is there.
+// The hook reads only the encoder layer count. The hidden sizes differ, as in
+// the small model, so the decoder projection is there.
 const SMALL = MOONSHINE_STREAMING_SMALL;
 const CFG = {
   ...SMALL,
-  enc: { ...SMALL.enc, hidden: 2, layers: 1, headDim: 4 },
-  dec: { ...SMALL.dec, hidden: 3, layers: 1, headDim: 4 },
+  enc: { ...SMALL.enc, hidden: 2, layers: 1 },
+  dec: { ...SMALL.dec, hidden: 3, layers: 1 },
   frameLen: 3,
 };
 
@@ -44,6 +43,11 @@ const UNTOUCHED = [
   'model.decoder.layers.0.mlp.fc2.weight',
   'model.decoder.layers.0.mlp.fc2.bias',
   'model.decoder.norm.weight',
+  ...[
+    'encoder.layers.0.self_attn',
+    'decoder.layers.0.self_attn',
+    'decoder.layers.0.encoder_attn',
+  ].flatMap((attn) => ['q', 'k', 'v'].map((p) => `model.${attn}.${p}_proj.weight`)),
 ];
 
 /** A one-layer Moonshine v2 checkpoint with HF names. Every value is exact in
@@ -69,9 +73,9 @@ const CHECKPOINT: Record<string, Entry> = {
 
 describe('transformStreamingStateDict', () => {
   it.for([
-    { dtype: 'F32', type: 'f32', elemBytes: 4 },
-    { dtype: 'F16', type: 'f16', elemBytes: 2 },
-  ] as const)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
+    { dtype: 'F32', elemBytes: 4 },
+    { dtype: 'F16', elemBytes: 2 },
+  ] as const)('maps a $dtype checkpoint', async ({ dtype, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
     const before = new Map(sd.tensors);
@@ -83,10 +87,6 @@ describe('transformStreamingStateDict', () => {
       'model.encoder.layers.0.input_layernorm.weight',
       'model.encoder.layers.0.post_attention_layernorm.weight',
       'model.encoder.final_norm.weight',
-      'model.encoder.layers.0.self_attn.qkv.weight',
-      'model.decoder.layers.0.self_attn.qkv.weight',
-      'model.decoder.layers.0.encoder_attn.q_proj.weight',
-      'model.decoder.layers.0.encoder_attn.kv.weight',
     ];
     expect([...sd.tensors.keys()].sort()).toEqual([...UNTOUCHED, ...derived].sort());
     for (const name of UNTOUCHED) expect(get(name)).toBe(before.get(name));
@@ -108,39 +108,6 @@ describe('transformStreamingStateDict', () => {
       expect(gamma.byteLength).toBe(2 * elemBytes);
       expect(await contents(gamma)).toEqual({ type: 'f32', values });
     }
-
-    // Encoder q|k|v with q times 1/√headDim = 0.5: the encoder has no rope.
-    // The scaled part makes it f32 on every checkpoint.
-    const encQkv = get('model.encoder.layers.0.self_attn.qkv.weight');
-    expect(encQkv.shape).toEqual([6, 2]);
-    expect(encQkv.byteLength).toBe(12 * elemBytes);
-    expect(await contents(encQkv)).toEqual({
-      type: 'f32',
-      values: [0.5, 1, 1.5, 2, 5, 6, 7, 8, 9, 10, 11, 12],
-    });
-
-    // Decoder q|k|v unscaled: its rope tables carry the scale.
-    const decQkv = get('model.decoder.layers.0.self_attn.qkv.weight');
-    expect(decQkv.shape).toEqual([6, 3]);
-    expect(decQkv.byteLength).toBe(18 * elemBytes);
-    expect(await contents(decQkv)).toEqual({
-      type,
-      values: Array.from({ length: 18 }, (_, i) => -(i + 1)),
-    });
-
-    // Cross-attention q times 1/√headDim = 0.5, f32 on every checkpoint;
-    // k|v stacked as is.
-    const crossQ = get('model.decoder.layers.0.encoder_attn.q_proj.weight');
-    expect(crossQ.shape).toEqual([2, 3]);
-    expect(crossQ.byteLength).toBe(6 * elemBytes);
-    expect(await contents(crossQ)).toEqual({ type: 'f32', values: [0.5, 1.5, 2.5, 3.5, 4.5, 5.5] });
-    const crossKv = get('model.decoder.layers.0.encoder_attn.kv.weight');
-    expect(crossKv.shape).toEqual([4, 3]);
-    expect(crossKv.byteLength).toBe(12 * elemBytes);
-    expect(await contents(crossKv)).toEqual({
-      type,
-      values: [2, 4, 6, 8, 10, 12, 10, 20, 30, 40, 50, 60],
-    });
 
     // The derived tensors carry their sources' bytes, so the unread
     // proj_out.weight is the only loss.

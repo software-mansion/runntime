@@ -130,7 +130,11 @@ export class Buffer {
  *  `pinned` ones. Module-level because private members are unreachable through
  *  Module's Proxy. */
 function retypeFloats(model: AnyModule, from: EagerDtype, to: EagerDtype): void {
-  const slots = [...model.namedParameters(), ...model.namedBuffers()] as const;
+  const slots = [
+    ...model.namedParameters(),
+    ...model.storageParameters(),
+    ...model.namedBuffers(),
+  ] as const;
   for (const [name, slot] of slots) {
     // A CpuParameter's dtype still names the width its layer uploads at.
     if (slot instanceof Parameter && slot.pinned) continue;
@@ -148,6 +152,17 @@ function retypeFloats(model: AnyModule, from: EagerDtype, to: EagerDtype): void 
 }
 
 const REGISTRY = Symbol('eagerModuleRegistry');
+
+/** The parameters registered on `module` itself, named under `prefix`. */
+function* ownParameters(
+  module: AnyModule,
+  prefix: string,
+): Generator<readonly [string, Parameter]> {
+  for (const [name, p] of module[REGISTRY].params) {
+    p.qualifiedName = prefix ? `${prefix}.${name}` : name;
+    yield [p.qualifiedName, p] as const;
+  }
+}
 
 interface Registry {
   params: Map<string, Parameter>;
@@ -217,15 +232,23 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
     return this;
   }
 
-  /** Assigns each Parameter.qualifiedName as it walks. */
+  /** Every declared parameter under its dotted path, which is its name in
+   *  the checkpoint. Assigns each Parameter.qualifiedName as it walks. */
   *namedParameters(prefix = ''): Generator<readonly [string, Parameter]> {
-    const reg = this[REGISTRY];
-    for (const [name, p] of reg.params) {
-      p.qualifiedName = prefix ? `${prefix}.${name}` : name;
-      yield [p.qualifiedName, p] as const;
-    }
-    for (const [name, m] of reg.modules) {
+    yield* ownParameters(this, prefix);
+    for (const [name, m] of this[REGISTRY].modules) {
       yield* m.namedParameters(prefix ? `${prefix}.${name}` : name);
+    }
+  }
+
+  /** @internal The parameters that get loaded, each under the state-dict key
+   *  it is bound from. The same as namedParameters() except at a FusedLinear:
+   *  its parts' parameters are left out, and the stacked weight it loads in
+   *  their place is in, under the FusedLinear's own path. */
+  *storageParameters(prefix = ''): Generator<readonly [string, Parameter]> {
+    yield* ownParameters(this, prefix);
+    for (const [name, m] of this[REGISTRY].modules) {
+      yield* m.storageParameters(prefix ? `${prefix}.${name}` : name);
     }
   }
 
@@ -259,6 +282,13 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
    *  derived entries with `derive`, never fetch. */
   transformStateDict?(sd: LazyStateDict, prefix: string, parent?: AnyModule): void;
 
+  /** Runs once every transformStateDict hook of the model has run, in any
+   *  field order, for a module that builds its tensors from what the others
+   *  left: a FusedLinear stacking its parts. `paths` holds the dotted paths
+   *  of every module of the model, more than one for a module held in
+   *  several fields. Synchronous, like transformStateDict. */
+  fuseStateDict?(sd: LazyStateDict, paths: ReadonlyMap<AnyModule, readonly string[]>): void;
+
   /** Binds every Parameter, streaming one tensor at a time. Takes a lazy state
    *  dict, a safetensors URL, or a name→array record. */
   async loadStateDict(
@@ -277,7 +307,7 @@ export abstract class Module<In extends unknown[] = [Value], Out = Value> {
   /** Frees every parameter and buffer here and below. The shape survives, so
    *  loadStateDict refills it. Safe to call twice. */
   dispose(): void {
-    for (const [, p] of this.namedParameters()) p.dispose();
+    for (const [, p] of this.storageParameters()) p.dispose();
     for (const [, b] of this.namedBuffers()) b.dispose();
   }
 }

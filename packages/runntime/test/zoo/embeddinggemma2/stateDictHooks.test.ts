@@ -13,7 +13,12 @@ import {
   transformEmbeddingGemma2StateDict,
   transformEmbeddingGemma2VisionStateDict,
 } from '../../../src/zoo/embeddinggemma2/stateDictHooks.ts';
-import { checkpoint, contents, type Entry } from '../../core/weights/checkpoint.ts';
+import {
+  checkpoint,
+  contents,
+  storeAsQuantizedRows,
+  type Entry,
+} from '../../core/weights/checkpoint.ts';
 
 const DTYPES = [
   { dtype: 'F32', type: 'f32', elemBytes: 4 },
@@ -119,40 +124,41 @@ describe('transformEmbeddingGemma2StateDict', () => {
   it.for(DTYPES)('maps a $dtype checkpoint', async ({ dtype, type, elemBytes }) => {
     const sd = await checkpoint(dtype, CHECKPOINT);
     const total = sd.totalBytes();
-    const get = mapAndCheck(sd, (s) => transformEmbeddingGemma2StateDict(s, '', cfg), UNTOUCHED, [
-      `${L(0)}.self_attn.qkv.weight`,
-      `${L(0)}.self_attn.qkv_norm`,
-      `${L(0)}.layer_scalar`,
-      `${L(1)}.self_attn.qkv.weight`,
-      `${L(1)}.self_attn.qkv_norm`,
-      `${L(1)}.layer_scalar`,
+    const untouched = [
+      ...UNTOUCHED,
+      `${L(0)}.self_attn.v_proj.weight`,
+      `${L(1)}.self_attn.v_proj.weight`,
+    ];
+    const get = mapAndCheck(sd, (s) => transformEmbeddingGemma2StateDict(s, '', cfg), untouched, [
+      ...[0, 1].flatMap((i) => [
+        `${L(i)}.self_attn.q_proj.weight`,
+        `${L(i)}.self_attn.k_proj.weight`,
+        `${L(i)}.self_attn.qkv_norm`,
+        `${L(i)}.layer_scalar`,
+      ]),
       `${S}ple.per_layer_model_projection.weight`,
     ]);
 
     // Rope pairs (p, p + d/2) of each d-row head become rows (2p, 2p + 1):
     // rows 0 2 1 3 of a 4-row head, 0 4 1 5 2 6 3 7 of an 8-row one. The
     // layer's type picks d, so the full layer must not reorder like the
-    // sliding one. v keeps its order.
+    // sliding one. v is left as it is.
     const layers: [i: number, d: number, head: number[]][] = [
       [0, 4, [0, 2, 1, 3]],
       [1, 8, [0, 4, 1, 5, 2, 6, 3, 7]],
     ];
     for (const [i, d, head] of layers) {
-      const qkv = get(`${L(i)}.self_attn.qkv.weight`);
-      expect(qkv.shape).toEqual([4 * d, 4]);
-      expect(qkv.byteLength).toBe(16 * d * elemBytes);
-      expect(await contents(qkv)).toEqual({
+      const q = get(`${L(i)}.self_attn.q_proj.weight`);
+      expect(q.shape).toEqual([2 * d, 4]);
+      expect(q.byteLength).toBe(8 * d * elemBytes);
+      expect(await contents(q)).toEqual({
         type,
-        values: [
-          ...gridRows(0, [...head, ...head.map((r) => r + d)], 4),
-          ...gridRows(100, head, 4),
-          ...gridRows(
-            200,
-            Array.from({ length: d }, (_, r) => r),
-            4,
-          ),
-        ],
+        values: gridRows(0, [...head, ...head.map((r) => r + d)], 4),
       });
+      const k = get(`${L(i)}.self_attn.k_proj.weight`);
+      expect(k.shape).toEqual([d, 4]);
+      expect(k.byteLength).toBe(4 * d * elemBytes);
+      expect(await contents(k)).toEqual({ type, values: gridRows(100, head, 4) });
 
       // q_norm reordered like q, once per q head; k_norm once; ones for v.
       // Each norm's bytes count once.
@@ -229,11 +235,12 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     const get = mapAndCheck(
       sd,
       (s) => transformEmbeddingGemma2VisionStateDict(s, '', cfg),
-      UNTOUCHED,
+      [...UNTOUCHED, `${T}.self_attn.v_proj.linear.weight`],
       [
         `${P}.pos_x.weight`,
         `${P}.pos_y.weight`,
-        `${T}.self_attn.qkv.weight`,
+        `${T}.self_attn.q_proj.linear.weight`,
+        `${T}.self_attn.k_proj.linear.weight`,
         `${T}.self_attn.qkv_norm`,
       ],
     );
@@ -248,19 +255,20 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
       expect(await contents(table)).toEqual({ type, values });
     }
 
-    // Rows 0 2 1 3 of each half head.
+    // Rows 0 2 1 3 of each half head, for q and k. v is left as it is.
     const halfHeads = [0, 2, 1, 3, 4, 6, 5, 7];
-    const qkv = get(`${T}.self_attn.qkv.weight`);
-    expect(qkv.shape).toEqual([24, 2]);
-    expect(qkv.byteLength).toBe(48 * elemBytes);
-    expect(await contents(qkv)).toEqual({
-      type,
-      values: [
-        ...gridRows(0, halfHeads, 2),
-        ...gridRows(100, halfHeads, 2),
-        ...gridRows(200, [0, 1, 2, 3, 4, 5, 6, 7], 2),
-      ],
-    });
+    for (const [name, base] of [
+      ['q_proj', 0],
+      ['k_proj', 100],
+    ] as const) {
+      const projection = get(`${T}.self_attn.${name}.linear.weight`);
+      expect(projection.shape).toEqual([8, 2]);
+      expect(projection.byteLength).toBe(16 * elemBytes);
+      expect(await contents(projection)).toEqual({
+        type,
+        values: gridRows(base, halfHeads, 2),
+      });
+    }
 
     const norm = get(`${T}.self_attn.qkv_norm`);
     expect(norm.shape).toEqual([24]);
@@ -271,6 +279,20 @@ describe('transformEmbeddingGemma2VisionStateDict', () => {
     });
 
     expect(sd.totalBytes()).toBe(total);
+  });
+
+  it('splits a position table quantized as rows [2, positions·hidden] into x and y', async () => {
+    const name = 'vision_tower.patch_embedder.position_embedding_table';
+    const sd = await checkpoint('F32', CHECKPOINT);
+    await storeAsQuantizedRows(sd, name, CHECKPOINT[name]!.values, 2);
+    transformEmbeddingGemma2VisionStateDict(sd, '', cfg);
+    for (const [table, values] of [
+      [`${P}.pos_x.weight`, [1, 2, 3, 4]],
+      [`${P}.pos_y.weight`, [5, 6, 7, 8]],
+    ] as const) {
+      expect(sd.tensors.get(table)!.shape).toEqual([2, 2]);
+      expect(await contents(sd.tensors.get(table)!)).toEqual({ type: 'f32', values });
+    }
   });
 });
 
@@ -303,9 +325,12 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     `${T}.lconv1d.linear_end`,
   ];
   const BOUNDS = ['input_min', 'input_max', 'output_min', 'output_max'];
+  /** The projections the model runs as one matmul. */
+  const FUSED = ['q_proj', 'k_proj', 'v_proj'].map((p) => `${T}.self_attn.${p}`);
   /** Tensors the hook leaves as they are, under their own names. */
   const UNTOUCHED = [
     ...CLIPPED.map((c) => `${c}.linear.weight`),
+    ...FUSED.map((c) => `${c}.linear.weight`),
     `${sub}layer0.norm.weight`,
     `${sub}layer1.norm.weight`,
     `${sub}input_proj_linear.weight`,
@@ -327,10 +352,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
   const CHECKPOINT: Record<string, Entry> = {
     ...Object.fromEntries(UNTOUCHED.map((name) => [name, ZERO])),
     ...Object.assign({}, ...CLIPPED.map((p) => bound(p, [-1, 1, -2, 2]))),
-    ...Object.assign(
-      {},
-      ...['q_proj', 'k_proj', 'v_proj'].map((p) => bound(`${T}.self_attn.${p}`, [-3, 3, -4, 4])),
-    ),
+    ...Object.assign({}, ...FUSED.map((p) => bound(p, [-3, 3, -4, 4]))),
     // [c0, 1, 3, 3] and [c1, c0, 3, 3], values 1 … 18.
     [`${sub}layer0.conv.weight`]: {
       values: Array.from({ length: 18 }, (_, i) => i + 1),
@@ -371,9 +393,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
         `${sub}layer1.conv.weight`,
         `${T}.feed_forward1.post_layer_norm.weight`,
         `${T}.feed_forward2.post_layer_norm.weight`,
-        `${T}.self_attn.qkv.linear.weight`,
-        ...BOUNDS.map((b) => `${T}.self_attn.qkv.${b}`),
-        ...CLIPPED.flatMap((c) => BOUNDS.map((b) => `${c}.${b}`)),
+        ...[...FUSED, ...CLIPPED].flatMap((c) => BOUNDS.map((b) => `${c}.${b}`)),
         `${T}.self_attn.rel`,
         `${T}.self_attn.q_scale`,
         `${T}.lconv1d.depthwise_conv1d.weight`,
@@ -409,20 +429,13 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
       expect(await contents(norm)).toEqual({ type: 'f32', values });
     }
 
-    const qkv = get(`${T}.self_attn.qkv.linear.weight`);
-    expect(qkv.shape).toEqual([12, 4]);
-    expect(qkv.byteLength).toBe(48 * elemBytes);
-    expect(await contents(qkv)).toEqual({
-      type,
-      values: [0, 100, 200].flatMap((base) => gridRows(base, [0, 1, 2, 3], 4)),
-    });
-
-    // The fused projection's bounds are q's, f32, each carrying the bytes
-    // of the q, k and v scalars it reads.
-    for (const [i, b] of BOUNDS.entries()) {
-      const value = get(`${T}.self_attn.qkv.${b}`);
-      expect(value.byteLength).toBe(3 * elemBytes);
-      expect(await contents(value)).toEqual({ type: 'f32', values: [[-3, 3, -4, 4][i]!] });
+    // q, k and v keep their bounds under their own names, f32.
+    for (const c of FUSED) {
+      for (const [i, b] of BOUNDS.entries()) {
+        const value = get(`${c}.${b}`);
+        expect(value.byteLength).toBe(elemBytes);
+        expect(await contents(value)).toEqual({ type: 'f32', values: [[-3, 3, -4, 4][i]!] });
+      }
     }
 
     // Every other clipped linear keeps its own bounds, f32.
@@ -460,6 +473,22 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     expect(sd.totalBytes()).toBe(total);
   });
 
+  // The model clamps the one q|k|v matmul with q's bounds.
+  it.for(['q_proj', 'k_proj', 'v_proj'])(
+    'refuses a %s bound that differs from the other two, at the read',
+    async (part) => {
+      const name = `${T}.self_attn.${part}.output_max`;
+      const sd = await checkpoint('F32', { ...CHECKPOINT, [name]: { values: [5], shape: [1] } });
+      transformEmbeddingGemma2AudioStateDict(sd, '', cfg);
+      for (const c of FUSED) {
+        await expect(contents(sd.tensors.get(`${c}.output_max`)!)).rejects.toMatchObject({
+          code: 'CHECKPOINT_MISMATCH',
+          message: expect.stringContaining('q, k and v have different output_max'),
+        });
+      }
+    },
+  );
+
   // The bounds bind to CPU parameters, which hold a BF16 file tensor as raw
   // bits: 2 would read as 16384.
   it('decodes the bounds of a BF16 checkpoint to f32', async () => {
@@ -477,7 +506,7 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
     transformEmbeddingGemma2AudioStateDict(sd, '', cfg);
     for (const [prefix, want] of [
       ...CLIPPED.map((c) => [c, [-1, 1, -2, 2]] as const),
-      [`${T}.self_attn.qkv`, [-3, 3, -4, 4]] as const,
+      ...FUSED.map((c) => [c, [-3, 3, -4, 4]] as const),
     ]) {
       for (const [i, b] of BOUNDS.entries()) {
         expect(await contents(sd.tensors.get(`${prefix}.${b}`)!)).toEqual({
@@ -486,5 +515,26 @@ describe('transformEmbeddingGemma2AudioStateDict', () => {
         });
       }
     }
+  });
+
+  it('reorders the convs quantized as rows [out, everything else] by their values', async () => {
+    const conv1 = `${sub}layer1.conv.weight`;
+    const depthwise = `${T}.lconv1d.depthwise_conv1d.weight`;
+    const sd = await checkpoint('F32', CHECKPOINT);
+    await storeAsQuantizedRows(sd, conv1, CHECKPOINT[conv1]!.values, 1);
+    await storeAsQuantizedRows(sd, depthwise, CHECKPOINT[depthwise]!.values, 4);
+    transformEmbeddingGemma2AudioStateDict(sd, '', cfg);
+    // The same values as from the float checkpoint: tap k of channel c at
+    // k·2 + c, and tap 0 of every channel, then tap 1.
+    expect(sd.tensors.get(conv1)!.shape).toEqual([1, 18]);
+    expect(await contents(sd.tensors.get(conv1)!)).toEqual({
+      type: 'f32',
+      values: [1, 10, 2, 11, 3, 12, 4, 13, 5, 14, 6, 15, 7, 16, 8, 17, 9, 18],
+    });
+    expect(sd.tensors.get(depthwise)!.shape).toEqual([2, 4]);
+    expect(await contents(sd.tensors.get(depthwise)!)).toEqual({
+      type: 'f32',
+      values: [1, 3, 5, 7, 2, 4, 6, 8],
+    });
   });
 });

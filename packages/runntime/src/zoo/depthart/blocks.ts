@@ -8,7 +8,7 @@
  *  The depthwise conv's own identity branch lives inside RepDW, so it is not
  *  a block-level residual. */
 
-import { add, derive, floatTensor, nn, type LazyStateDict } from '../../core/index.ts';
+import { add, derive, nn, type LazyStateDict } from '../../core/index.ts';
 import type { Value } from '../../core/index.ts';
 import { requireTensor } from '../errors.ts';
 import { Conv2dBN, RepDW } from './layers.ts';
@@ -49,7 +49,7 @@ export class ConvBlock extends Module {
   override transformStateDict(sd: LazyStateDict, prefix: string): void {
     const key = (n: string) => (prefix ? `${prefix}.${n}` : n);
     const where = `ConvBlock at '${prefix}'`;
-    const at = (n: string) => floatTensor(where, requireTensor(sd, key(n), where));
+    const at = (n: string) => requireTensor(sd, key(n), where);
     const scale = at('layer_scale');
     // f32 on purpose: the BatchNorm fold reads it next, and an f16 product
     // would round once more before the fold.

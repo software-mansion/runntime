@@ -1,4 +1,9 @@
-import { defaultRoot, inGpuErrorScopes, supportsF16 } from '../../../core/index.ts';
+import {
+  defaultRoot,
+  inGpuErrorScopes,
+  supportsF16,
+  withAsyncCompile,
+} from '../../../core/index.ts';
 import { MINILM_L6 } from '../../minilm/config.ts';
 import { MinilmModel } from '../../minilm/model.ts';
 import { models } from '../../models.ts';
@@ -24,7 +29,10 @@ export function minilmLoader(weightsUrl: string = MINILM_WEIGHTS_URL): RunntimeM
       if (supportsF16()) model.half();
       await model.loadStateDict(sd);
       const wrapped = new RunntimeBertModel(config, model);
-      await inGpuErrorScopes(defaultRoot().device, 'plugin warm-up', () => wrapped.warm());
+      const device = defaultRoot().device;
+      await withAsyncCompile(device, () =>
+        inGpuErrorScopes(device, 'plugin warm-up', () => wrapped.warm()),
+      );
       return wrapped;
     },
   };

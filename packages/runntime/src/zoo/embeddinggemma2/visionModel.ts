@@ -68,15 +68,21 @@ class WrappedLinear extends nn.Module {
 
 /** The attention projections and per-head norms, fused at load. */
 class Attention extends nn.Module {
-  /** q | k | v rows, with q and k permuted for the interleaved rope. */
-  readonly qkv: nn.Linear;
+  /** Its rows are permuted for the interleaved rope at load, like k_proj's. */
+  readonly q_proj: WrappedLinear;
+  readonly k_proj: WrappedLinear;
+  readonly v_proj: WrappedLinear;
+  readonly qkv: nn.FusedLinear;
   /** q_norm and k_norm tiled per head, ones for v. */
   readonly qkv_norm: nn.Parameter;
   readonly o_proj: WrappedLinear;
   constructor({ hidden, heads, headDim }: EmbeddingGemma2VisionConfig) {
     super();
     const width = 3 * heads * headDim;
-    this.qkv = new nn.Linear(hidden, width, { bias: false });
+    this.q_proj = new WrappedLinear(hidden, heads * headDim);
+    this.k_proj = new WrappedLinear(hidden, heads * headDim);
+    this.v_proj = new WrappedLinear(hidden, heads * headDim);
+    this.qkv = new nn.FusedLinear([this.q_proj.linear, this.k_proj.linear, this.v_proj.linear]);
     this.qkv_norm = new nn.Parameter({ elems: width, dtype: 'f32', dims: [width] });
     this.o_proj = new WrappedLinear(heads * headDim, hidden);
   }
@@ -153,6 +159,7 @@ class VisionLayer extends nn.Module<[Value, EmbeddingGemma2VisionInputs], Value>
         headDim: d,
         windowLeft: Infinity,
         windowRight: Infinity,
+        scale: 1, // q and k are RMS-normed per head
       });
     }
     x = postNorm(this.post_attention_layernorm, self_attn.o_proj.forward(a), x);

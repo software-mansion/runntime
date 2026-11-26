@@ -3,6 +3,8 @@ import { pending } from '../../../src/core/graph/value.ts';
 import { bufferSource, fromSafetensors } from '../../../src/core/weights/safetensors.ts';
 import { REVERB, type ReverbConfig } from '../../../src/zoo/reverb/config.ts';
 import { ReverbModel } from '../../../src/zoo/reverb/model.ts';
+import { input, materializedInput } from '../../core/graph/values.ts';
+import { attentionScales, standInWeights } from '../attentionScales.ts';
 import { chunksFetched, onceInFileOrder, zeroCheckpoint } from '../chunkedLoad.ts';
 
 const cfg: ReverbConfig = {
@@ -88,5 +90,23 @@ describe('ReverbModel', () => {
         upload: (_data, shape) => pending(shape, 'reshape', []),
       }),
     ).rejects.toMatchObject({ code: 'CHECKPOINT_MISMATCH', message: /unexpected: llm\.extra\./ });
+  });
+});
+
+// HF's Qwen3 attention scales by 1/√headDim after the per-head q and k norms.
+describe('ReverbModel attention', () => {
+  it("scales every layer's scores by 1/√headDim", () => {
+    const model = standInWeights(new ReverbModel(cfg));
+    const t = 6;
+    const out = model.forward(input([t, hidden]), {
+      cos: input([t, d]),
+      sin: input([t, d]),
+      cache: layers.map(() => ({
+        k: materializedInput([t, kvHeads * d]),
+        v: materializedInput([t, kvHeads * d]),
+      })),
+      start: 0,
+    });
+    expect(attentionScales(out)).toEqual(Array(cfg.layers).fill(1 / Math.sqrt(d)));
   });
 });

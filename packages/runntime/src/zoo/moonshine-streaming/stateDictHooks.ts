@@ -3,26 +3,20 @@
  *  tensor binds under its own name, since the modules are named like the
  *  checkpoint.
  *
- *  The encoder norm gammas gain back their −1 offset, `log_k` becomes k, and
- *  q/k/v stack into fused weights — scaled on the encoder, which has no
- *  rope, and unscaled on the decoder, whose rope tables carry the scale.
+ *  The encoder norm gammas gain back their −1 offset and `log_k` becomes k.
  *
- *  Weights stay in torch layout for the core Linear hook to transpose. An F16
- *  checkpoint gives f16 decoder q/k/v; the scaled encoder q/k/v and
- *  cross-attention q, the norm gammas and k stay f32. Derived byteLengths
- *  carry the source file bytes, so load progress counts every byte the model
- *  reads. */
+ *  The norm gammas and k stay f32 even from an F16 checkpoint.
+ *  Derived byteLengths carry the source file bytes, so load progress counts
+ *  every byte the model reads. */
 
-import { derive, floatTensor, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
-import { fuseQkv, qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
+import { derive, type LazyStateDict, type LazyTensor } from '../../core/index.ts';
+import { qualify, take, transformDecoder } from '../moonshine/stateDictHooks.ts';
 import type { MoonshineStreamingConfig } from './config.ts';
-
-const WHAT = 'moonshine state dict';
 
 /** Stays f32 for any checkpoint: rounding gamma + 1 to f16 would drop the low
  *  bits of gamma, which an f32 run keeps. */
 function gammaPlusOne(t: LazyTensor): LazyTensor {
-  return derive(t.shape, [floatTensor(WHAT, t)], ([gamma]) => {
+  return derive(t.shape, [t], ([gamma]) => {
     const out = new Float32Array(gamma.length);
     for (let j = 0; j < gamma.length; j++) out[j] = gamma[j]! + 1;
     return out;
@@ -43,22 +37,15 @@ export function transformStreamingStateDict(
   const logK = take(sd, `${comp}.log_k`);
   sd.tensors.set(
     `${comp}.k`,
-    derive([1], [floatTensor(WHAT, logK)], ([log]) => Float32Array.from([Math.exp(log[0]!)])),
+    derive([1], [logK], ([log]) => Float32Array.from([Math.exp(log[0]!)])),
   );
 
-  // Encoder: no rope, so the full score scale folds into the q rows.
-  const encQScale = 1 / Math.sqrt(cfg.enc.headDim);
   for (let i = 0; i < cfg.enc.layers; i++) {
     const L = q(`model.encoder.layers.${i}`);
     gammaNorm(`${L}.input_layernorm`);
-    fuseQkv(sd, `${L}.self_attn`, cfg.enc.hidden, encQScale);
     gammaNorm(`${L}.post_attention_layernorm`);
   }
   gammaNorm(q('model.encoder.final_norm'));
 
-  transformDecoder(sd, prefix, {
-    layers: cfg.dec.layers,
-    hidden: cfg.dec.hidden,
-    headDim: cfg.dec.headDim,
-  });
+  transformDecoder(sd, prefix);
 }

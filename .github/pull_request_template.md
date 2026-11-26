@@ -19,6 +19,12 @@
 
 <!-- Provide step-by-step instructions on how to test your changes. Include setup details if necessary. -->
 
+### Parity
+
+<!-- For a change to kernels, routing or the zoo: run `pnpm test:parity` on a GPU and paste the tables from `packages/runntime/.parity/results`. -->
+
+- [ ] `pnpm test:parity` run, tables pasted
+
 ### Screenshots
 
 <!-- Add screenshots here, if applicable -->

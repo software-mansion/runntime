@@ -1,4 +1,4 @@
-import tgpu, { d } from 'typegpu';
+import tgpu, { d, std } from 'typegpu';
 import type { TgpuRoot } from 'typegpu';
 import {
   type F32Buffer,
@@ -17,8 +17,9 @@ import { type Elem, F32_ELEM } from '../elem.ts';
  *      out[2p]   = x[2p]·cos[t,d] − x[2p+1]·sin[t,d]
  *      out[2p+1] = x[2p+1]·cos[t,d] + x[2p]·sin[t,d]
  *
- *  cos and sin are pair-duplicated [T, headDim] tables with any scaling
- *  pre-folded by the caller.
+ *  cos and sin are pair-duplicated [T, headDim] tables. A scale that is part
+ *  of the rope (YaRN's concentration) is in the tables; the score scale is
+ *  sdpa's.
  *
  *  srcStart and srcCols optionally read a column window of a wider slab, so
  *  roping a fused qkv slice is one dispatch rather than a slice then a rope. */
@@ -49,12 +50,12 @@ function makeRopeVariant(elem: Elem) {
     'use gpu';
     const D = layout.$.dims;
     const C = config.$;
-    const pairs = d.u32(C.cols / 2);
+    const pairs = std.intdiv(C.cols, 2);
     const idx = flatIndex(gid);
     if (idx >= D.rows * pairs) {
       return;
     }
-    const row = d.u32(idx / pairs);
+    const row = std.intdiv(idx, pairs);
     const col0 = (idx % pairs) * 2;
     const dcol = col0 % C.headDim; // table column (pair-duplicated: d == d+1)
     const c = layout.$.cos[row * C.headDim + dcol]!;

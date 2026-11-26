@@ -48,6 +48,8 @@ describe('attnDecode kernels', () => {
     { name: 'headDim 128, the widest it takes (decode)', c: decode(40, { headDim: 128 }) },
     { name: 'a sliding window (decode)', c: decode(200, { windowLeft: 10 }) },
     { name: 'sinks (decode)', c: decode(200, { sinks: true }) },
+    { name: 'a scale of 0.4 at the chunk (decode)', c: decode(ATTN_DECODE_CHUNK, { scale: 0.4 }) },
+    { name: 'a scale of 0.4 and sinks (decode)', c: decode(40, { scale: 0.4, sinks: true }) },
     { name: 'every query head on one kv head (decode)', c: decode(50, { kvHeads: 1 }) },
     { name: '72 query heads (decode)', c: decode(50, { qHeads: 72, kvHeads: 8 }) },
     {
@@ -72,6 +74,14 @@ describe('attnDecode kernels', () => {
     // decodeSplit: a window shorter than the chunks leaves the later ones empty
     { name: 'a sliding window (decodeSplit)', c: decode(1000, { windowLeft: 10 }) },
     { name: 'sinks (decodeSplit)', c: decode(1000, { sinks: true }) },
+    {
+      name: 'a scale of 0.4 one key past the chunk (decodeSplit)',
+      c: decode(ATTN_DECODE_CHUNK + 1, { scale: 0.4 }),
+    },
+    {
+      name: 'a scale of 0.4 and sinks (decodeSplit)',
+      c: decode(1000, { scale: 0.4, sinks: true }),
+    },
     { name: 'every query head on one kv head (decodeSplit)', c: decode(600, { kvHeads: 1 }) },
     // decodeSplit: the scratch holds partials for 64 heads
     { name: '64 query heads (decodeSplit)', c: decode(600, { qHeads: 64, kvHeads: 8 }) },
@@ -107,7 +117,7 @@ describe('attnDecode kernels', () => {
     const k = randomF32(600 * 64, 2);
     const v = randomF32(600 * 64, 3);
     const kv = (data: Float32Array) => upload(root, data, [600, 64]);
-    const opts = { ...shape, ...window };
+    const opts = { ...shape, ...window, scale: 0.25 };
     const first = sdpa(upload(root, q, [1, 64]), kv(k), kv(v), opts);
     const got = await toArray(sdpa(first, kv(v), kv(k), opts), ex);
     const firstWant = Float32Array.from(sdpaRef(q, k, v, opts));

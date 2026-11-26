@@ -47,9 +47,12 @@ Short bad/good pairs are in [examples.md](examples.md).
 - Structure a model so its module tree matches the checkpoint: field
   names and nesting follow the state-dict keys, in their case
   (`self_attn`, `LayerNorm`, `model.decoder.embed_tokens`), so loading
-  needs no renames. A state-dict hook only builds derived tensors (a fused
-  `qkv`, a folded scale, a table computed on the CPU), under the
-  checkpoint-named parent. Moonshine, MiniLM and EmbeddingGemma 2 are
+  needs no renames. A state-dict hook only builds derived tensors (a
+  table computed on the CPU, a norm offset added back), under the
+  checkpoint-named parent. Weights load as the checkpoint stores them: an
+  attention score scale goes to `sdpa`'s `scale`, never into q or k. Linears that read the same input and run as one matmul stay
+  the checkpoint's fields, with an `nn.FusedLinear` over them as one more
+  field: no hook stacks them. Moonshine, MiniLM and EmbeddingGemma 2 are
   the examples.
 - Keep a concept in one place. Two copies of the same logic drift apart.
 
