@@ -2,7 +2,7 @@
  *  the text model out, one eager forward of the audio tower per clip. */
 
 import { RunntimeError, tensor, toArray, type RunntimeExecutor } from '../../core/index.ts';
-import type { EmbeddingGemma2AudioInputs, EmbeddingGemma2AudioModel } from './audioModel.ts';
+import type { EmbeddingGemma2AudioModel } from './audioModel.ts';
 import { SPEECH_SAMPLE_RATE } from '../tasks/audio/audioInput.ts';
 
 /** 20 ms frames every 10 ms, each zero-padded to the FFT size. */
@@ -139,50 +139,6 @@ export function logMel(samples: Float32Array, frames: number, mels: number): Flo
   return out;
 }
 
-/** The first conv's taps [P + 1, 9]: a 3×3 window at stride 2, padded by 1,
- *  over the [frames, mels] image, then a row of zeros. */
-export function convPatches(mel: Float32Array, frames: number, mels: number): Float32Array {
-  const rows = Math.ceil(frames / 2);
-  const cols = mels / 2;
-  const out = new Float32Array((rows * cols + 1) * 9);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const o = (r * cols + c) * 9;
-      for (let kh = 0; kh < 3; kh++) {
-        const y = 2 * r - 1 + kh;
-        if (y < 0 || y >= frames) continue;
-        for (let kw = 0; kw < 3; kw++) {
-          const x = 2 * c - 1 + kw;
-          if (x >= 0 && x < mels) out[o + kh * 3 + kw] = mel[y * mels + x]!;
-        }
-      }
-    }
-  }
-  return out;
-}
-
-/** The second conv's taps: for each of its output pixels, the 3×3 first-conv
- *  pixels it reads at stride 2, the zero row where it reads padding. */
-export function convTaps(rows: number, cols: number): Float32Array {
-  const outRows = Math.ceil(rows / 2);
-  const outCols = cols / 2;
-  const zero = rows * cols;
-  const out = new Float32Array(outRows * outCols * 9);
-  let o = 0;
-  for (let r = 0; r < outRows; r++) {
-    for (let c = 0; c < outCols; c++) {
-      for (let kh = 0; kh < 3; kh++) {
-        for (let kw = 0; kw < 3; kw++) {
-          const y = 2 * r - 1 + kh;
-          const x = 2 * c - 1 + kw;
-          out[o++] = y >= 0 && y < rows && x >= 0 && x < cols ? y * cols + x : zero;
-        }
-      }
-    }
-  }
-  return out;
-}
-
 /** A clip, mono samples at 16 kHz in [-1, 1], to its token rows
  *  [tokens · text hidden]. Only the first 30 s count. Runs on `ex` and trims
  *  its pool after. Throws INVALID_ARGUMENT for a clip shorter than one
@@ -193,23 +149,21 @@ export async function encodeAudio(
   ex: RunntimeExecutor,
 ): Promise<Float32Array> {
   const { mels } = model.cfg;
-  const tokens = audioTokens(samples.length);
+  // Throws for a clip too short for one frame.
+  audioTokens(samples.length);
   const frames = frameCount(samples.length);
   // The pre-projection norm's weight, not a Linear's: a quantized Linear
   // weight is quantW either way.
   const act = model.embed_audio.embedding_pre_projection_norm.shape.dtype === 'f16' ? 'f16' : 'f32';
-  const patches = convPatches(logMel(samples, frames, mels), frames, mels);
-  const taps = convTaps(Math.ceil(frames / 2), mels / 2);
-  const inputs: EmbeddingGemma2AudioInputs = {
-    patches: tensor(patches, { elems: patches.length, dtype: act, dims: [patches.length / 9, 9] }),
-    taps: tensor(taps, { elems: taps.length, dtype: 'f32', dims: [taps.length] }),
-    tokens,
-  };
+  const mel = tensor(logMel(samples, frames, mels), {
+    elems: frames * mels,
+    dtype: act,
+    dims: [1, frames, mels],
+  });
   try {
-    return await toArray(model.forward(inputs), ex);
+    return await toArray(model.forward(mel), ex);
   } finally {
-    inputs.patches.buffer.destroy();
-    inputs.taps.buffer.destroy();
+    mel.buffer.destroy();
     ex.trim();
   }
 }

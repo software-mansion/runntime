@@ -1,7 +1,7 @@
 /** Loads a model from a checkpoint read in chunks and reports the chunks
  *  fetched, for the tests that check a load walks its file once. */
 import { pending } from '../../src/core/graph/value.ts';
-import { Conv1d, Linear } from '../../src/core/nn/layers.ts';
+import { Conv1d, Conv2d, Linear } from '../../src/core/nn/layers.ts';
 import type { AnyModule } from '../../src/core/nn/module.ts';
 import {
   bufferSource,
@@ -11,8 +11,9 @@ import {
 import { safetensorsFile } from '../core/weights/checkpoint.ts';
 
 /** A checkpoint of zeros that `model` loads: a tensor for each declared
- *  parameter, a Linear's weight in torch's [out, in] and a Conv1d's in
- *  torch's [out, in, kernel], without the names in
+ *  parameter, a Linear's weight in torch's [out, in], a Conv1d's in torch's
+ *  [out, in / groups, kernel] and a Conv2d's in torch's [out, in / groups,
+ *  kernel height, kernel width], without the names in
  *  `derived` (the parameters a hook computes) and with `sources` (the
  *  tensors it computes them from). Names are sorted, as a safetensors file
  *  holds them. */
@@ -30,7 +31,11 @@ export function zeroCheckpoint(
       ? modules.get(name.slice(0, -'.weight'.length))
       : undefined;
     if (layer instanceof Conv1d) {
-      shapes[name] = [layer.outChannels, layer.inChannels, layer.kernelSize];
+      shapes[name] = [layer.outChannels, layer.inChannels / layer.groups, layer.kernelSize];
+    } else if (layer instanceof Conv2d) {
+      const { kernelSize, groups = 1 } = layer.opts;
+      const [kH, kW] = typeof kernelSize === 'number' ? [kernelSize, kernelSize] : kernelSize;
+      shapes[name] = [layer.outChannels, layer.inChannels / groups, kH, kW];
     } else {
       shapes[name] = layer instanceof Linear ? dims.reverse() : dims;
     }

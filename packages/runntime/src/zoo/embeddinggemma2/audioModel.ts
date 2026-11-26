@@ -1,7 +1,8 @@
 /** EmbeddingGemma 2 audio tower: a conformer over a clip's log-mel frames,
  *  one token per 40 ms, projected to the text model's width.
  *
- *  Two stride-2 convs shrink time and frequency 4×. Each layer is a
+ *  Two stride-2 convs shrink time and frequency 4×, in the checkpoint's
+ *  dtype: f32 for the F32 file, which needs no shader-f16. Each layer is a
  *  half-weighted feed-forward, local attention over this token and the 11
  *  before it, a gated causal depthwise conv, a second feed-forward and a
  *  norm. Most linears clamp their input and output to bounds from the
@@ -14,12 +15,13 @@ import {
   add,
   clamp,
   gluConv1d,
-  gatherRowsFrom,
   localAttention,
   nn,
   reshape,
   rmsNorm,
   silu,
+  toHwc,
+  toHwc4,
   type LazyStateDict,
   type Value,
 } from '../../core/index.ts';
@@ -32,18 +34,6 @@ import { transformEmbeddingGemma2AudioStateDict } from './stateDictHooks.ts';
 
 /** k's scale in every score, fixed by the architecture. */
 const K_SCALE = Math.log1p(Math.E) / Math.LN2;
-
-/** One clip's inputs. */
-export interface EmbeddingGemma2AudioInputs {
-  /** The first conv's 3×3 taps [P + 1, 9] for each of its P output pixels,
-   *  time-major, then a row of zeros. */
-  patches: Value;
-  /** For each tap of each output pixel of the second conv, the first conv's
-   *  pixel it reads, f32; P, the zero row, where it reads padding. */
-  taps: Value;
-  /** Tokens: frames / 4, rounded up. */
-  tokens: number;
-}
 
 /** A bound of a clipped linear, read on the CPU. */
 const bound = () => new nn.CpuParameter({ elems: 1, dtype: 'f32', dims: [1] });
@@ -104,34 +94,26 @@ class FeedForward extends nn.Module<[Value], Value> {
   }
 }
 
-/** The depthwise conv's taps [convKernel, hidden], oldest first, permuted
- *  from the checkpoint's [hidden, 1, convKernel] at load. */
-class DepthwiseConv extends nn.Module {
-  readonly weight: nn.Parameter;
-  constructor({ hidden, convKernel }: EmbeddingGemma2AudioConfig) {
-    super();
-    this.weight = new nn.Parameter({
-      elems: convKernel * hidden,
-      dtype: 'f32',
-      dims: [convKernel, hidden],
-    });
-  }
-}
-
 class LightConv extends nn.Module<[Value], Value> {
   readonly pre_layer_norm: nn.RMSNorm;
   /** The two GLU halves, value then gate. */
   readonly linear_start: ClippedLinear;
-  readonly depthwise_conv1d: DepthwiseConv;
+  /** Causal and depthwise. forward() runs its weight through gluConv1d,
+   *  which fuses the GLU before it into the same dispatch. */
+  readonly depthwise_conv1d: nn.Conv1d;
   readonly conv_norm: nn.RMSNorm;
   readonly linear_end: ClippedLinear;
 
   constructor(cfg: EmbeddingGemma2AudioConfig) {
     super();
-    const { hidden, eps } = cfg;
+    const { hidden, eps, convKernel } = cfg;
     this.pre_layer_norm = new nn.RMSNorm(hidden, eps);
     this.linear_start = new ClippedLinear(hidden, 2 * hidden);
-    this.depthwise_conv1d = new DepthwiseConv(cfg);
+    this.depthwise_conv1d = new nn.Conv1d(hidden, hidden, convKernel, {
+      groups: hidden,
+      padLeft: convKernel - 1,
+      bias: false,
+    });
     this.conv_norm = new nn.RMSNorm(hidden, eps);
     this.linear_end = new ClippedLinear(hidden, hidden);
   }
@@ -224,13 +206,19 @@ class AudioLayer extends nn.Module<[Value], Value> {
   }
 }
 
-/** A stride-2 conv as a matmul over its taps, LayerNorm over channels, ReLU. */
+/** A 3×3 stride-2 conv, LayerNorm over channels, ReLU, on an hwc4 image
+ *  [channels, frames, frequencies]. */
 class ConvLayer extends nn.Module {
-  readonly conv: nn.Linear;
+  readonly conv: nn.Conv2d;
   readonly norm: nn.LayerNorm;
-  constructor(taps: number, channels: number, eps: number) {
+  constructor(inChannels: number, channels: number, eps: number) {
     super();
-    this.conv = new nn.Linear(taps, channels, { bias: false });
+    this.conv = new nn.Conv2d(inChannels, channels, {
+      kernelSize: 3,
+      stride: 2,
+      padding: 1,
+      bias: false,
+    });
     this.norm = new nn.LayerNorm(channels, eps);
   }
   forward(x: Value): Value {
@@ -239,16 +227,15 @@ class ConvLayer extends nn.Module {
 }
 
 /** The two convs over the mel frames and the projection to the layers'
- *  width. layer0 reads [P + 1, 9] taps of the one-channel input, layer1 the
- *  [P', 9·c0] taps of layer0's output; both weights permute at load. */
+ *  width. */
 class SubsampleConvProjection extends nn.Module {
   readonly layer0: ConvLayer;
   readonly layer1: ConvLayer;
   readonly input_proj_linear: nn.Linear;
   constructor({ hidden, mels, eps, convChannels: [c0, c1] }: EmbeddingGemma2AudioConfig) {
     super();
-    this.layer0 = new ConvLayer(9, c0, eps);
-    this.layer1 = new ConvLayer(9 * c0, c1, eps);
+    this.layer0 = new ConvLayer(1, c0, eps);
+    this.layer1 = new ConvLayer(c0, c1, eps);
     this.input_proj_linear = new nn.Linear((mels / 4) * c1, hidden, { bias: false });
   }
 }
@@ -291,7 +278,7 @@ class EmbedAudio extends nn.Module {
   }
 }
 
-export class EmbeddingGemma2AudioModel extends nn.Module<[EmbeddingGemma2AudioInputs], Value> {
+export class EmbeddingGemma2AudioModel extends nn.Module<[Value], Value> {
   readonly audio_tower: AudioTower;
   readonly embed_audio: EmbedAudio;
 
@@ -301,16 +288,16 @@ export class EmbeddingGemma2AudioModel extends nn.Module<[EmbeddingGemma2AudioIn
     this.embed_audio = new EmbedAudio(cfg);
   }
 
-  /** One clip to its tokens [tokens, text hidden], ready to stand in for
-   *  the placeholder rows of the text model's input. */
-  override forward(inp: EmbeddingGemma2AudioInputs): Value {
-    const [c0, c1] = this.cfg.convChannels;
+  /** One clip's log-mel frames [1, frames, mels] to its tokens [tokens, text
+   *  hidden], ready to stand in for the placeholder rows of the text model's
+   *  input. Tokens are frames / 4, rounded up. */
+  override forward(mel: Value): Value {
     const { subsample_conv_projection: sub, layers, output_proj } = this.audio_tower;
-    const y0 = sub.layer0.forward(inp.patches);
-    const pixels = inp.taps.shape.elems / 9;
-    const y = sub.layer1.forward(reshape(gatherRowsFrom(y0, inp.taps), [pixels, 9 * c0]));
-    // Rows are (token, frequency); each token's frequencies become one row.
-    let x = sub.input_proj_linear.forward(reshape(y, [inp.tokens, (pixels / inp.tokens) * c1]));
+    const dtype = sub.layer0.conv.weight.shape.dtype === 'f16' ? 'f16' : 'f32';
+    const y = sub.layer1.forward(sub.layer0.forward(toHwc4(mel, dtype)));
+    // Each token's frequencies and channels become one row.
+    const [channels, tokens, frequencies] = y.shape.dims as [number, number, number];
+    let x = sub.input_proj_linear.forward(reshape(toHwc(y), [tokens, frequencies * channels]));
     for (const layer of layers.items) x = layer.forward(x);
     return this.embed_audio.forward(output_proj.forward(x));
   }

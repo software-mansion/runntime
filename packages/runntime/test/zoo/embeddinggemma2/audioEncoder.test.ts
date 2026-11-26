@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  audioTokens,
-  convPatches,
-  convTaps,
-  logMel,
-} from '../../../src/zoo/embeddinggemma2/audioEncoder.ts';
+import { audioTokens, logMel } from '../../../src/zoo/embeddinggemma2/audioEncoder.ts';
 import { expectClose } from '../../gpu.ts';
 
 const MELS = 128;
@@ -110,48 +105,5 @@ describe('logMel', () => {
     const b = a.slice();
     b.fill(0.5, 160);
     expect(logMel(b, 1, MELS)).toEqual(logMel(a, 1, MELS));
-  });
-});
-
-describe('convPatches', () => {
-  // A 3×3 window at stride 2, padded by 1, worked out by hand on the
-  // [3 frames, 4 mels] image
-  //   1  2  3  4
-  //   5  6  7  8
-  //   9 10 11 12
-  // which gives 2 × 2 output pixels, then one row of zeros.
-  it('takes each output pixel its 3×3 window, zeros in the padding', () => {
-    const mel = Float32Array.from({ length: 12 }, (_, i) => i + 1);
-    expect(Array.from(convPatches(mel, 3, 4))).toEqual([
-      ...[0, 0, 0, 0, 1, 2, 0, 5, 6],
-      ...[0, 0, 0, 2, 3, 4, 6, 7, 8],
-      ...[0, 5, 6, 0, 9, 10, 0, 0, 0],
-      ...[6, 7, 8, 10, 11, 12, 0, 0, 0],
-      ...[0, 0, 0, 0, 0, 0, 0, 0, 0],
-    ]);
-  });
-
-  it('gives ceil(frames / 2) rows for an odd frame count', () => {
-    // 5 frames of 4 mels: 3 × 2 pixels plus the zero row.
-    expect(convPatches(new Float32Array(20), 5, 4)).toHaveLength((3 * 2 + 1) * 9);
-  });
-});
-
-describe('convTaps', () => {
-  // The second conv over a [3, 4] first-conv map, by hand: indices y·4 + x of
-  // the pixels each 3×3 window reads at stride 2, 12 (the zero row) where it
-  // reads padding.
-  it('points each tap at its first-conv pixel or the zero row', () => {
-    expect(Array.from(convTaps(3, 4))).toEqual([
-      ...[12, 12, 12, 12, 0, 1, 12, 4, 5],
-      ...[12, 12, 12, 1, 2, 3, 5, 6, 7],
-      ...[12, 4, 5, 12, 8, 9, 12, 12, 12],
-      ...[5, 6, 7, 9, 10, 11, 12, 12, 12],
-    ]);
-  });
-
-  it('gives ceil(rows / 2) output rows for an odd row count', () => {
-    // 5 rows of 4: 3 × 2 output pixels of 9 taps.
-    expect(convTaps(5, 4)).toHaveLength(3 * 2 * 9);
   });
 });
