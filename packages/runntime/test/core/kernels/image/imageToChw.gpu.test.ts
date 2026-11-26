@@ -8,6 +8,7 @@ import {
 import { imageBuffer } from '../../../../src/zoo/tasks/cv/image.ts';
 import { createImagePreprocessor } from '../../../../src/zoo/tasks/cv/utils/imagePreprocessor.ts';
 import { expectClose, gpu } from '../../../gpu.ts';
+import { frameImage, videoFrame } from '../../../zoo/tasks/cv/images.ts';
 
 const { root } = await gpu();
 const imageToChw = createImageToChw(root);
@@ -29,7 +30,7 @@ function randomRgba(w: number, h: number, seed: number): Uint8Array<ArrayBuffer>
  *  input pixel center samples the image with half-pixel bilinear, edges
  *  clamped; outside the image it is `pad`. Output is CHW, value = byte *
  *  alpha + beta. */
-function fitRef(rgba: Uint8Array, w: number, h: number, args: ImageToChwArgs): Float64Array {
+function fitRef(rgba: ArrayLike<number>, w: number, h: number, args: ImageToChwArgs): Float64Array {
   const { mode, cropFraction, outW, outH, alpha, beta, pad } = args;
   let scaleX = outW / w;
   let scaleY = outH / h;
@@ -177,6 +178,28 @@ describe('imageToChw kernel', () => {
     // so allow one byte of error.
     expectClose(got, fitRef(bytes, w, h, args), { atol: 1.01 / 255, rtol: 0 });
   });
+
+  // The frame the encode* runners take from a camera: I420 BT.709, which
+  // Chrome converts to RGB on the import. Checked here against the pixels a
+  // canvas reads from the same frame, because the runners' random f16 nets
+  // barely move with their input, so their frame cases would pass a channel
+  // swap within tolerance.
+  it.each([
+    { w: 96, h: 48, mode: 'letterbox' },
+    { w: 320, h: 180, mode: 'stretch' },
+  ] as const)(
+    'matches the canvas pixels of an I420 BT.709 frame, $mode $w×$h',
+    async ({ w, h, mode }) => {
+      const frame = videoFrame(w, h, 11);
+      const args: ImageToChwArgs = { ...PLAIN, mode, outW: 64, outH: 64 };
+      const got = await run(root.device.importExternalTexture({ source: frame }), args);
+      // Measured: the two sit 0.004 of a byte apart at most over 15 frames of
+      // five sizes, the rounding of the GPU and CPU bilinear fits. Half a byte
+      // leaves room for an import that converts without rounding to bytes; a
+      // channel swap moves a pixel by tens of bytes.
+      expectClose(got, fitRef(frameImage(frame).data, w, h, args), { atol: 0.5 / 255, rtol: 0 });
+    },
+  );
 
   // Work after the fit reads the image size from here: an external texture
   // has none on the CPU.

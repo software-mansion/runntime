@@ -1,7 +1,7 @@
 /** GPU memory leak checks: each zoo model, built small with random weights,
  *  must free every GPU buffer it made on dispose, and must stop allocating
  *  once warm. */
-import type { TgpuRoot } from 'typegpu';
+import { d, type TgpuRoot } from 'typegpu';
 import { describe, expect, it } from 'vitest';
 import { matrix, tensor3d, toArray } from '../../src/core/index.ts';
 import { tensor } from '../../src/core/gpu/buffers.ts';
@@ -14,8 +14,18 @@ import { HiggsDecoder } from '../../src/zoo/higgs/decoder.ts';
 import { MINILM_L6 } from '../../src/zoo/minilm/config.ts';
 import { createMinilmEmbedCore } from '../../src/zoo/minilm/embedCore.ts';
 import { MinilmModel } from '../../src/zoo/minilm/model.ts';
+import { MOBILENETV4_CONV_S } from '../../src/zoo/mobilenetv4/config.ts';
 import { MobileNetV4Model } from '../../src/zoo/mobilenetv4/model.ts';
+import { createImageClassifier } from '../../src/zoo/tasks/cv/imageClassification.ts';
+import { createInstanceSegmenter } from '../../src/zoo/tasks/cv/instanceSegmentation.ts';
+import { createKeypointDetector } from '../../src/zoo/tasks/cv/keypointDetection.ts';
+import { createObjectDetector } from '../../src/zoo/tasks/cv/objectDetection.ts';
+import type { GpuEncoder, GpuImage, GpuTensor, ImageInput } from '../../src/zoo/tasks/gpu.ts';
 import { buffersSince, gpu, liveBuffers, randomF32, repeated, requireFeature } from '../gpu.ts';
+import { randomSafetensors } from './randomWeights.ts';
+import { YOLO_INPUT_SIZE, yoloWeights } from './tasks/cv/detections.ts';
+import { randomRgba, rgbaTexture } from './tasks/cv/images.ts';
+import { ENCODERS } from './tasks/gpu.ts';
 
 /** Calls a model makes before its buffer count must hold still: the first
  *  call per shape records replays and fills the pool. */
@@ -51,7 +61,7 @@ interface Runner {
 interface LeakCase {
   name: string;
   needs?: GPUFeatureName;
-  build(root: TgpuRoot): Runner;
+  build(root: TgpuRoot): Runner | Promise<Runner>;
   /** Buffers a known leak, not fixed yet, leaves behind after dispose. */
   leftOnDispose?: string[];
   /** Buffers a known leak, not fixed yet, leaves behind on every warm call. */
@@ -84,6 +94,130 @@ const TINY_HIGGS = {
   strides: [2],
   kernel: 3,
 };
+
+type EncodeSource = GpuImage | GpuTensor<ImageInput>;
+
+/** A cv runner built for an encode<Verb> leak case, with the target it
+ *  writes and its encode<Verb> method. */
+interface EncodeModel {
+  runner: { readonly schemas: { readonly input: ImageInput }; dispose(): void };
+  target: { destroy(): void };
+  encode(options: { source: EncodeSource; encoder?: GpuEncoder }): void;
+}
+
+/** How a caller hands an encode<Verb> method its input and its encoder:
+ *  each route frees its own resources, so each one gets its leak check. */
+interface EncodeRoute {
+  name: string;
+  /** The source, and how the caller frees it. */
+  source(root: TgpuRoot, schema: ImageInput): { source: EncodeSource; destroy(): void };
+  /** The caller's encoder and how the caller submits it. Default: the
+   *  method's own encoder. */
+  open?(root: TgpuRoot): { encoder: GpuEncoder; submit(): void };
+}
+
+/** A texture the size of nothing the model takes, so the method fits it:
+ *  the route a video frame takes. The test frees it when it ends. */
+function textureSource(root: TgpuRoot) {
+  return { source: rgbaTexture(root, randomRgba(96, 48, 5), 96, 48), destroy: () => {} };
+}
+
+const ENCODE_ROUTES: EncodeRoute[] = [
+  { name: 'a texture', source: textureSource },
+  {
+    name: 'a buffer',
+    source(root, schema) {
+      const source = root.createBuffer(schema).$usage('storage');
+      source.write(new Float32Array(randomF32(d.sizeOf(schema) / 4)).buffer);
+      return { source, destroy: () => source.destroy() };
+    },
+  },
+  ...ENCODERS.map(({ name, open }) => ({
+    name: `a texture, recorded into ${name}`,
+    source: textureSource,
+    open,
+  })),
+];
+
+/** A runner's encode<Verb> method on `route`, waited for on the queue: the
+ *  method itself does not wait. */
+function encodeRunner(
+  root: TgpuRoot,
+  { runner, target, encode }: EncodeModel,
+  route: EncodeRoute,
+): Runner {
+  const input = route.source(root, runner.schemas.input);
+  return {
+    call: () => {
+      if (route.open) {
+        const { encoder, submit } = route.open(root);
+        encode({ source: input.source, encoder });
+        submit();
+      } else {
+        encode({ source: input.source });
+      }
+      return root.device.queue.onSubmittedWorkDone();
+    },
+    dispose: () => {
+      runner.dispose();
+      target.destroy();
+      input.destroy();
+    },
+  };
+}
+
+/** The cv runners with an encode<Verb> method, each built small. */
+const ENCODE_MODELS: { name: string; build(root: TgpuRoot): Promise<EncodeModel> }[] = [
+  {
+    name: 'image classifier, encodeClassify',
+    async build(root) {
+      const { numClasses, headHidden } = MOBILENETV4_CONV_S;
+      const template = new MobileNetV4Model(MOBILENETV4_CONV_S, { root });
+      const weights = randomSafetensors(template, {
+        scale: 0.1,
+        // The checkpoint holds the classifier as [out, in]; the model keeps it [in, out].
+        shapes: { 'classifier.weight': [numClasses, headHidden] },
+      });
+      template.dispose();
+      const runner = await createImageClassifier({ modelPath: weights });
+      const target = root.createBuffer(runner.schemas.output(5)).$usage('storage');
+      return { runner, target, encode: (o) => runner.encodeClassify({ ...o, target }) };
+    },
+  },
+  {
+    name: 'object detector, encodeDetectObjects',
+    async build(root) {
+      const runner = await createObjectDetector({
+        modelPath: yoloWeights('detect'),
+        inputSize: YOLO_INPUT_SIZE,
+      });
+      const target = root.createBuffer(runner.schemas.output(20)).$usage('storage');
+      return { runner, target, encode: (o) => runner.encodeDetectObjects({ ...o, target }) };
+    },
+  },
+  {
+    name: 'keypoint detector, encodeDetectKeypoints',
+    async build(root) {
+      const runner = await createKeypointDetector({
+        modelPath: yoloWeights('pose'),
+        inputSize: YOLO_INPUT_SIZE,
+      });
+      const target = root.createBuffer(runner.schemas.output(20)).$usage('storage');
+      return { runner, target, encode: (o) => runner.encodeDetectKeypoints({ ...o, target }) };
+    },
+  },
+  {
+    name: 'instance segmenter, encodeSegmentInstances',
+    async build(root) {
+      const runner = await createInstanceSegmenter({
+        modelPath: yoloWeights('segment'),
+        inputSize: YOLO_INPUT_SIZE,
+      });
+      const target = root.createBuffer(runner.schemas.output(20)).$usage('storage');
+      return { runner, target, encode: (o) => runner.encodeSegmentInstances({ ...o, target }) };
+    },
+  },
+];
 
 /** The uploads one MiniLM batch call of 5 tokens never frees, in the order
  *  they are made: the [5, 2] segments from MinilmModel.forward, the [2, 5]
@@ -181,6 +315,13 @@ const CASES: LeakCase[] = [
     // toArray keeps its 8-sample result out of the pool.
     leftPerCall: ['32 B, usage 140'],
   },
+  ...ENCODE_MODELS.flatMap((model) =>
+    ENCODE_ROUTES.map((route) => ({
+      name: `${model.name}, ${route.name}`,
+      needs: 'shader-f16' as const,
+      build: async (root: TgpuRoot) => encodeRunner(root, await model.build(root), route),
+    })),
+  ),
 ];
 
 describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = [] }) => {
@@ -189,12 +330,12 @@ describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = 
     if (needs) requireFeature(ctx, root, needs);
     // A throwaway run first: pipelines and the readback staging buffer belong
     // to the root and outlive every model.
-    const first = build(root);
+    const first = await build(root);
     await first.call();
     first.dispose();
 
     const before = liveBuffers();
-    const runner = build(root);
+    const runner = await build(root);
     await runner.call();
     runner.dispose();
     expect(buffersSince(before)).toEqual(leftOnDispose);
@@ -203,7 +344,7 @@ describe.for(CASES)('$name', ({ build, needs, leftOnDispose = [], leftPerCall = 
   it('stops allocating once warm', async (ctx) => {
     const { root } = await gpu();
     if (needs) requireFeature(ctx, root, needs);
-    const runner = build(root);
+    const runner = await build(root);
     try {
       for (let i = 0; i < WARM_CALLS; i++) await runner.call();
       const before = liveBuffers();
