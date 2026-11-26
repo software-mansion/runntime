@@ -11,9 +11,11 @@ const COSINE = {
   source: 'methodology default, f16 weights',
 } as const;
 
-const manifest = <S extends 'S' | 'B'>(size: S) =>
+const SIZES = { S: 's', B: 'b' } as const;
+
+const manifest = <S extends keyof typeof SIZES>(size: S) =>
   ({
-    family: `depthart-${size.toLowerCase() as Lowercase<S>}`,
+    family: `depthart-${SIZES[size]}`,
     reference: {
       repo: 'Fengxue93/DepthART',
       revision: '9e154201cd8fb3453c9def581997aaf1b4da3c22',
@@ -28,7 +30,7 @@ const manifest = <S extends 'S' | 'B'>(size: S) =>
     // The checkpoint's size, and the commit of xuefeng-cvr/DepthART on
     // GitHub the reference's code comes from.
     settings: {
-      size: size.toLowerCase() as Lowercase<S>,
+      size: SIZES[size],
       code: 'b307c123f19051e2d969960bba93ee3684874b90',
     },
     variants: [
