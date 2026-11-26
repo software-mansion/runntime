@@ -286,6 +286,47 @@
   margin-top: 0.75rem;
 }
 
+/* ── Text to speech (Speak.tsx) ── */
+
+.demo-own-voice {
+  border-top: 1px solid var(--border-hairline);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+
+.demo-own-voice .demo-row-actions {
+  margin-top: 0;
+}
+
+/* A hint shown below its button while the button is hovered or focused. */
+.demo-tip {
+  display: inline-flex;
+  position: relative;
+}
+
+.demo-tip-text {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-body);
+  font-size: 0.75rem;
+  left: 0;
+  line-height: 1.5;
+  opacity: 0;
+  padding: 0.5rem 0.65rem;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  transition: opacity 120ms ease;
+  width: min(36ch, 80vw);
+  z-index: 1;
+}
+
+.demo-tip:hover .demo-tip-text,
+.demo-tip:focus-within .demo-tip-text {
+  opacity: 1;
+}
+
 .pii-text {
   white-space: pre-wrap;
 }
