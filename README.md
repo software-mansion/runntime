@@ -50,7 +50,7 @@ to tensor out (all-MiniLM-L6-v2, f16, Apple M4 Pro, Chrome):
 | Real text, one at a time    | **2.05×** |
 | Real text, in batches of 32 | **2.36×** |
 
-For every model and how it was measured, see the
+For more benchmarks and measuring methodology, see the
 [benchmarks page](https://docs.swmansion.com/runntime/zoo/benchmarks/).
 
 Why it's fast:
