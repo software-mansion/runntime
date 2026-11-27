@@ -157,6 +157,25 @@ describe('array conversions', () => {
   });
 });
 
+describe('f16ToF32 against the f16 formula', () => {
+  it('decodes all 65,536 bit patterns', () => {
+    const bits = Uint16Array.from({ length: 0x10000 }, (_, i) => i);
+    const got = f16ToF32(bits);
+    const mismatches: number[] = [];
+    for (let i = 0; i < bits.length; i++) {
+      // Object.is tells -0 from 0 and treats NaN as equal to NaN.
+      if (!Object.is(got[i], Math.fround(f16BitsToF32(i)))) mismatches.push(i);
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  it('decodes a view at an offset into a larger buffer', () => {
+    const buffer = new Uint16Array([0x3c00, 0x3e00, 0xbe00, 0x7c00, 0x3800]).buffer;
+    const view = new Uint16Array(buffer, 2, 3);
+    expect(f16ToF32(view)).toEqual(new Float32Array([1.5, -1.5, Infinity]));
+  });
+});
+
 describe('array conversion edge cases', () => {
   it('empty inputs give empty outputs', () => {
     const none16 = new Uint16Array(0);
