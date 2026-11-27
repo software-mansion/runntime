@@ -176,6 +176,84 @@ describe('f16ToF32 against the f16 formula', () => {
   });
 });
 
+/** f32ArrayToF16Bits as one f32ToF16Bits call per value: the reference the
+ *  Float16Array version has to match bit for bit. */
+function f32ArrayToF16BitsPerValue(src: Float32Array): { data: Uint16Array; clamped: number } {
+  const data = new Uint16Array(src.length);
+  let clamped = 0;
+  for (let i = 0; i < src.length; i++) {
+    const value = src[i]!;
+    const bits = f32ToF16Bits(value);
+    data[i] = bits;
+    if ((bits & 0x7fff) === 0x7bff && Math.abs(value) > 65504) clamped++;
+  }
+  return { data, clamped };
+}
+
+/** Each case is an f32 bit pattern, so NaN signs and payloads are exact. */
+const F32_EDGES = [
+  { name: '+0', bits: 0x00000000 },
+  { name: '-0', bits: 0x80000000 },
+  { name: 'smallest f32 subnormal', bits: 0x00000001 },
+  { name: '2^-25, halfway to the smallest f16 subnormal (ties to 0)', bits: 0x33000000 },
+  { name: 'just above 2^-25 (rounds up to 2^-24)', bits: 0x33000001 },
+  { name: '-2^-25', bits: 0xb3000000 },
+  { name: '1.5·2^-24, halfway between subnormals 1 and 2 (ties to 2)', bits: 0x33c00000 },
+  { name: '2.5·2^-24, halfway between subnormals 2 and 3 (ties to 2)', bits: 0x34200000 },
+  { name: 'just below the smallest f16 normal', bits: 0x387fffff },
+  { name: 'smallest f16 normal, 2^-14', bits: 0x38800000 },
+  { name: '1 + 2^-11, halfway above one (ties to 1)', bits: 0x3f801000 },
+  { name: '1 + 3·2^-11 (ties to 1 + 2^-9)', bits: 0x3f803000 },
+  { name: 'just above 1 + 2^-11 (rounds up)', bits: 0x3f801001 },
+  { name: 'just below 65504', bits: 0x477fdfff },
+  { name: '65504, the f16 max', bits: 0x477fe000 },
+  { name: 'just above 65504', bits: 0x477fe001 },
+  { name: 'just below 65520', bits: 0x477fefff },
+  { name: '65520, halfway to 2^16', bits: 0x477ff000 },
+  { name: 'just above 65520', bits: 0x477ff001 },
+  { name: '-65520', bits: 0xc77ff000 },
+  { name: 'f32 max', bits: 0x7f7fffff },
+  { name: '-f32 max', bits: 0xff7fffff },
+  { name: '+Inf', bits: 0x7f800000 },
+  { name: '-Inf', bits: 0xff800000 },
+  { name: 'quiet NaN', bits: 0x7fc00000 },
+  { name: 'negative quiet NaN', bits: 0xffc00000 },
+  { name: 'signalling NaN', bits: 0x7f800001 },
+  { name: 'NaN with a full payload', bits: 0x7fffffff },
+  { name: 'negative NaN with a payload', bits: 0xff812345 },
+];
+
+const f32FromBits = (bits: readonly number[]) => new Float32Array(Uint32Array.from(bits).buffer);
+
+describe('f32ArrayToF16Bits against one f32ToF16Bits call per value', () => {
+  it.each(F32_EDGES)('$name', ({ bits }) => {
+    const src = f32FromBits([bits]);
+    expect(f32ArrayToF16Bits(src)).toEqual(f32ArrayToF16BitsPerValue(src));
+  });
+
+  it('all edge cases in one array', () => {
+    const src = f32FromBits(F32_EDGES.map((c) => c.bits));
+    expect(f32ArrayToF16Bits(src)).toEqual(f32ArrayToF16BitsPerValue(src));
+  });
+
+  it('1,000,000 random f32 bit patterns', () => {
+    let seed = 1;
+    const bits = Array.from(
+      { length: 1_000_000 },
+      () => (seed = Math.imul(seed, 1664525) + 1013904223) >>> 0,
+    );
+    const src = f32FromBits(bits);
+    const got = f32ArrayToF16Bits(src);
+    const want = f32ArrayToF16BitsPerValue(src);
+    const mismatches: number[] = [];
+    for (let i = 0; i < src.length; i++)
+      if (got.data[i] !== want.data[i]) mismatches.push(bits[i]!);
+    expect(mismatches).toEqual([]);
+    expect(got.clamped).toBe(want.clamped);
+    expect(want.clamped).toBeGreaterThan(0);
+  });
+});
+
 describe('array conversion edge cases', () => {
   it('empty inputs give empty outputs', () => {
     const none16 = new Uint16Array(0);
