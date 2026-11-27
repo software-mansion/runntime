@@ -40,16 +40,16 @@ The zoo package currently supports 19 models across 9 tasks, each loaded with on
 
 ## Performance
 
-Against two popular alternative inference runtimes on the same GPU, tensor
-in to tensor out (all-MiniLM-L6-v2, Apple M4 Pro, Chrome):
+Against ONNX Runtime Web and LiteRT.js on the same GPU, tensor in to tensor
+out (all-MiniLM-L6-v2, Apple M4 Pro, Chrome):
 
-| Input                       | vs runtime A | vs runtime B |
-| --------------------------- | ------------ | ------------ |
-| 1 sentence (32 tokens)      | **2.25×**    | -            |
-| 128 tokens                  | **1.83×**    | **3.8×**     |
-| 32 × 128 tokens             | **1.26×**    | **4.2×**     |
-| Real text, one at a time    | **2.05×**    | -            |
-| Real text, in batches of 32 | **2.36×**    | -            |
+| Input                       | vs ONNX Runtime | vs LiteRT |
+| --------------------------- | --------------- | --------- |
+| 1 sentence (32 tokens)      | **2.25×**       | **2.3×**  |
+| 128 tokens                  | **1.83×**       | **3.9×**  |
+| 32 × 128 tokens             | **1.26×**       | **4.0×**  |
+| Real text, one at a time    | **2.05×**       | **4.1×**  |
+| Real text, in batches of 32 | **2.36×**       | -         |
 
 For more benchmarks and measuring methodology, see the
 [benchmarks page](https://docs.swmansion.com/runntime/zoo/benchmarks/).
