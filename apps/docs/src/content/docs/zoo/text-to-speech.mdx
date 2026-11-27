@@ -13,6 +13,12 @@ With no arguments, `createTextToSpeech` runs
 cloning model: it speaks the text in the voice of a short reference clip,
 in English, German, French, Spanish, Italian, Polish or Portuguese.
 
+:::caution[Non-commercial weights]
+Reverb's weights are under CC-BY-NC-4.0, for non-commercial use only. Its
+codec has its own license, with an attribution notice and a user limit for
+commercial use. See [License](#license) before you ship it.
+:::
+
 ## Quick start
 
 Reverb expects text written the way it is spoken, so the example passes
@@ -266,3 +272,21 @@ const tts = await createTextToSpeech(models.textToSpeech.REVERB.DEFAULT, {
 | Model                                                        | Config                       | Languages                  | Parameters | Weights                                                                         |
 | ------------------------------------------------------------ | ---------------------------- | -------------------------- | ---------- | ------------------------------------------------------------------------------- |
 | [Reverb](https://huggingface.co/software-mansion/Reverb-TTS) | `models.textToSpeech.REVERB` | en, de, fr, es, it, pl, pt | 297M       | int4 191 MB, int8 307 MB, f16 594 MB, f32 1.19 GB, plus 26 MB of the codec file |
+
+## License
+
+Text to speech loads two sets of weights, each under its own license:
+
+- [Reverb](https://huggingface.co/software-mansion/Reverb-TTS) is under
+  CC-BY-NC-4.0, for non-commercial use only. It is fine-tuned from
+  [OmniVoice](https://huggingface.co/k2-fsa/OmniVoice), whose weights are
+  under CC-BY-NC because of their training data.
+- The codec,
+  [Higgs Audio v2 tokenizer](https://huggingface.co/software-mansion/higgs-audio-v2-tokenizer-Reverb),
+  is under the
+  [Boson Higgs Audio 2 Community License](https://huggingface.co/bosonai/higgs-audio-v2-tokenizer/blob/main/LICENSE),
+  based on the Meta Llama 3 Community License. Commercial use is allowed up
+  to 100,000 annual active users, beyond that you need a license from Boson
+  AI. Distributing it, or a product that uses it, requires the "Built with
+  Higgs Materials" notice the license gives, and its use follows the Llama 3
+  acceptable use policy.

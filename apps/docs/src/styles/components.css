@@ -57,8 +57,10 @@
   gap: 0.5rem;
 }
 
-/* Links and code inherit the admonition's own foreground, not the page's. */
-.starlight-aside__content a {
+/* Links and code inherit the admonition's own foreground, not the page's.
+   Scoped under .sl-markdown-content to outrank the prose link rules. */
+.sl-markdown-content .starlight-aside__content a,
+.sl-markdown-content .starlight-aside__content a:hover {
   color: inherit;
   border-bottom: 1px solid currentColor;
   text-decoration: none;

@@ -121,25 +121,28 @@ export const models = {
   embedding: {
     /** Google's EmbeddingGemma 2: text in 100+ languages and code, images
      *  and video in one 768-dim space, inputs up to 2048 tokens. 270M
-     *  parameters in the text model, 170M in the vision tower. */
+     *  parameters in the text model, 170M in the vision tower. Weights
+     *  under Apache-2.0. */
     EMBEDDINGGEMMA_2: EMBEDDINGGEMMA_2,
-    /** all-MiniLM-L6-v2: English text in 384-dim vectors, 22M parameters. */
+    /** all-MiniLM-L6-v2: English text in 384-dim vectors, 22M parameters.
+     *  Weights under Apache-2.0. */
     ALL_MINILM_L6_V2: MINILM,
   },
   privacyFilter: {
     /** OpenAI's privacy-filter: 1.5B parameters, 50M active per token,
-     *  int8 weights in groups of 640. The one hosted format. */
+     *  int8 weights in groups of 640. The one hosted format. Weights under
+     *  Apache-2.0. */
     PRIVACY_FILTER: { DEFAULT: PRIVACY_FILTER_INT8 },
   },
   speechToText: {
-    /** English. */
+    /** English. Weights under MIT. */
     MOONSHINE: {
       /** 27M parameters. */
       TINY: MOONSHINE_TINY,
       /** 61M parameters. More accurate, slower. */
       BASE: MOONSHINE_BASE,
     },
-    /** English, the streaming family. */
+    /** English, the streaming family. Weights under MIT. */
     MOONSHINE_STREAMING: {
       /** 34M parameters. */
       TINY: MOONSHINE_STREAMING_TINY,
@@ -147,7 +150,11 @@ export const models = {
   },
   textToSpeech: {
     /** Reverb: voice cloning from a reference clip in 7 languages, 297M
-     *  parameters. */
+     *  parameters. Weights under CC-BY-NC-4.0, for non-commercial use only:
+     *  https://huggingface.co/software-mansion/Reverb-TTS. The codec is under
+     *  the Boson Higgs Audio 2 Community License, with a user limit for
+     *  commercial use and an attribution notice:
+     *  https://huggingface.co/bosonai/higgs-audio-v2-tokenizer/blob/main/LICENSE */
     REVERB: {
       DEFAULT: REVERB_INT4,
       /** int4 weights. */
@@ -161,7 +168,9 @@ export const models = {
     },
   },
   objectDetection: {
-    /** YOLO26 detect, COCO-80 classes, f16 weights. */
+    /** YOLO26 detect, COCO-80 classes, f16 weights. Weights under AGPL-3.0
+     *  by Ultralytics, which also covers use over a network:
+     *  https://huggingface.co/software-mansion/runntime-yolo26 */
     YOLO26: {
       DEFAULT: YOLO26_N,
       /** The nano size, 5 MB. */
@@ -173,7 +182,9 @@ export const models = {
     },
   },
   instanceSegmentation: {
-    /** YOLO26 segment, COCO-80 classes with a mask per object, f16 weights. */
+    /** YOLO26 segment, COCO-80 classes with a mask per object, f16 weights.
+     *  Weights under AGPL-3.0 by Ultralytics, which also covers use over a
+     *  network: https://huggingface.co/software-mansion/runntime-yolo26-seg */
     YOLO26_SEG: {
       DEFAULT: YOLO26_SEG_N,
       /** The nano size, 5 MB. */
@@ -185,7 +196,9 @@ export const models = {
     },
   },
   keypointDetection: {
-    /** YOLO26 pose, people with 17 COCO landmarks, f16 weights. */
+    /** YOLO26 pose, people with 17 COCO landmarks, f16 weights. Weights
+     *  under AGPL-3.0 by Ultralytics, which also covers use over a network:
+     *  https://huggingface.co/software-mansion/runntime-yolo26-pose */
     YOLO26_POSE: {
       DEFAULT: YOLO26_POSE_N,
       /** The nano size, 6 MB. */
@@ -197,7 +210,8 @@ export const models = {
     },
   },
   depthEstimation: {
-    /** DepthART relative depth at 448×448, f16 weights. */
+    /** DepthART relative depth at 448×448, f16 weights. Weights under
+     *  Apache-2.0. */
     DEPTHART: {
       DEFAULT: DEPTHART_S,
       /** The small size, 13 MB. */
@@ -208,7 +222,7 @@ export const models = {
   },
   imageClassification: {
     /** MobileNetV4 conv, ImageNet-1k, f16 weights. The model runs in f16
-     *  only, so each size has one entry. */
+     *  only, so each size has one entry. Weights under Apache-2.0. */
     MOBILENETV4: {
       DEFAULT: MOBILENETV4_SMALL,
       /** The small size, 3.8M parameters, 10 MB. */
