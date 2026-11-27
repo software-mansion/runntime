@@ -6,6 +6,12 @@ import { MINILM_PARITY } from '../zoo/minilm/parity.manifest.ts';
 import { MOBILENETV4_PARITY } from '../zoo/mobilenetv4/parity.manifest.ts';
 import { MOONSHINE_STREAMING_TINY_PARITY } from '../zoo/moonshine-streaming/parity.manifest.ts';
 import { MOONSHINE_BASE_PARITY, MOONSHINE_TINY_PARITY } from '../zoo/moonshine/parity.manifest.ts';
+import {
+  REVERB_FP16_PARITY,
+  REVERB_FP32_PARITY,
+  REVERB_INT4_PARITY,
+  REVERB_INT8_PARITY,
+} from '../zoo/reverb/parity.manifest.ts';
 import { covers, modelEntries, type ParityManifest } from './manifest.ts';
 
 const MANIFESTS: readonly ParityManifest[] = [
@@ -15,6 +21,10 @@ const MANIFESTS: readonly ParityManifest[] = [
   MOONSHINE_TINY_PARITY,
   MOONSHINE_BASE_PARITY,
   MOONSHINE_STREAMING_TINY_PARITY,
+  REVERB_FP32_PARITY,
+  REVERB_FP16_PARITY,
+  REVERB_INT8_PARITY,
+  REVERB_INT4_PARITY,
 ];
 
 /** Families in `models` without a manifest, by the start of their entries'
@@ -22,7 +32,6 @@ const MANIFESTS: readonly ParityManifest[] = [
  *  added here: it lands with a manifest. */
 const PENDING = [
   'privacyFilter.PRIVACY_FILTER',
-  'textToSpeech.REVERB',
   'objectDetection.YOLO26',
   'instanceSegmentation.YOLO26_SEG',
   'keypointDetection.YOLO26_POSE',

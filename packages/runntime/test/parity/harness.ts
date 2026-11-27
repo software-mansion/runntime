@@ -78,17 +78,24 @@ export async function readImage(path: string): Promise<ImageBuffer> {
   return imageBufferFromImageData(context.getImageData(0, 0, width, height));
 }
 
-/** The safetensors file at `url` with the F32 tensor `name` replaced by
- *  `change` of it: a model that loads and runs, and computes the wrong thing. */
+/** The elements of a float tensor as unsigned integers of their width, by
+ *  dtype: moving elements around needs no values. */
+const ELEMENTS = { F32: Uint32Array, F16: Uint16Array, BF16: Uint16Array } as const;
+type Elements = Uint32Array<ArrayBuffer> | Uint16Array<ArrayBuffer>;
+
+/** The safetensors file at `url` with the float tensor `name` replaced by
+ *  `change` of its elements: a model that loads and runs, and computes the
+ *  wrong thing. */
 async function brokenWeights(
   url: string,
   name: string,
-  change: (weight: Float32Array, shape: readonly number[]) => Float32Array,
+  change: <T extends Elements>(weight: T, shape: readonly number[]) => T,
 ): Promise<RangeSource> {
   const bytes = await fetchBytes(url);
   const info = (await parseSafetensorsHeader(bufferSource(bytes))).tensors.get(name);
-  if (info?.dtype !== 'F32') throw new Error(`${url}: ${name} is not an F32 tensor`);
-  const weight = new Float32Array(bytes.slice(info.begin, info.end).buffer);
+  const View = info && ELEMENTS[info.dtype as keyof typeof ELEMENTS];
+  if (!info || !View) throw new Error(`${url}: ${name} is not an F32, F16 or BF16 tensor`);
+  const weight = new View(bytes.slice(info.begin, info.end).buffer);
   bytes.set(new Uint8Array(change(weight, info.shape).buffer), info.begin);
   return bufferSource(bytes);
 }
@@ -99,14 +106,14 @@ export function transposedWeights(url: string, name: string): Promise<RangeSourc
     if (rows === undefined || rows !== cols || weight.length !== rows * cols) {
       throw new Error(`${url}: ${name} is not a square weight`);
     }
-    return Float32Array.from(weight, (_, i) => weight[(i % rows) * rows + Math.floor(i / rows)]!);
+    return weight.map((_, i) => weight[(i % rows) * rows + Math.floor(i / rows)]!) as typeof weight;
   });
 }
 
 /** The file at `url` with the vector `name` back to front: a norm that
  *  gives every channel another channel's value. */
 export function reversedWeights(url: string, name: string): Promise<RangeSource> {
-  return brokenWeights(url, name, (weight) => weight.slice().reverse());
+  return brokenWeights(url, name, (weight) => weight.slice().reverse() as typeof weight);
 }
 
 /** A report cell of a summary: mean / p99 / max. */
@@ -114,12 +121,15 @@ export const summaryCell = ({ mean, p99, max }: Summary) =>
   [mean, p99, max].map((v) => v.toExponential(1)).join(' / ');
 
 /** Writes `rows` as a markdown table to `.parity/results/<family>.md`, the
- *  table a pull request carries. Columns follow the first row's keys. */
+ *  table a pull request carries. Columns follow the first row's keys. A
+ *  family with no row, as in a run filtered to other families, keeps the
+ *  table it has. */
 async function writeReport(
   family: string,
   rows: readonly Readonly<Record<string, string>>[],
 ): Promise<void> {
-  const columns = Object.keys(rows[0] ?? {});
+  if (rows.length === 0) return;
+  const columns = Object.keys(rows[0]!);
   const line = (cells: readonly string[]) => `| ${cells.join(' | ')} |`;
   const table = [
     line(columns),
