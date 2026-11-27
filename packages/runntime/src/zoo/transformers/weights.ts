@@ -6,6 +6,7 @@ import {
   isRunntimeError,
   type RangeSource,
 } from '../../core/index.ts';
+import { countDownloads, countOnFirstBytes } from '../load.ts';
 
 /** The cache key of a weights URL: the whole path without the scheme, so
  *  same-named files of two sizes or precisions stay apart. */
@@ -20,13 +21,14 @@ export async function loadStreamedWeights(
   cacheId: string,
 ): Promise<Awaited<ReturnType<typeof fromSafetensors>>> {
   const cache = await createOpfsCache('runntime-weights');
-  return fromSafetensors(url, { cache, cacheId });
+  return fromSafetensors(url, { cache, cacheId, onBytes: countOnFirstBytes(url) });
 }
 
 export async function cachedWeightsSource(url: string, key: string): Promise<RangeSource> {
   const cache = await createOpfsCache('runntime-weights');
-  if (!cache) return httpRangeSource(url);
+  if (!cache) return httpRangeSource(url, { onBytes: countOnFirstBytes(url) });
   const fetchAll = async () => {
+    countDownloads(url);
     const res = await fetch(url);
     if (!res.ok) throw new Error(`runntime backend: fetching weights failed (${res.status})`);
     return new Uint8Array(await res.arrayBuffer());

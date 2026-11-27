@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WeightCache } from '../../../src/core/weights/cache.ts';
 import { f16ToF32 } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
@@ -15,6 +14,7 @@ import {
   type RangeSource,
   type SafeTensorInfo,
 } from '../../../src/core/weights/safetensors.ts';
+import { memoryCache } from './checkpoint.ts';
 
 // Files are built here from the format spec, not with the code under test:
 // an 8-byte little-endian header length, the JSON header, then the payload.
@@ -82,28 +82,6 @@ function flaky(inner: RangeSource, failures: number): RangeSource {
 const failingSource: RangeSource = {
   read: () => Promise.reject(new Error('the network must not be used')),
 };
-
-function memoryCache() {
-  const entries = new Map<string, ArrayBuffer>();
-  const cache: WeightCache = {
-    get: async (key) => entries.get(key),
-    async getOrCompute(key, compute) {
-      const hit = entries.get(key);
-      if (hit) return hit;
-      const view = await compute();
-      const buf = new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
-      entries.set(key, buf);
-      return buf;
-    },
-    async deletePrefix(prefix) {
-      for (const key of [...entries.keys()]) if (key.startsWith(prefix)) entries.delete(key);
-    },
-    async clear() {
-      entries.clear();
-    },
-  };
-  return { cache, entries };
-}
 
 describe('parseSafetensorsHeader', () => {
   it('reads dtype, shape and absolute offsets', async () => {

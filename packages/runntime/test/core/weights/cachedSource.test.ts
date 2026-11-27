@@ -1,25 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { WeightCache } from '../../../src/core/weights/cache.ts';
 import { cachedRangeSource } from '../../../src/core/weights/cachedSource.ts';
 import { bufferSource, type RangeSource } from '../../../src/core/weights/safetensors.ts';
+import { memoryCache } from './checkpoint.ts';
 
 const file = Uint8Array.from({ length: 16 }, (_, i) => i);
 
 function setup(fileId = 'model') {
-  const entries = new Map<string, ArrayBuffer>();
-  const cache: WeightCache = {
-    get: async (key) => entries.get(key),
-    async getOrCompute(key, compute) {
-      const hit = entries.get(key);
-      if (hit) return hit;
-      const view = await compute();
-      const buf = new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
-      entries.set(key, buf);
-      return buf;
-    },
-    deletePrefix: async () => {},
-    clear: async () => entries.clear(),
-  };
+  const { cache, entries } = memoryCache();
   let reads = 0;
   const inner: RangeSource = {
     read(begin, end) {
