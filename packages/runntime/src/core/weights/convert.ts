@@ -70,14 +70,33 @@ export function f32ToF16Bits(value: number): number {
   return sign | (e << 10) | (mant >>> 13);
 }
 
+/** f16 bit patterns without the sign bit: the largest finite value (65504),
+ *  infinity and the quiet NaN. */
+const F16_MAX_BITS = 0x7bff;
+const F16_INF_BITS = 0x7c00;
+const F16_NAN_BITS = 0x7e00;
+
+/** The largest finite f16. */
+const F16_MAX = 65504;
+
+/** Same bits as f32ToF16Bits on every value: Float16Array rounds to nearest
+ *  even, and one pass over the few results at or past the f16 max clamps a
+ *  finite overflow to ±65504 instead of ±Inf and makes every NaN quiet. */
 export function f32ArrayToF16Bits(src: Float32Array): { data: Uint16Array; clamped: number } {
-  const data = new Uint16Array(src.length);
+  const data = new Uint16Array(new Float16Array(src).buffer);
   let clamped = 0;
-  for (let i = 0; i < src.length; i++) {
-    const value = src[i]!;
-    const bits = f32ToF16Bits(value);
-    data[i] = bits;
-    if ((bits & 0x7fff) === 0x7bff && Math.abs(value) > 65504) clamped++;
+  for (let i = 0; i < data.length; i++) {
+    const bits = data[i]!;
+    const magnitude = bits & 0x7fff;
+    if (magnitude < F16_MAX_BITS) continue;
+    if (magnitude > F16_INF_BITS) {
+      data[i] = (bits & 0x8000) | F16_NAN_BITS;
+      continue;
+    }
+    const size = Math.abs(src[i]!);
+    if (size <= F16_MAX || size === Infinity) continue;
+    data[i] = (bits & 0x8000) | F16_MAX_BITS;
+    clamped++;
   }
   return { data, clamped };
 }
