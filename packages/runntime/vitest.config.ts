@@ -9,6 +9,8 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
+          // Node 22 ships Float16Array behind this flag; Node 24 has it on by default.
+          execArgv: ['--js-float16array'],
           include: ['test/**/*.test.ts'],
           exclude: ['test/**/*.gpu.test.ts'],
         },
