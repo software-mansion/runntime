@@ -20,7 +20,7 @@ through the CPU.
 It ships as one package, `runntime`, with two entry points:
 
 - **`runntime/zoo`** - ready-to-run models for speech, vision and text. One function call gives you a running model.
-- **`runntime/core`** - the building blocks behind them, for composing your own models with PyTorch-like semantics.
+- **`runntime/core`** - the building blocks behind them, for composing your own models with PyTorch-like semantics. Not public yet, coming soon.
 
 ## Supported models
 
@@ -40,15 +40,16 @@ The zoo package currently supports 19 models across 9 tasks, each loaded with on
 
 ## Performance
 
-Against a popular alternative inference runtime on the same GPU, tensor in
-to tensor out (all-MiniLM-L6-v2, f16, Apple M4 Pro, Chrome):
+Against two popular alternative inference runtimes on the same GPU, tensor
+in to tensor out (all-MiniLM-L6-v2, Apple M4 Pro, Chrome):
 
-| Input                       | Speedup   |
-| --------------------------- | --------- |
-| 1 sentence (32 tokens)      | **2.25×** |
-| 128 tokens                  | **1.83×** |
-| Real text, one at a time    | **2.05×** |
-| Real text, in batches of 32 | **2.36×** |
+| Input                       | vs runtime A | vs runtime B |
+| --------------------------- | ------------ | ------------ |
+| 1 sentence (32 tokens)      | **2.25×**    | -            |
+| 128 tokens                  | **1.83×**    | **3.8×**     |
+| 32 × 128 tokens             | **1.26×**    | **4.2×**     |
+| Real text, one at a time    | **2.05×**    | -            |
+| Real text, in batches of 32 | **2.36×**    | -            |
 
 For more benchmarks and measuring methodology, see the
 [benchmarks page](https://docs.swmansion.com/runntime/zoo/benchmarks/).
