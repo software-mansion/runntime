@@ -38,9 +38,7 @@ export function f16BitsToF32(bits: number): number {
 }
 
 export function f16ToF32(src: Uint16Array): Float32Array {
-  const out = new Float32Array(src.length);
-  for (let i = 0; i < src.length; i++) out[i] = f16BitsToF32(src[i]!);
-  return out;
+  return new Float32Array(new Float16Array(src.buffer, src.byteOffset, src.length));
 }
 
 const f16Scratch = new DataView(new ArrayBuffer(4));
