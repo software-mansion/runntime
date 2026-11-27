@@ -36,22 +36,27 @@ def cosine_noise(reference: NDArray[np.float32], double: NDArray[np.float64]) ->
     return float((1 - cosine).max())
 
 
-def save(
+def save(  # noqa: PLR0913
     family: str,
     inputs: object,
     tensors: dict[str, NDArray[np.float32] | NDArray[np.int32]],
     meta: dict[str, Any],
     libraries: list[str],
+    *,
+    outputs: object = None,
 ) -> None:
     """Writes `inputs.json`, `reference.safetensors` and `meta.json`, with the
-    version of Python and of each library in `libraries`. Refuses a noise of
-    0 in `meta`: a threshold in multiples of it is 0."""
+    version of Python and of each library in `libraries`, and `outputs.json`
+    when the task outputs are not tensors. Refuses a noise of 0 in `meta`: a
+    threshold in multiples of it is 0."""
     for name, value in meta["noise"].items():
         if value == 0:
             raise RuntimeError(f"the reference noise of {name} is 0")
     out = references_dir(family)
     (out / "inputs.json").write_text(json.dumps(inputs, ensure_ascii=False, indent=2))
     save_file(tensors, out / "reference.safetensors")
+    if outputs is not None:
+        (out / "outputs.json").write_text(json.dumps(outputs, ensure_ascii=False, indent=2))
     versions = {"python": platform.python_version()} | {name: version(name) for name in libraries}
     (out / "meta.json").write_text(json.dumps(meta | {"versions": versions}, indent=2))
     print(f"saved {family} to {out}")

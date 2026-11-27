@@ -1441,6 +1441,7 @@ dependencies = [
     { name = "soundfile" },
     { name = "timm" },
     { name = "torch" },
+    { name = "transformers" },
 ]
 
 [package.dev-dependencies]
@@ -1459,6 +1460,7 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.14.0" },
     { name = "timm", specifier = ">=1.0.31" },
     { name = "torch", specifier = ">=2.6" },
+    { name = "transformers", specifier = ">=5.22" },
 ]
 
 [package.metadata.requires-dev]
