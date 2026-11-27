@@ -44,8 +44,43 @@ export function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+/** A file of a hosted model: its repo, a `runntime-*` one or Reverb-TTS. */
+const HOSTED = /^https:\/\/huggingface\.co\/software-mansion\/(runntime-[^/]+|Reverb-TTS)\//;
+
+/** Counts one download on the Hugging Face Hub when `path` is a file of a
+ *  hosted model. The Hub counts requests for a repo's config.json, and the
+ *  loaders read model.safetensors instead. Sends nothing for any other URL
+ *  or a RangeSource. Not awaited, and a failed request is ignored. */
+export function countDownloads(path: ModelPath): void {
+  const hosted = typeof path === 'string' ? HOSTED.exec(path) : null;
+  if (!hosted) return;
+  const dir = hosted[1] === 'Reverb-TTS' ? 'model/safetensors/fp16/' : '';
+  try {
+    const counter = fetch(`${hosted[0]}resolve/main/${dir}config.json`, { method: 'HEAD' });
+    void Promise.resolve(counter).catch(() => {});
+  } catch {
+    // A fetch that is missing or throws counts nothing.
+  }
+}
+
+/** An onBytes for the file at `path`: counts its download on the first chunk
+ *  fetched from the network, then passes every chunk to `onBytes`. A file
+ *  read from a cache fetches no chunk, so it counts nothing. */
+export function countOnFirstBytes(
+  path: ModelPath,
+  onBytes?: (chunkBytes: number) => void,
+): (chunkBytes: number) => void {
+  let counted = false;
+  return (chunkBytes) => {
+    if (!counted) countDownloads(path);
+    counted = true;
+    onBytes?.(chunkBytes);
+  };
+}
+
 /** Opens a safetensors file and reads its header. Tensor bytes download
- *  later, in loadStateDict. Fails with LOAD_FAILED, naming the file, or
+ *  later, in loadStateDict. A hosted file counts one download when its first
+ *  bytes come from the network. Fails with LOAD_FAILED, naming the file, or
  *  LOAD_ABORTED. */
 export async function openWeights(
   modelPath: ModelPath,
@@ -54,7 +89,7 @@ export async function openWeights(
   throwIfAborted(opts.signal);
   try {
     return await fromSafetensors(modelPath, {
-      onBytes: opts.onBytes,
+      onBytes: countOnFirstBytes(modelPath, opts.onBytes),
       cache: opts.cache,
       cacheId: opts.cacheId,
     });

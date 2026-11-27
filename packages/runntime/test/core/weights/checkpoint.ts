@@ -1,4 +1,6 @@
-/** Synthetic checkpoints for the weight helper and state dict hook tests. */
+/** Synthetic checkpoints for the weight helper and state dict hook tests,
+ *  and a WeightCache in memory. */
+import type { WeightCache } from '../../../src/core/weights/cache.ts';
 import { f16ToF32, f32ToF16Bits } from '../../../src/core/weights/convert.ts';
 import {
   bufferSource,
@@ -8,6 +10,29 @@ import {
   type LazyTensor,
   type QuantTensor,
 } from '../../../src/core/weights/safetensors.ts';
+
+/** A WeightCache over a Map, with the Map as `entries`. */
+export function memoryCache() {
+  const entries = new Map<string, ArrayBuffer>();
+  const cache: WeightCache = {
+    get: async (key) => entries.get(key),
+    async getOrCompute(key, compute) {
+      const hit = entries.get(key);
+      if (hit) return hit;
+      const view = await compute();
+      const buf = new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
+      entries.set(key, buf);
+      return buf;
+    },
+    async deletePrefix(prefix) {
+      for (const key of [...entries.keys()]) if (key.startsWith(prefix)) entries.delete(key);
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+  return { cache, entries };
+}
 
 export type Entry = { values: number[]; shape: number[] };
 
