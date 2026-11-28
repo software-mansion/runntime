@@ -7,14 +7,11 @@ import tgpu, { common, d, std, type TgpuRoot } from 'typegpu';
 import { runCanvasLoop } from './canvasLoop';
 import { hash21, valueNoise } from './noise';
 
-/** Canvas pixels per CSS pixel for the pill. The marble is soft, so a low
- *  resolution is enough there; the letters are small and drawn sharper. */
-const RENDER_SCALE = 0.5;
-const LETTER_SCALE = 2;
+/** Most canvas pixels per CSS pixel. The targets are small, so they render at
+ *  the device's pixel ratio, up to this, and the grain stays one pixel fine. */
+const MAX_PIXEL_RATIO = 2;
 /** How far each warp layer pushes the next one, in noise cells. */
 const WARP = 1.6;
-/** How fast the marble flows, in noise cells per second. */
-const FLOW_SPEED = 0.035;
 /** Seconds into the flow the first frame shows. At 0 the bands start in a
  *  plain arrangement; later the warp has folded them into marble. */
 const START_TIME = 40;
@@ -27,6 +24,8 @@ const Params = d.struct({
   /** Darkest and lightest gray of this target's marble. */
   dark: d.f32,
   light: d.f32,
+  /** How fast the marble flows, in noise cells per second. */
+  flowSpeed: d.f32,
 });
 const layout = tgpu.bindGroupLayout({ params: { uniform: Params } });
 
@@ -50,7 +49,7 @@ const marbleFragment = tgpu.fragmentFn({
 })(({ pos }) => {
   'use gpu';
   const params = layout.$.params;
-  const flow = params.time * FLOW_SPEED;
+  const flow = params.time * params.flowSpeed;
   // Stretched across, so the bands run mostly up and down like poured paint.
   const point = (pos.xy / params.resolution.x) * params.cells;
   const warp1 = d.vec2f(fbm(point + d.vec2f(flow, 0)), fbm(point + d.vec2f(5.2, 1.3 - flow)));
@@ -77,12 +76,15 @@ export interface MarbleTarget {
    *  the pill, so no part of a glyph sinks into the black page. */
   dark: number;
   light: number;
+  /** Noise cells per second. A target that shows few cells needs more, or
+   *  its flow moves under a pixel per second and reads as still. */
+  flowSpeed: number;
 }
 
 /** Starts the marble on every target and returns a function that stops it.
  *  The first target drives the frame loop and must stay on screen (the fixed
- *  navbar pill); the others are letters, drawn sharper, in the same frame
- *  while they are visible. Throws when the shader does not resolve; WGSL validation errors
+ *  navbar pill); the others are drawn in the same frame while they are
+ *  visible. Throws when the shader does not resolve; WGSL validation errors
  *  arrive later, on the device's error scope. */
 export function startMarble(
   root: TgpuRoot,
@@ -95,12 +97,20 @@ export function startMarble(
     targets: { format: navigator.gpu.getPreferredCanvasFormat() },
   });
 
-  const drawers = targets.map(({ canvas, cells, dark, light }) => {
+  const pixelRatio = Math.min(devicePixelRatio, MAX_PIXEL_RATIO);
+  const drawers = targets.map(({ canvas, cells, dark, light, flowSpeed }) => {
     const context = root.configureContext({ canvas, alphaMode: 'opaque' });
     const paramsBuffer = root.createBuffer(Params).$usage('uniform');
     const bound = pipeline.with(root.createBindGroup(layout, { params: paramsBuffer }));
     // Reused every frame, so drawing allocates nothing.
-    const values = { resolution: d.vec2f(), time: 0, cells: d.vec2f(...cells), dark, light };
+    const values = {
+      resolution: d.vec2f(),
+      time: 0,
+      cells: d.vec2f(...cells),
+      dark,
+      light,
+      flowSpeed,
+    };
     let onScreen = true;
     return {
       canvas,
@@ -123,8 +133,8 @@ export function startMarble(
   let lastTime = START_TIME;
   const resizeOther = (canvas: HTMLCanvasElement) => {
     const rect = canvas.getBoundingClientRect();
-    canvas.width = Math.max(1, Math.round(rect.width * LETTER_SCALE));
-    canvas.height = Math.max(1, Math.round(rect.height * LETTER_SCALE));
+    canvas.width = Math.max(1, Math.round(rect.width * pixelRatio));
+    canvas.height = Math.max(1, Math.round(rect.height * pixelRatio));
   };
   for (const other of others) resizeOther(other.canvas);
 
@@ -150,7 +160,7 @@ export function startMarble(
 
   const stopLoop = runCanvasLoop({
     canvas: primary.canvas,
-    scale: RENDER_SCALE,
+    scale: pixelRatio,
     still,
     startTime: START_TIME,
     draw: (time) => {

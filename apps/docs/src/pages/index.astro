@@ -11,40 +11,55 @@ import '../styles/tokens.css';
 
 const base = import.meta.env.BASE_URL;
 
-/** The wordmark drawn in two parts: "ru" and "time" as one white path, and
- *  the NN as a marble-filled box masked to the letters, so the word keeps its
- *  exact metrics. Its third and fourth subpaths are the two N's. */
-const wordmarkViewBox = wordmarkSource.match(/viewBox="([^"]+)"/)![1]!;
-const wordmarkSubpaths = wordmarkSource.match(/ d="([^"]+)"/)![1]!.split(/(?=M)/);
-const wordmarkNn = wordmarkSubpaths.slice(2, 4).join('');
-const wordmarkRest = [...wordmarkSubpaths.slice(0, 2), ...wordmarkSubpaths.slice(4)].join('');
-/** The NN's bounding box in the wordmark's units, from its path. */
-const NN_BOX = { x: 102.9, y: 2.8, width: 131.1, height: 70 };
-const [, , wordmarkWidth, wordmarkHeight] = wordmarkViewBox.split(' ').map(Number) as [
-  number,
-  number,
-  number,
-  number,
-];
+/** The favicon's nn glyph, and its bounding box in the favicon's units. */
+const NN_GLYPH =
+  'M3 10h12v3.2H6.2V23H3V10Zm8.8 3.2H15V23h-3.2v-9.8ZM17 10h12v3.2h-8.8V23H17V10Zm8.8 3.2H29V23h-3.2v-9.8Z';
+const NN_GLYPH_BOX = { x: 3, y: 10, width: 26, height: 13 };
+
+/**
+ * The hero wordmark: "ru" and "time" from the logo, in white, with the
+ * favicon's nn glyph between them in place of the logo's NN, filled with the
+ * marble. The logo's subpaths 0-1 are "ru", 2-3 the NN and 4 onward "time".
+ * Measured from those paths, in the logo's units: the baseline is at y 72.8,
+ * the x-height top at y 21.4, "u" ends at x 89 and "time" starts at x 242.6.
+ */
+const LOGO_BASELINE = 72.8;
+const LOGO_X_HEIGHT = 51.4;
+const LOGO_U_RIGHT = 89;
+const LOGO_TIME_LEFT = 242.6;
+/** Space on each side of the nn, in logo units: about the logo's own letter gaps. */
+const NN_SIDE_GAP = 10;
+const logoViewBox = wordmarkSource.match(/viewBox="([^"]+)"/)![1]!.split(' ').map(Number);
+const logoWidth = logoViewBox[2]!;
+const logoHeight = logoViewBox[3]!;
+const logoSubpaths = wordmarkSource.match(/ d="([^"]+)"/)![1]!.split(/(?=M)/);
+const wordmarkRu = logoSubpaths.slice(0, 2).join('');
+const wordmarkTime = logoSubpaths.slice(4).join('');
+/** The nn scaled to the x-height and set on the baseline, and how far "time" moves left. */
+const heroNn = {
+  x: LOGO_U_RIGHT + NN_SIDE_GAP,
+  y: LOGO_BASELINE - LOGO_X_HEIGHT,
+  width: (LOGO_X_HEIGHT * NN_GLYPH_BOX.width) / NN_GLYPH_BOX.height,
+  height: LOGO_X_HEIGHT,
+};
+const timeShift = LOGO_TIME_LEFT - (heroNn.x + heroNn.width + NN_SIDE_GAP);
+const wordmarkWidth = logoWidth - timeShift;
+const wordmarkViewBox = `0 0 ${wordmarkWidth} ${logoHeight}`;
 const heroNnBox = [
-  `left: ${(100 * NN_BOX.x) / wordmarkWidth}%`,
-  `top: ${(100 * NN_BOX.y) / wordmarkHeight}%`,
-  `width: ${(100 * NN_BOX.width) / wordmarkWidth}%`,
-  `height: ${(100 * NN_BOX.height) / wordmarkHeight}%`,
+  `left: ${(100 * heroNn.x) / wordmarkWidth}%`,
+  `top: ${(100 * heroNn.y) / logoHeight}%`,
+  `width: ${(100 * heroNn.width) / wordmarkWidth}%`,
+  `height: ${(100 * heroNn.height) / logoHeight}%`,
 ].join('; ');
 /** A CSS mask of an SVG path, cropped to `viewBox`. */
 const pathMask = (viewBox: string, path: string) =>
   `url("data:image/svg+xml,${encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" preserveAspectRatio="none"><path d="${path}"/></svg>`,
   )}")`;
-const heroNnMask = pathMask(
-  `${NN_BOX.x} ${NN_BOX.y} ${NN_BOX.width} ${NN_BOX.height}`,
-  wordmarkNn,
-);
-/** The favicon's NN glyph, cropped to its bounding box. */
-const navNnMask = pathMask(
-  '3 10 26 13',
-  'M3 10h12v3.2H6.2V23H3V10Zm8.8 3.2H15V23h-3.2v-9.8ZM17 10h12v3.2h-8.8V23H17V10Zm8.8 3.2H29V23h-3.2v-9.8Z',
+/** The nn mask, shared by the nav mark and the hero. */
+const nnMask = pathMask(
+  `${NN_GLYPH_BOX.x} ${NN_GLYPH_BOX.y} ${NN_GLYPH_BOX.width} ${NN_GLYPH_BOX.height}`,
+  NN_GLYPH,
 );
 const docs = `${base}zoo/getting-started/`;
 const github = 'https://github.com/software-mansion/runntime';
@@ -152,7 +167,7 @@ const perfScaleMax = Math.max(
     <header class="bar">
       <a class="bar-mark" href={base} aria-label="ruNNtime home">
         <!-- The favicon's NN, filled with the marble: the hero spells out ruNNtime. -->
-        <span class="nn-fill nn-nav" style={`mask-image: ${navNnMask}`}>
+        <span class="nn-fill nn-nav" style={`mask-image: ${nnMask}`}>
           <canvas class="nn-canvas" aria-hidden="true"></canvas>
         </span>
       </a>
@@ -172,8 +187,12 @@ const perfScaleMax = Math.max(
           <h1>
             <span class="sr-only">ruNNtime</span>
             <span class="hero-wordmark" aria-hidden="true">
-              <svg viewBox={wordmarkViewBox}><path class="wordmark-dots" d={wordmarkRest}></path></svg>
-              <span class="nn-fill nn-hero" style={`mask-image: ${heroNnMask}; ${heroNnBox}`}>
+              <svg viewBox={wordmarkViewBox}>
+                <path d={wordmarkRu} fill="currentColor"></path>
+                <path d={wordmarkTime} fill="currentColor" transform={`translate(${-timeShift} 0)`}
+                ></path>
+              </svg>
+              <span class="nn-fill nn-hero" style={`mask-image: ${nnMask}; ${heroNnBox}`}>
                 <canvas class="nn-canvas"></canvas>
               </span>
             </span>
@@ -362,7 +381,10 @@ const perfScaleMax = Math.max(
             fine-tune models, deploy them anywhere and turn them into agents that solve real business
             problems.
           </p>
-          <a class="button primary" href={`${labs}#contact`}>Hire us</a>
+          <a class="button primary glitter" href={`${labs}#contact`}>
+            <canvas class="glitter-canvas" aria-hidden="true"></canvas>
+            <span class="glitter-label">Hire us</span>
+          </a>
         </section>
         <div class="foot-bottom">
           <div class="foot-brand">
@@ -425,9 +447,9 @@ const perfScaleMax = Math.max(
           // The pill drives the loop: it is fixed, so always on screen. The
           // letters take a lighter range, so no stroke sinks into the black.
           const marbleTargets = [
-            { canvas: barCanvas, cells: [4, 1.4], dark: 0.04, light: 0.85 },
-            { canvas: navNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1 },
-            { canvas: heroNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1 },
+            { canvas: barCanvas, cells: [4, 1.4], dark: 0.04, light: 0.85, flowSpeed: 0.05 },
+            { canvas: navNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1, flowSpeed: 0.18 },
+            { canvas: heroNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1, flowSpeed: 0.18 },
           ] as const;
           stops.push(startMarble(root, marbleTargets, { still }));
         } finally {
@@ -467,15 +489,16 @@ const perfScaleMax = Math.max(
         page.dataset.gpu = 'off';
       });
 
-      // Touch screens have no hover, so the button keeps its plain fill there.
+      // Touch screens have no hover, so the buttons keep their plain fill there.
       if (matchMedia('(hover: hover)').matches) {
-        const button = document.querySelector<HTMLElement>('.glitter')!;
-        const canvas = button.querySelector('canvas')!;
-        let detach = attachPixelGlitter(button, canvas, { still: reducedMotion.matches });
-        reducedMotion.addEventListener('change', () => {
-          detach();
-          detach = attachPixelGlitter(button, canvas, { still: reducedMotion.matches });
-        });
+        for (const button of document.querySelectorAll<HTMLElement>('.glitter')) {
+          const canvas = button.querySelector('canvas')!;
+          let detach = attachPixelGlitter(button, canvas, { still: reducedMotion.matches });
+          reducedMotion.addEventListener('change', () => {
+            detach();
+            detach = attachPixelGlitter(button, canvas, { still: reducedMotion.matches });
+          });
+        }
       }
     </script>
   </body>
@@ -685,21 +708,6 @@ const perfScaleMax = Math.max(
     display: block;
     width: 100%;
     height: auto;
-    /* The dotted stroke sits half outside the letters' edges. */
-    overflow: visible;
-  }
-  /*
-   * "ru" and "time" drawn as round dots along their outlines: a near-zero
-   * dash with round caps. Units are the wordmark's viewBox, about 0.9 CSS px
-   * each at full size.
-   */
-  .wordmark-dots {
-    fill: none;
-    stroke: var(--n-89);
-    stroke-width: 3.2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-dasharray: 0.01 6.4;
   }
   .nn-hero {
     position: absolute;
