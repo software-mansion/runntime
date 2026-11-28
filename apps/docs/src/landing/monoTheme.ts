@@ -7,7 +7,7 @@ export const monoTheme = {
   tokenColors: [
     {
       scope: ['comment', 'punctuation.definition.comment'],
-      settings: { foreground: '#767676', fontStyle: 'italic' },
+      settings: { foreground: '#7c7c7c', fontStyle: 'italic' },
     },
     {
       scope: ['keyword', 'storage', 'storage.type', 'storage.modifier', 'variable.language'],

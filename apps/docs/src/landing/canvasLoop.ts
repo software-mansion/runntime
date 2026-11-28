@@ -14,7 +14,7 @@ export interface CanvasLoop {
 }
 
 /** Starts the loop and returns a function that stops it. Draws the first
- *  frame before returning, so a shader that does not compile throws here. */
+ *  frame before returning, so a caller's error scope around this call sees it. */
 export function runCanvasLoop({ canvas, scale, still, startTime, draw }: CanvasLoop): () => void {
   let stopped = false;
   let frame = 0;

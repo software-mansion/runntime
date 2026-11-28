@@ -1,5 +1,6 @@
 /** The landing page hero: a convolutional network looking at an abstract image, drawn as
- *  a stack of feature maps in perspective and ray-traced in one fragment shader. */
+ *  a stack of feature maps in perspective and ray-traced in one fragment shader.
+ *  The canvas is fixed behind the whole page; scrolling moves the camera deeper. */
 
 import tgpu, { common, d, std, type TgpuRoot } from 'typegpu';
 import { runCanvasLoop } from './canvasLoop';
@@ -89,15 +90,17 @@ const inputImage = tgpu.fn(
   return std.clamp(value, 0, 1);
 });
 
-/** The gradient of the input image, by central differences of width `e`. */
+/** The gradient of the input image, by central differences `spacing` apart. */
 const imageGradient = tgpu.fn(
   [d.vec2f, d.vec2f, d.f32],
   d.vec2f,
-)((q, drift, e) => {
+)((q, drift, spacing) => {
   'use gpu';
-  const dx = inputImage(q + d.vec2f(e, 0), drift) - inputImage(q - d.vec2f(e, 0), drift);
-  const dy = inputImage(q + d.vec2f(0, e), drift) - inputImage(q - d.vec2f(0, e), drift);
-  return d.vec2f(dx, dy) / (2 * e);
+  const right = d.vec2f(spacing, 0);
+  const up = d.vec2f(0, spacing);
+  const dx = inputImage(q + right, drift) - inputImage(q - right, drift);
+  const dy = inputImage(q + up, drift) - inputImage(q - up, drift);
+  return d.vec2f(dx, dy) / (2 * spacing);
 });
 
 /** Splits a map into `tiles`×`tiles` channels. Returns the position inside the
@@ -122,9 +125,9 @@ const edgeMap = tgpu.fn(
   'use gpu';
   const tile = channelTile(q, 2);
   const grid = (std.floor((tile.xy * 0.5 + 0.5) * 56) + 0.5) / 56;
-  const g = imageGradient(grid * 2 - 1, drift, 0.025);
+  const gradient = imageGradient(grid * 2 - 1, drift, 0.025);
   const angle = tile.z * (Math.PI / 4);
-  const response = std.abs(std.dot(g, d.vec2f(std.cos(angle), std.sin(angle))));
+  const response = std.abs(std.dot(gradient, d.vec2f(std.cos(angle), std.sin(angle))));
   return std.min(response * 0.16, 1) * tile.w;
 });
 
@@ -138,9 +141,9 @@ const pooledMap = tgpu.fn(
   const cells = d.f32(13);
   const u = (tile.xy * 0.5 + 0.5) * cells;
   const center = ((std.floor(u) + 0.5) / cells) * 2 - 1;
-  const g = imageGradient(center, drift, 0.07);
+  const gradient = imageGradient(center, drift, 0.07);
   const angle = tile.z * ((2 * Math.PI) / 9);
-  const response = std.max(std.dot(g, d.vec2f(std.cos(angle), std.sin(angle))), 0);
+  const response = std.max(std.dot(gradient, d.vec2f(std.cos(angle), std.sin(angle))), 0);
   const f = std.abs(std.fract(u) - 0.5);
   const block = std.step(std.max(f.x, f.y), 0.38);
   return std.min(response * 0.7, 1) * block * tile.w;
@@ -156,40 +159,48 @@ const sparseMap = tgpu.fn(
   const u = (q * 0.5 + 0.5) * cells;
   const cell = std.floor(u);
   const center = ((cell + 0.5) / cells) * 2 - 1;
-  const g = imageGradient(center, drift, 0.12);
+  const gradient = imageGradient(center, drift, 0.12);
   const near = 1 - std.smoothstep(0.1, 0.45, std.length(center - focus));
   const unit = hash21(cell + 7.1);
-  const act = std.clamp(std.smoothstep(1.2, 3.2, std.length(g)) * unit * 1.4 + near * 0.7, 0, 1);
-  const radius = 0.12 + 0.26 * act;
+  const activation = std.clamp(
+    std.smoothstep(1.2, 3.2, std.length(gradient)) * unit * 1.4 + near * 0.7,
+    0,
+    1,
+  );
+  const radius = 0.12 + 0.26 * activation;
   const disc = 1 - std.smoothstep(radius - 0.05, radius, std.length(std.fract(u) - 0.5));
-  return (0.12 + 0.88 * act) * disc;
+  return (0.12 + 0.88 * activation) * disc;
 });
 
-/** The output vector, at `lp` in world units around the map center. `pulse`
+/** The output vector, at `localPosition` in world units around the map center. `pulse`
  *  is the arrival of the forward pass, 0 to 1. */
 const outputMap = tgpu.fn(
   [d.vec2f, d.f32],
   d.f32,
-)((lp, pulse) => {
+)((localPosition, pulse) => {
   'use gpu';
   const pitch = (2 * outputHalf) / OUTPUT_NODES;
-  const slot = std.clamp(std.floor((lp.y + outputHalf) / pitch), 0, OUTPUT_NODES - 1);
+  const slot = std.clamp(std.floor((localPosition.y + outputHalf) / pitch), 0, OUTPUT_NODES - 1);
   const center = d.vec2f(0, -outputHalf + (slot + 0.5) * pitch);
   const winner = 1 - std.step(0.5, std.abs(slot - (OUTPUT_NODES - 1 - OUTPUT_WINNER)));
-  const act = std.mix(0.12 + 0.3 * hash21(d.vec2f(slot, 3.3)), 1, winner * (0.3 + 0.7 * pulse));
-  const r = std.length(lp - center);
+  const activation = std.mix(
+    0.12 + 0.3 * hash21(d.vec2f(slot, 3.3)),
+    1,
+    winner * (0.3 + 0.7 * pulse),
+  );
+  const r = std.length(localPosition - center);
   const node = 1 - std.smoothstep(0.045, 0.055, r);
-  return act * node + std.exp(-r * 22) * winner * pulse * 0.7;
+  return activation * node + std.exp(-r * 22) * winner * pulse * 0.7;
 });
 
 /** Where the ray meets the map at depth `z`: local position (xy), inside (z), ray distance (w). */
 const hitMap = tgpu.fn(
   [d.vec3f, d.vec3f, d.f32, d.vec2f],
   d.vec4f,
-)((ro, rd, z, half) => {
+)((rayOrigin, rayDirection, z, half) => {
   'use gpu';
-  const t = (z - ro.z) / rd.z;
-  const p = ro + rd * t;
+  const t = (z - rayOrigin.z) / rayDirection.z;
+  const p = rayOrigin + rayDirection * t;
   const inside = std.step(std.abs(p.x), half.x) * std.step(std.abs(p.y), half.y) * std.step(0, t);
   return d.vec4f(p.xy, inside, t);
 });
@@ -200,11 +211,11 @@ const hitMap = tgpu.fn(
 const shadeMap = tgpu.fn(
   [d.vec2f, d.vec2f, d.f32, d.vec2f, d.f32, d.f32, d.f32, d.f32],
   d.f32,
-)((lp, half, content, focus, windowHalf, markerStrength, pixel, flash) => {
+)((localPosition, half, content, focus, windowHalf, markerStrength, pixel, flash) => {
   'use gpu';
-  const edge = std.min(half.x - std.abs(lp.x), half.y - std.abs(lp.y));
+  const edge = std.min(half.x - std.abs(localPosition.x), half.y - std.abs(localPosition.y));
   const border = 1 - std.smoothstep(pixel * 0.5, pixel * 1.5, edge);
-  const q = lp / half;
+  const q = localPosition / half;
   const w = std.abs(q - focus);
   const box = std.max(w.x, w.y);
   const inWindow =
@@ -222,17 +233,22 @@ const shadeMap = tgpu.fn(
 const segmentGlow = tgpu.fn(
   [d.vec3f, d.vec3f, d.vec3f, d.vec3f, d.f32, d.f32, d.f32],
   d.f32,
-)((ro, rd, a, b, pixelAngle, base, pulseAt) => {
+)((rayOrigin, rayDirection, a, b, pixelAngle, base, pulseAt) => {
   'use gpu';
-  const ab = b - a;
-  const w0 = ro - a;
-  const bd = std.dot(rd, ab);
-  const aa = std.dot(ab, ab);
-  const u = std.clamp((std.dot(ab, w0) - bd * std.dot(rd, w0)) / std.max(aa - bd * bd, 1e-5), 0, 1);
-  const onSegment = a + ab * u;
-  const s = std.max(std.dot(onSegment - ro, rd), 0);
-  const dist = std.length(ro + rd * s - onSegment);
-  const width = s * pixelAngle;
+  const segment = b - a;
+  const startToOrigin = rayOrigin - a;
+  const rayAlongSegment = std.dot(rayDirection, segment);
+  const segmentLengthSquared = std.dot(segment, segment);
+  const u = std.clamp(
+    (std.dot(segment, startToOrigin) - rayAlongSegment * std.dot(rayDirection, startToOrigin)) /
+      std.max(segmentLengthSquared - rayAlongSegment * rayAlongSegment, 1e-5),
+    0,
+    1,
+  );
+  const onSegment = a + segment * u;
+  const alongRay = std.max(std.dot(onSegment - rayOrigin, rayDirection), 0);
+  const dist = std.length(rayOrigin + rayDirection * alongRay - onSegment);
+  const width = alongRay * pixelAngle;
   const line = std.exp(-std.pow(dist / width, 2));
   const pulse =
     std.exp(-std.pow((u - pulseAt) * 14, 2)) * std.exp(-std.pow(dist / (width * 1.6), 2));
@@ -254,12 +270,24 @@ const mapPoint = tgpu.fn(
 const gapGlow = tgpu.fn(
   [d.vec3f, d.vec3f, d.f32, d.vec2f, d.vec2f, d.vec2f, d.vec2f, d.f32, d.f32, d.f32, d.f32],
   d.f32,
-)((ro, rd, layer, half, nextHalf, focus, nextFocus, windowHalf, progress, pixelAngle, time) => {
+)((
+  rayOrigin,
+  rayDirection,
+  layer,
+  half,
+  nextHalf,
+  focus,
+  nextFocus,
+  windowHalf,
+  progress,
+  pixelAngle,
+  time,
+) => {
   'use gpu';
   const tip = mapPoint(nextFocus, nextHalf, layer + 1);
   let glow = segmentGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     mapPoint(focus + d.vec2f(-windowHalf, -windowHalf), half, layer),
     tip,
     pixelAngle,
@@ -267,8 +295,8 @@ const gapGlow = tgpu.fn(
     progress,
   );
   glow += segmentGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     mapPoint(focus + d.vec2f(windowHalf, -windowHalf), half, layer),
     tip,
     pixelAngle,
@@ -276,8 +304,8 @@ const gapGlow = tgpu.fn(
     progress,
   );
   glow += segmentGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     mapPoint(focus + d.vec2f(windowHalf, windowHalf), half, layer),
     tip,
     pixelAngle,
@@ -285,8 +313,8 @@ const gapGlow = tgpu.fn(
     progress,
   );
   glow += segmentGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     mapPoint(focus + d.vec2f(-windowHalf, windowHalf), half, layer),
     tip,
     pixelAngle,
@@ -300,8 +328,8 @@ const gapGlow = tgpu.fn(
     const travel = std.fract(time * 0.21 + hash21(seed + 8.3));
     const a = mapPoint(from, half, layer);
     const b = mapPoint(to, nextHalf, layer + 1);
-    glow += segmentGlow(ro, rd, a, b, pixelAngle, 0.14, travel) * 0.22;
-    glow += segmentGlow(ro, rd, a, b, pixelAngle, 0, progress) * 0.4;
+    glow += segmentGlow(rayOrigin, rayDirection, a, b, pixelAngle, 0.14, travel) * 0.22;
+    glow += segmentGlow(rayOrigin, rayDirection, a, b, pixelAngle, 0, progress) * 0.4;
   }
   return glow;
 });
@@ -333,23 +361,24 @@ const heroFragment = tgpu.fragmentFn({
   out: d.vec4f,
 })(({ pos }) => {
   'use gpu';
-  const P = layout.$.params;
-  const res = P.resolution;
+  const params = layout.$.params;
+  const resolution = params.resolution;
   // Units of half the short side, so a portrait screen still fits the stack.
-  const shortSide = std.min(res.x, res.y);
-  const screen = d.vec2f(pos.x * 2 - res.x, res.y - pos.y * 2) / shortSide - P.shift;
+  const shortSide = std.min(resolution.x, resolution.y);
+  const screen =
+    d.vec2f(pos.x * 2 - resolution.x, resolution.y - pos.y * 2) / shortSide - params.shift;
 
-  const forward = std.normalize(P.lookAt - P.eye);
+  const forward = std.normalize(params.lookAt - params.eye);
   const right = std.normalize(std.cross(d.vec3f(0, 1, 0), forward));
   const up = std.cross(forward, right);
-  const ro = P.eye;
-  const rd = std.normalize(forward * FOCAL + right * screen.x + up * screen.y);
+  const rayOrigin = params.eye;
+  const rayDirection = std.normalize(forward * FOCAL + right * screen.x + up * screen.y);
   const pixelAngle = 2 / (shortSide * FOCAL);
 
-  const wave = std.fract(P.time / PASS_SECONDS) * 5.4 - 0.2;
-  const focus = P.focus;
+  const wave = std.fract(params.time / PASS_SECONDS) * 5.4 - 0.2;
+  const focus = params.focus;
   // The input image drifts slowly and leans toward the focus.
-  const drift = d.vec2f(std.sin(P.time * 0.13), std.cos(P.time * 0.11)) + focus * 0.3;
+  const drift = d.vec2f(std.sin(params.time * 0.13), std.cos(params.time * 0.11)) + focus * 0.3;
 
   const half0 = d.vec2f(HALF_SIZES[0][0], HALF_SIZES[0][1]);
   const half1 = d.vec2f(HALF_SIZES[1][0], HALF_SIZES[1][1]);
@@ -360,24 +389,16 @@ const heroFragment = tgpu.fragmentFn({
 
   // Back to front: each map covers the light behind it.
   let color = d.f32(0);
-  const h4 = hitMap(ro, rd, 4 * LAYER_GAP, half4);
-  if (h4.z > 0) {
+  const hit4 = hitMap(rayOrigin, rayDirection, 4 * LAYER_GAP, half4);
+  if (hit4.z > 0) {
     const pulse = std.smoothstep(3.7, 4.1, wave);
-    const shade = shadeMap(
-      h4.xy,
-      half4,
-      outputMap(h4.xy, pulse),
-      winner,
-      0,
-      0,
-      h4.w * pixelAngle,
-      0,
-    );
+    const content = outputMap(hit4.xy, pulse);
+    const shade = shadeMap(hit4.xy, half4, content, winner, 0, 0, hit4.w * pixelAngle, 0);
     color = std.mix(color, shade, MAP_OPACITY);
   }
   color += gapGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     3,
     half3,
     half4,
@@ -386,26 +407,26 @@ const heroFragment = tgpu.fragmentFn({
     WINDOW_HALF[3],
     wave - 3,
     pixelAngle,
-    P.time,
+    params.time,
   );
-  const h3 = hitMap(ro, rd, 3 * LAYER_GAP, half3);
-  if (h3.z > 0) {
-    const content = sparseMap(h3.xy / half3, drift, focus);
+  const hit3 = hitMap(rayOrigin, rayDirection, 3 * LAYER_GAP, half3);
+  if (hit3.z > 0) {
+    const content = sparseMap(hit3.xy / half3, drift, focus);
     const shade = shadeMap(
-      h3.xy,
+      hit3.xy,
       half3,
       content,
       focus,
       WINDOW_HALF[3],
       0.5,
-      h3.w * pixelAngle,
+      hit3.w * pixelAngle,
       flashAt(wave, 3),
     );
     color = std.mix(color, shade, MAP_OPACITY);
   }
   color += gapGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     2,
     half2,
     half3,
@@ -414,26 +435,26 @@ const heroFragment = tgpu.fragmentFn({
     WINDOW_HALF[2],
     wave - 2,
     pixelAngle,
-    P.time,
+    params.time,
   );
-  const h2 = hitMap(ro, rd, 2 * LAYER_GAP, half2);
-  if (h2.z > 0) {
-    const content = pooledMap(h2.xy / half2, drift);
+  const hit2 = hitMap(rayOrigin, rayDirection, 2 * LAYER_GAP, half2);
+  if (hit2.z > 0) {
+    const content = pooledMap(hit2.xy / half2, drift);
     const shade = shadeMap(
-      h2.xy,
+      hit2.xy,
       half2,
       content,
       focus,
       WINDOW_HALF[2],
       0.5,
-      h2.w * pixelAngle,
+      hit2.w * pixelAngle,
       flashAt(wave, 2),
     );
     color = std.mix(color, shade, MAP_OPACITY);
   }
   color += gapGlow(
-    ro,
-    rd,
+    rayOrigin,
+    rayDirection,
     1,
     half1,
     half2,
@@ -442,47 +463,59 @@ const heroFragment = tgpu.fragmentFn({
     WINDOW_HALF[1],
     wave - 1,
     pixelAngle,
-    P.time,
+    params.time,
   );
-  const h1 = hitMap(ro, rd, LAYER_GAP, half1);
-  if (h1.z > 0) {
-    const content = edgeMap(h1.xy / half1, drift);
+  const hit1 = hitMap(rayOrigin, rayDirection, LAYER_GAP, half1);
+  if (hit1.z > 0) {
+    const content = edgeMap(hit1.xy / half1, drift);
     const shade = shadeMap(
-      h1.xy,
+      hit1.xy,
       half1,
       content,
       focus,
       WINDOW_HALF[1],
       0.5,
-      h1.w * pixelAngle,
+      hit1.w * pixelAngle,
       flashAt(wave, 1),
     );
     color = std.mix(color, shade, MAP_OPACITY);
   }
-  color += gapGlow(ro, rd, 0, half0, half1, focus, focus, WINDOW_HALF[0], wave, pixelAngle, P.time);
-  const h0 = hitMap(ro, rd, 0, half0);
-  if (h0.z > 0) {
-    const content = inputImage(h0.xy / half0, drift);
+  color += gapGlow(
+    rayOrigin,
+    rayDirection,
+    0,
+    half0,
+    half1,
+    focus,
+    focus,
+    WINDOW_HALF[0],
+    wave,
+    pixelAngle,
+    params.time,
+  );
+  const hit0 = hitMap(rayOrigin, rayDirection, 0, half0);
+  if (hit0.z > 0) {
+    const content = inputImage(hit0.xy / half0, drift);
     const shade = shadeMap(
-      h0.xy,
+      hit0.xy,
       half0,
       content,
       focus,
       WINDOW_HALF[0],
       0,
-      h0.w * pixelAngle,
+      hit0.w * pixelAngle,
       flashAt(wave, 0),
     );
     color = std.mix(color, shade, MAP_OPACITY);
   }
 
-  const uv = pos.xy / res;
+  const uv = pos.xy / resolution;
   const vignette =
     1 - 0.55 * std.smoothstep(0.35, 0.95, std.length((uv - 0.5) * d.vec2f(1.1, 1.4)));
   color = std.clamp(color * vignette, 0, 1);
 
   // Ordered dither with a little moving grain, so it reads as print, not glow.
-  const grain = (hash21(pos.xy + std.fract(P.time * 7.3) * 91) - 0.5) * 0.35;
+  const grain = (hash21(pos.xy + std.fract(params.time * 7.3) * 91) - 0.5) * 0.35;
   const level = std.floor(
     color * (DITHER_LEVELS - 1) + bayer4(pos.xy) + grain * std.step(0.01, color),
   );
@@ -494,68 +527,106 @@ const heroFragment = tgpu.fragmentFn({
  *  stack, so the input reads first and the output recedes. */
 const CAMERA_EYE = [4.4, 1.7, -2.4] as const;
 const CAMERA_LOOK_AT = [0, -0.1, 2.9] as const;
-/** Camera drift, in seconds of period per axis. */
+/** Camera drift: seconds of period per axis, and how far it swings, in world units. */
 const DRIFT_PERIODS = [41, 29, 53] as const;
-/** How fast the focus follows the pointer, per second. */
+const DRIFT_SWING = [0.45, 0.3, 0.3] as const;
+/** How far the camera leans with the focus, in world units per unit of focus. */
+const FOCUS_LEAN = [0.25, 0.2] as const;
+/** How far the camera moves into the stack over the whole page scroll, in world units. */
+const SCROLL_DOLLY = [-1.6, -0.3, 2.2] as const;
+/** How fast the focus and the scroll position are followed, per second. */
 const FOCUS_EASE = 3;
+const SCROLL_EASE = 4;
+/** The idle focus: a slow figure-eight over the input image. Amplitude per
+ *  axis, in map halves, and rate per axis, in radians per second. */
+const WANDER_AMPLITUDE = [0.55, 0.35] as const;
+const WANDER_RATE = [0.37, 0.53] as const;
+/** How far the pointer can move the focus from the center, in map halves. */
+const POINTER_REACH = 0.75;
+/** Aspect ratio above which the stack sits right of the copy instead of above it. */
+const WIDE_ASPECT = 1.1;
+/** Where the stack sits on wide and narrow screens, in halves of the short side.
+ *  On wide screens x grows with the aspect ratio, up to WIDE_SHIFT_MAX_X. */
+const WIDE_SHIFT_PER_ASPECT = 0.55;
+const WIDE_SHIFT_MAX_X = 1.2;
+const WIDE_SHIFT_Y = 0.2;
+const NARROW_SHIFT = [0.65, 1.1] as const;
 
 /** A frozen moment for reduced motion: the pass mid-way through the network. */
 const STILL_TIME = 2.1;
 
-/** Starts the hero on `canvas` and returns a function that stops it. Throws
- *  when the pipeline does not compile. */
+/** Starts the network on `canvas` and returns a function that stops it.
+ *  Throws when the shader does not resolve; WGSL validation errors arrive
+ *  later, on the device's error scope. */
 export function startHero(
   root: TgpuRoot,
   canvas: HTMLCanvasElement,
   { still }: { still: boolean },
 ): () => void {
   const context = root.configureContext({ canvas, alphaMode: 'opaque' });
-  const params = root.createBuffer(Params).$usage('uniform');
-  const bindGroup = root.createBindGroup(layout, { params });
+  const paramsBuffer = root.createBuffer(Params).$usage('uniform');
   const pipeline = root
     .createRenderPipeline({
       vertex: common.fullScreenTriangle,
       fragment: heroFragment,
       targets: { format: navigator.gpu.getPreferredCanvasFormat() },
     })
-    .with(bindGroup);
+    .with(root.createBindGroup(layout, { params: paramsBuffer }));
 
-  const focus = d.vec2f();
+  // Reused every frame, so drawing allocates nothing.
+  const values = {
+    resolution: d.vec2f(),
+    time: 0,
+    focus: d.vec2f(),
+    eye: d.vec3f(),
+    lookAt: d.vec3f(...CAMERA_LOOK_AT),
+    shift: d.vec2f(),
+  };
   let pointer: [number, number] | undefined;
+  let scroll = 0;
+
+  const scrollProgress = () => {
+    const range = document.documentElement.scrollHeight - innerHeight;
+    return range > 0 ? Math.min(Math.max(scrollY / range, 0), 1) : 0;
+  };
 
   const draw = (time: number, dt: number) => {
+    const { focus, eye, shift, resolution } = values;
     // Without a pointer the focus wanders over the image on its own.
-    const target = pointer ?? [0.55 * Math.sin(time * 0.37), 0.35 * Math.sin(time * 0.53 + 1)];
-    const ease = 1 - Math.exp(-FOCUS_EASE * dt);
-    focus.x += (target[0] - focus.x) * ease;
-    focus.y += (target[1] - focus.y) * ease;
+    const targetX = pointer?.[0] ?? WANDER_AMPLITUDE[0] * Math.sin(time * WANDER_RATE[0]);
+    const targetY = pointer?.[1] ?? WANDER_AMPLITUDE[1] * Math.sin(time * WANDER_RATE[1] + 1);
+    const focusEase = 1 - Math.exp(-FOCUS_EASE * dt);
+    focus.x += (targetX - focus.x) * focusEase;
+    focus.y += (targetY - focus.y) * focusEase;
+    // A still frame jumps straight to the scroll position.
+    scroll += (scrollProgress() - scroll) * (dt > 0 ? 1 - Math.exp(-SCROLL_EASE * dt) : 1);
 
-    const width = canvas.width;
-    const height = canvas.height;
-    const aspect = width / height;
+    for (let axis = 0; axis < 3; axis++) {
+      const swing = DRIFT_SWING[axis]! * Math.sin((2 * Math.PI * time) / DRIFT_PERIODS[axis]!);
+      const lean = axis < 2 ? FOCUS_LEAN[axis]! * focus[axis]! : 0;
+      eye[axis] = CAMERA_EYE[axis]! + swing + lean + SCROLL_DOLLY[axis]! * scroll;
+    }
+
+    resolution.x = canvas.width;
+    resolution.y = canvas.height;
+    const aspect = canvas.width / canvas.height;
     // Wide screens put the stack right of the copy, narrow ones above it.
-    const shift = aspect > 1.1 ? d.vec2f(Math.min(aspect * 0.55, 1.2), 0.2) : d.vec2f(0.4, 1.1);
-    const drift = DRIFT_PERIODS.map((period) => Math.sin((2 * Math.PI * time) / period));
-    params.write({
-      resolution: d.vec2f(width, height),
-      time,
-      focus,
-      eye: d.vec3f(
-        CAMERA_EYE[0] + 0.45 * drift[0]! + focus.x * 0.25,
-        CAMERA_EYE[1] + 0.3 * drift[1]! + focus.y * 0.2,
-        CAMERA_EYE[2] + 0.3 * drift[2]!,
-      ),
-      lookAt: d.vec3f(...CAMERA_LOOK_AT),
-      shift,
-    });
-    pipeline.withColorAttachment({ view: context.getCurrentTexture().createView() }).draw(3);
+    shift.x =
+      aspect > WIDE_ASPECT
+        ? Math.min(aspect * WIDE_SHIFT_PER_ASPECT, WIDE_SHIFT_MAX_X)
+        : NARROW_SHIFT[0];
+    shift.y = aspect > WIDE_ASPECT ? WIDE_SHIFT_Y : NARROW_SHIFT[1];
+    values.time = time;
+
+    paramsBuffer.write(values);
+    pipeline.withColorAttachment({ view: context }).draw(3);
   };
 
   const onPointer = (event: PointerEvent) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    const y = 1 - ((event.clientY - rect.top) / rect.height) * 2;
-    pointer = [Math.max(-0.75, Math.min(0.75, x)), Math.max(-0.75, Math.min(0.75, y))];
+    const x = (event.clientX / innerWidth) * 2 - 1;
+    const y = 1 - (event.clientY / innerHeight) * 2;
+    const clamp = (v: number) => Math.max(-POINTER_REACH, Math.min(POINTER_REACH, v));
+    pointer = [clamp(x), clamp(y)];
   };
   const onLeave = () => {
     pointer = undefined;

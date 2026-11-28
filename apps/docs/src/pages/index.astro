@@ -4,6 +4,8 @@ import { Code } from 'astro:components';
 import Wordmark from '../assets/logo-mono.svg';
 import Labs from '../assets/swm-ai-labs-dark.svg';
 import { monoTheme } from '../landing/monoTheme';
+import { socialLinks } from '../landing/socialLinks';
+import zooSampleSource from '../landing/samples/zoo.ts?raw';
 import '../styles/fonts.css';
 import '../styles/tokens.css';
 
@@ -11,7 +13,12 @@ const base = import.meta.env.BASE_URL;
 const docs = `${base}zoo/getting-started/`;
 const github = 'https://github.com/software-mansion/runntime';
 const npm = 'https://www.npmjs.com/package/runntime';
+const huggingFace = 'https://huggingface.co/software-mansion';
+const discord = 'https://discord.gg/ZGqqY55qkP';
+const labs = 'https://ai.swmansion.com/?utm_source=runntime&utm_medium=landing';
 
+/** runntime/core is not exported yet, so this sample cannot be type-checked
+ *  against the package. It declares everything it uses. */
 const coreSample = `import { nn, tensor, toArray, type Value } from 'runntime/core';
 
 class Block extends nn.Module {
@@ -28,15 +35,14 @@ const block = new Block();
 await block.loadStateDict('/block.safetensors');
 
 // 2. forward() only records the graph. toArray() submits it once.
-const y = await toArray(block.forward(tensor(x, [tokens, 384])));`;
+const tokens = 16;
+const x = tensor(new Float32Array(tokens * 384), [tokens, 384]);
+const y = await toArray(block.forward(x));`;
 
-const zooSample = `import { createObjectDetector, models } from 'runntime/zoo';
+/** The zoo sample is type-checked in its own file; the page shows what follows the cut. */
+const zooSample = zooSampleSource.split('// ---cut---\n')[1]!.trim();
 
-const model = models.objectDetection.YOLO26.DEFAULT;
-const detector = await createObjectDetector(model);
-const objects = await detector.detectObjects(image);
-// [{ label: 'bus', confidence: 0.93, box: { ... } }, ...]`;
-
+/** The task table from the README's "Supported models", with each task's docs page. */
 const tasks = [
   ['Embedding', 'createEmbedder', 'EmbeddingGemma 2, all-MiniLM-L6-v2', 'zoo/embedding/'],
   ['Privacy filter', 'createPrivacyFilter', 'OpenAI privacy-filter (int8)', 'zoo/privacy-filter/'],
@@ -59,7 +65,8 @@ const tasks = [
   ['Image classification', 'createImageClassifier', 'MobileNetV4 small', 'zoo/image-classification/'],
 ] as const;
 
-/** Speedups from the README, all-MiniLM-L6-v2 on an Apple M4 Pro in Chrome. */
+/** The README's "Performance" table, verbatim: all-MiniLM-L6-v2 on an Apple
+ *  M4 Pro in Chrome. */
 const speedups = [
   ['1 sentence (32 tokens)', '2.25×', '2.3×'],
   ['128 tokens', '1.83×', '3.9×'],
@@ -82,19 +89,21 @@ const speedups = [
     <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
   </head>
   <body>
-    <header class="bar" data-gpu="pending">
+    <canvas class="stage" aria-hidden="true"></canvas>
+
+    <header class="bar">
       <canvas class="bar-canvas" aria-hidden="true"></canvas>
       <a class="bar-mark" href={base} aria-label="ruNNtime home"><Wordmark /></a>
       <nav aria-label="Main">
         <a href={docs}>Docs</a>
         <a href={github}>GitHub</a>
         <a href={npm}>npm</a>
+        <a href={huggingFace}>Hugging Face</a>
       </nav>
     </header>
 
     <main>
-      <section class="hero" data-gpu="pending">
-        <canvas class="hero-canvas" aria-hidden="true"></canvas>
+      <section class="hero">
         <div class="hero-shade" aria-hidden="true"></div>
         <div class="hero-copy">
           <h1>
@@ -105,9 +114,14 @@ const speedups = [
             A high-performance framework for running AI models on the web, in Electron and in React
             Native.
           </p>
-          <p class="hero-body">
-            Everything runs on the local GPU, and your data can stay there from input to output,
-            with no trip through the CPU. Just TypeScript: no WASM or native binaries.
+          <p class="created-by">
+            <span>Created by</span>
+            <a class="labs-lockup" href={labs}>
+              <Labs aria-hidden="true" />
+              <span class="labs-name"
+                ><span>software</span><span>mansion</span><span class="labs-big">ai labs</span></span
+              >
+            </a>
           </p>
           <div class="hero-actions">
             <a class="button primary" href={docs}>Get started</a>
@@ -116,169 +130,224 @@ const speedups = [
         </div>
       </section>
 
-      <section class="part" aria-labelledby="performance-title">
-        <div class="part-text">
-          <h2 id="performance-title">Performance</h2>
-          <p class="part-lead">
-            Against ONNX Runtime Web and LiteRT.js on the same GPU, tensor in to tensor out
-            (all-MiniLM-L6-v2, Apple M4 Pro, Chrome).
-          </p>
-          <dl class="facts">
-            <dt>Built for WebGPU only</dt>
-            <dd>No generic backend layer, kernels tuned for what models actually run.</dd>
-            <dt>Fused kernels</dt>
-            <dd>
-              Bias, activations and residual adds ride along in the kernel before them, so fewer
-              dispatches.
-            </dd>
-            <dt>One submit per call</dt>
-            <dd>The whole forward pass goes to the GPU at once.</dd>
-            <dt>Specialized shaders</dt>
-            <dd>TypeGPU generates a lean shader for every variant from one source.</dd>
-          </dl>
-        </div>
-        <div class="part-code">
-          <table class="grid speedups">
-            <thead>
-              <tr>
-                <th scope="col">Input</th>
-                <th scope="col">vs ONNX Runtime</th>
-                <th scope="col">vs LiteRT</th>
-              </tr>
-            </thead>
-            <tbody>
+      <div class="panels">
+        <section class="part" aria-labelledby="performance-title">
+          <div class="part-text">
+            <h2 id="performance-title">Performance</h2>
+            <p class="part-lead">
+              Against ONNX Runtime Web and LiteRT.js on the same GPU, tensor in to tensor out
+              (all-MiniLM-L6-v2, Apple M4 Pro, Chrome).
+            </p>
+            <dl class="facts">
+              <dt>Built for WebGPU only</dt>
+              <dd>No generic backend layer, kernels tuned for what models actually run.</dd>
+              <dt>Fused kernels</dt>
+              <dd>
+                Bias, activations and residual adds ride along in the kernel before them, so fewer
+                dispatches.
+              </dd>
+              <dt>One submit per call</dt>
+              <dd>The whole forward pass goes to the GPU at once.</dd>
+              <dt>Specialized shaders</dt>
+              <dd>TypeGPU generates a lean shader for every variant from one source.</dd>
+            </dl>
+          </div>
+          <div class="part-code">
+            <table class="grid speedups">
+              <thead>
+                <tr>
+                  <th scope="col">Input</th>
+                  <th scope="col">vs ONNX Runtime</th>
+                  <th scope="col">vs LiteRT</th>
+                </tr>
+              </thead>
+              <tbody>
+                {
+                  speedups.map(([input, onnx, litert]) => (
+                    <tr>
+                      <th scope="row">{input}</th>
+                      <td>{onnx}</td>
+                      <td>{litert}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+            <a class="more" href={`${base}zoo/benchmarks/`}
+              >More benchmarks and how they are measured</a
+            >
+          </div>
+        </section>
+
+        <section class="part" aria-labelledby="core-title">
+          <div class="part-text">
+            <h2 id="core-title">runntime/core</h2>
+            <p class="status">Not public yet, coming soon.</p>
+            <p class="part-lead">
+              The building blocks behind the zoo, for composing your own models with PyTorch-like
+              semantics.
+            </p>
+            <dl class="facts">
+              <dt>No model conversion</dt>
+              <dd>
+                Models run straight from their PyTorch weights. No export step to break, and input
+                shapes are set at runtime, not baked in ahead of time.
+              </dd>
+              <dt>Data stays on the GPU</dt>
+              <dd>Feed in a video frame, get results in a GPU buffer, ready for your own rendering.</dd>
+            </dl>
+          </div>
+          <div class="part-code">
+            <Code code={coreSample} lang="ts" theme={monoTheme} />
+          </div>
+        </section>
+
+        <section class="part" aria-labelledby="zoo-title">
+          <div class="part-text">
+            <h2 id="zoo-title">runntime/zoo</h2>
+            <p class="part-lead">
+              Ready-to-run models for speech, vision and text: 19 models across 9 tasks, each loaded
+              with one function call.
+            </p>
+            <dl class="facts">
+              <dt>One line to a running model</dt>
+              <dd>
+                Pick a model, call one function, and it downloads and runs. Turn on caching to skip
+                the download next time.
+              </dd>
+              <dt>Works with transformers.js</dt>
+              <dd>
+                Already using it? One call swaps the engine and your code stays as it is. See{' '}
+                <a href={`${base}zoo/migrating-from-transformers-js/`}>
+                  migrating from transformers.js
+                </a>.
+              </dd>
+            </dl>
+            <a class="button" href={docs}>Get started</a>
+          </div>
+          <div class="part-code">
+            <Code code={zooSample} lang="ts" theme={monoTheme} />
+            <table class="grid tasks">
+              <thead>
+                <tr><th scope="col">Task</th><th scope="col">Factory</th><th scope="col">Models</th></tr>
+              </thead>
+              <tbody>
+                {
+                  tasks.map(([task, factory, modelNames, slug]) => (
+                    <tr>
+                      <th scope="row">
+                        <a href={`${base}${slug}`}>{task}</a>
+                      </th>
+                      <td>
+                        <code>{factory}</code>
+                      </td>
+                      <td>{modelNames}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <footer class="foot">
+          <section class="foot-labs" aria-labelledby="labs-title">
+            <h2 id="labs-title">Software Mansion AI Labs</h2>
+            <p>
+              We're an end-to-end AI development lab focused on local and hybrid AI. We build and
+              fine-tune models, deploy them anywhere and turn them into agents that solve real
+              business problems.
+            </p>
+            <a class="button primary" href={`${labs}#contact`}>Hire us</a>
+          </section>
+          <div class="foot-bottom">
+            <div class="foot-brand">
+              <a class="foot-mark" href={labs} aria-label="Software Mansion AI Labs"><Labs /></a>
+              <ul class="foot-links">
+                <li><a href={labs}>Software Mansion AI Labs</a></li>
+                <li><a href={docs}>Docs</a></li>
+                <li><a href={github}>GitHub</a></li>
+                <li><a href={npm}>npm</a></li>
+                <li><a href={huggingFace}>Hugging Face</a></li>
+                <li><a href={discord}>Discord</a></li>
+              </ul>
+            </div>
+            <div class="foot-icons">
               {
-                speedups.map(([input, onnx, litert]) => (
-                  <tr>
-                    <th scope="row">{input}</th>
-                    <td>{onnx}</td>
-                    <td>{litert}</td>
-                  </tr>
+                socialLinks.map(({ label, href, path, fillRule }) => (
+                  <a href={href} aria-label={label}>
+                    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                      <path d={path} fill="currentColor" fill-rule={fillRule} />
+                    </svg>
+                  </a>
                 ))
               }
-            </tbody>
-          </table>
-          <a class="more" href={`${base}zoo/benchmarks/`}>More benchmarks and how they are measured</a>
-        </div>
-      </section>
-
-      <section class="part" aria-labelledby="core-title">
-        <div class="part-text">
-          <h2 id="core-title">runntime/core</h2>
-          <p class="status">Not public yet, coming soon.</p>
-          <p class="part-lead">
-            The building blocks behind the zoo, for composing your own models with PyTorch-like
-            semantics.
-          </p>
-          <dl class="facts">
-            <dt>No model conversion</dt>
-            <dd>
-              Models run straight from their PyTorch weights. No export step to break, and input
-              shapes are set at runtime, not baked in ahead of time.
-            </dd>
-            <dt>Data stays on the GPU</dt>
-            <dd>Feed in a video frame, get results in a GPU buffer, ready for your own rendering.</dd>
-          </dl>
-        </div>
-        <div class="part-code">
-          <Code code={coreSample} lang="ts" theme={monoTheme} />
-        </div>
-      </section>
-
-      <section class="part" aria-labelledby="zoo-title">
-        <div class="part-text">
-          <h2 id="zoo-title">runntime/zoo</h2>
-          <p class="part-lead">
-            Ready-to-run models for speech, vision and text: 19 models across 9 tasks, each loaded
-            with one function call.
-          </p>
-          <dl class="facts">
-            <dt>One line to a running model</dt>
-            <dd>
-              Pick a model, call one function, and it downloads and runs. Turn on caching to skip the
-              download next time.
-            </dd>
-            <dt>Works with transformers.js</dt>
-            <dd>
-              Already using it? One call swaps the engine and your code stays as it is. See{' '}
-              <a href={`${base}zoo/migrating-from-transformers-js/`}>
-                migrating from transformers.js
-              </a>.
-            </dd>
-          </dl>
-          <a class="button" href={docs}>Get started</a>
-        </div>
-        <div class="part-code">
-          <Code code={zooSample} lang="ts" theme={monoTheme} />
-          <table class="grid tasks">
-            <thead>
-              <tr><th scope="col">Task</th><th scope="col">Factory</th><th scope="col">Models</th></tr>
-            </thead>
-            <tbody>
-              {
-                tasks.map(([task, factory, modelNames, slug]) => (
-                  <tr>
-                    <th scope="row">
-                      <a href={`${base}${slug}`}>{task}</a>
-                    </th>
-                    <td>
-                      <code>{factory}</code>
-                    </td>
-                    <td>{modelNames}</td>
-                  </tr>
-                ))
-              }
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </div>
+          </div>
+        </footer>
+      </div>
     </main>
 
-    <footer class="foot">
-      <a class="foot-labs" href="https://ai.swmansion.com/?utm_source=runntime&utm_medium=landing">
-        <Labs aria-hidden="true" />
-        <span>Created by Software Mansion AI Labs</span>
-      </a>
-      <nav aria-label="Footer">
-        <a href={docs}>Docs</a>
-        <a href={github}>GitHub</a>
-        <a href={npm}>npm</a>
-        <a href="https://huggingface.co/software-mansion">Hugging Face</a>
-        <a href="https://discord.gg/ZGqqY55qkP">Discord</a>
-      </nav>
-      <p class="foot-license">
-        MIT licensed. Each model has its own license, listed on its Hugging Face page.
-      </p>
-    </footer>
-
     <script>
-      import tgpu from 'typegpu';
+      import tgpu, { type TgpuRoot } from 'typegpu';
       import { startHero } from '../landing/networkShader';
       import { startMarble } from '../landing/marbleShader';
 
-      const hero = document.querySelector<HTMLElement>('.hero')!;
-      const bar = document.querySelector<HTMLElement>('.bar')!;
-      const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const setGpu = (state: 'on' | 'off') => {
-        hero.dataset.gpu = state;
-        bar.dataset.gpu = state;
+      const page = document.documentElement;
+      const stage = document.querySelector<HTMLCanvasElement>('.stage')!;
+      const barCanvas = document.querySelector<HTMLCanvasElement>('.bar-canvas')!;
+      const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+      let stops: (() => void)[] = [];
+
+      const stopAll = () => {
+        for (const stop of stops) stop();
+        stops = [];
       };
 
+      /** Starts both shaders. WGSL validation errors are async, so the first
+       *  frames run inside an error scope and a failure is thrown here. */
+      async function startShaders(root: TgpuRoot) {
+        const still = reducedMotion.matches;
+        root.device.pushErrorScope('validation');
+        try {
+          stops.push(startHero(root, stage, { still }));
+          stops.push(startMarble(root, barCanvas, { still }));
+        } finally {
+          const error = await root.device.popErrorScope();
+          if (error) throw error;
+        }
+      }
+
       async function start() {
-        if (!navigator.gpu) return setGpu('off');
+        if (!navigator.gpu) {
+          page.dataset.gpu = 'off';
+          return;
+        }
         const root = await tgpu.init();
-        const stops = [
-          startHero(root, hero.querySelector('canvas')!, { still }),
-          startMarble(root, bar.querySelector('canvas')!, { still }),
-        ];
-        setGpu('on');
+        try {
+          await startShaders(root);
+        } catch (error) {
+          stopAll();
+          root.destroy();
+          throw error;
+        }
+        page.dataset.gpu = 'on';
+        reducedMotion.addEventListener('change', () => {
+          stopAll();
+          startShaders(root).catch(() => {
+            stopAll();
+            page.dataset.gpu = 'off';
+          });
+        });
         void root.device.lost.then(() => {
-          for (const stop of stops) stop();
-          setGpu('off');
+          stopAll();
+          page.dataset.gpu = 'off';
         });
       }
 
-      start().catch(() => setGpu('off'));
+      start().catch(() => {
+        page.dataset.gpu = 'off';
+      });
     </script>
   </body>
 </html>
@@ -296,9 +365,9 @@ const speedups = [
     font-size: 16px;
     -webkit-font-smoothing: antialiased;
   }
+  /* No body background: it would paint over the fixed canvas behind the page. */
   body {
     margin: 0;
-    background: var(--n-00);
   }
 </style>
 
@@ -324,10 +393,30 @@ const speedups = [
     white-space: nowrap;
   }
 
+  /* The network, fixed behind the whole page while the content scrolls over it. */
+  .stage {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    opacity: 0;
+    transition: opacity 1.2s ease-out;
+  }
+  :global(:root[data-gpu='on']) .stage {
+    opacity: 1;
+  }
+  :global(:root[data-gpu='off']) .stage,
+  :global(:root[data-gpu='off']) .bar-canvas {
+    display: none;
+  }
+
   /*
    * A pill pinned to the top, nearly as wide as the page. Its fill is the
-   * marble shader; without WebGPU, a few offset ellipses of gray stand in.
-   * A scrim darkens both ends so the logo and the links stay legible.
+   * marble shader; until it runs, or without WebGPU, a few offset ellipses of
+   * gray stand in. A scrim darkens both ends so the logo and the links stay
+   * legible.
    */
   .bar {
     position: fixed;
@@ -362,7 +451,7 @@ const speedups = [
       90deg,
       rgb(0 0 0 / 0.6) 0%,
       rgb(0 0 0 / 0.15) 22%,
-      rgb(0 0 0 / 0.15) 70%,
+      rgb(0 0 0 / 0.15) 60%,
       rgb(0 0 0 / 0.6) 100%
     );
     pointer-events: none;
@@ -376,11 +465,8 @@ const speedups = [
     opacity: 0;
     transition: opacity 1.2s ease-out;
   }
-  .bar[data-gpu='on'] .bar-canvas {
+  :global(:root[data-gpu='on']) .bar-canvas {
     opacity: 1;
-  }
-  .bar[data-gpu='off'] .bar-canvas {
-    display: none;
   }
   .bar-mark {
     color: var(--text-primary);
@@ -390,12 +476,8 @@ const speedups = [
     width: auto;
     height: 1.05rem;
   }
-  .bar nav,
-  .foot nav {
-    display: flex;
-    gap: 1.5rem;
-  }
   .bar nav {
+    display: flex;
     gap: 0.25rem;
   }
   .bar nav a {
@@ -404,16 +486,10 @@ const speedups = [
     color: var(--text-primary);
     text-decoration: none;
     text-shadow: 0 1px 8px rgb(0 0 0 / 0.8);
+    white-space: nowrap;
   }
   .bar nav a:hover {
     background: rgb(255 255 255 / 0.1);
-    color: var(--text-primary);
-  }
-  .foot nav a {
-    color: var(--text-muted);
-    text-decoration: none;
-  }
-  .foot nav a:hover {
     color: var(--text-primary);
   }
 
@@ -424,38 +500,19 @@ const speedups = [
     align-content: center;
     min-height: max(40rem, 100svh);
     padding: 6rem clamp(1rem, 4vw, 3rem) 5rem;
-    overflow: hidden;
     isolation: isolate;
   }
-  .hero-canvas {
-    position: absolute;
-    inset: 0;
-    z-index: -2;
-    width: 100%;
-    height: 100%;
-    image-rendering: pixelated;
-    opacity: 0;
-    transition: opacity 1.2s ease-out;
-  }
-  .hero[data-gpu='on'] .hero-canvas {
-    opacity: 1;
-  }
-  /* The poster when there is no WebGPU: a faint stack of panels in CSS. */
-  .hero[data-gpu='off'] {
+  /* Until the network runs, or without WebGPU, a faint CSS poster stands in. */
+  :global(:root:not([data-gpu='on'])) .hero {
     background:
       radial-gradient(ellipse 40% 45% at 72% 50%, rgb(255 255 255 / 0.1), transparent 70%),
       repeating-linear-gradient(90deg, transparent 0 3px, rgb(255 255 255 / 0.025) 3px 4px);
-  }
-  .hero[data-gpu='off'] .hero-canvas {
-    display: none;
   }
   .hero-shade {
     position: absolute;
     inset: 0;
     z-index: -1;
-    background:
-      linear-gradient(90deg, rgb(0 0 0 / 0.9) 0%, rgb(0 0 0 / 0.6) 34%, transparent 58%),
-      linear-gradient(0deg, var(--n-00) 0%, transparent 18%);
+    background: linear-gradient(90deg, rgb(0 0 0 / 0.9) 0%, rgb(0 0 0 / 0.6) 34%, transparent 58%);
     pointer-events: none;
   }
   .hero-copy {
@@ -471,19 +528,42 @@ const speedups = [
     height: auto;
   }
   .hero-lead {
-    margin: 0 0 1rem;
+    margin: 0 0 1.75rem;
     color: var(--text-primary);
     font-size: clamp(1.5rem, 2.6vw, 2.1rem);
     font-weight: 500;
     line-height: 1.15;
     letter-spacing: -0.01em;
   }
-  .hero-body {
-    max-width: 30rem;
+  /* "Created by" and the AI Labs mark with its three-line name. */
+  .created-by {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
     margin: 0 0 2.25rem;
-    color: var(--text-muted);
-    font-size: 1.0625rem;
-    line-height: 1.55;
+    color: var(--text-strong);
+    font-size: 1.25rem;
+  }
+  .labs-lockup {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .labs-lockup :global(svg) {
+    width: auto;
+    height: 2.6rem;
+  }
+  .labs-name {
+    display: grid;
+    font-size: 0.95rem;
+    line-height: 0.9;
+    letter-spacing: -0.01em;
+  }
+  .labs-big {
+    font-size: 1.32em;
+    font-weight: 500;
   }
   .hero-actions {
     display: flex;
@@ -498,6 +578,7 @@ const speedups = [
     content: '$ ';
     color: var(--text-faint);
   }
+
   .button {
     display: inline-block;
     padding: 0.7rem 1.2rem;
@@ -520,8 +601,11 @@ const speedups = [
     transform: translate(-2px, 2px);
   }
 
-  /* ── Sections ── */
-  main > .part {
+  /* ── Sections: a dark scrim fades in over the network as the page scrolls on. ── */
+  .panels {
+    background: linear-gradient(180deg, rgb(0 0 0 / 0) 0, rgb(0 0 0 / 0.86) 16rem);
+  }
+  .panels > .part {
     display: grid;
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     gap: clamp(2rem, 5vw, 5rem);
@@ -529,6 +613,9 @@ const speedups = [
     margin: 0 auto;
     padding: clamp(4rem, 9vw, 7rem) clamp(1rem, 4vw, 3rem);
     border-top: 1px solid var(--n-15);
+  }
+  .panels > .part:first-child {
+    border-top: 0;
   }
   h2 {
     margin: 0;
@@ -636,40 +723,94 @@ const speedups = [
     margin-top: 0.6rem;
   }
 
-  /* ── Footer ── */
+  /* ── Footer: the AI Labs pitch, then a row of links and social icons. ── */
   .foot {
+    max-width: 76rem;
+    margin: 0 auto;
+    padding: clamp(4rem, 9vw, 7rem) clamp(1rem, 4vw, 3rem) 2.5rem;
+    border-top: 1px solid var(--n-15);
+  }
+  .foot-labs {
+    display: grid;
+    justify-items: center;
+    gap: 1.75rem;
+    max-width: 44rem;
+    margin: 0 auto clamp(4rem, 8vw, 6rem);
+    text-align: center;
+  }
+  .foot-labs h2 {
+    font-family: 'Aeonik', system-ui, sans-serif;
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+  }
+  .foot-labs p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 1.1875rem;
+    line-height: 1.55;
+  }
+  .foot-bottom {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 1.5rem 3rem;
-    padding: 3rem clamp(1rem, 4vw, 3rem);
+    padding-top: 2rem;
     border-top: 1px solid var(--n-15);
-    font-size: 0.9375rem;
   }
-  .foot-labs {
+  .foot-brand {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.9rem;
+    gap: 1rem 2rem;
+  }
+  .foot-mark {
+    line-height: 0;
+  }
+  .foot-mark :global(svg) {
+    width: auto;
+    height: 2.25rem;
+  }
+  .foot-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.875rem;
+  }
+  .foot-links a,
+  .foot-icons a {
     color: var(--text-muted);
     text-decoration: none;
   }
-  .foot-labs :global(svg) {
-    width: auto;
-    height: 1.75rem;
+  .foot-links a:hover,
+  .foot-icons a:hover {
+    color: var(--text-primary);
   }
-  .foot-license {
-    margin: 0;
-    color: var(--text-faint);
+  .foot-icons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 1.25rem;
+  }
+  .foot-icons a {
+    line-height: 0;
+  }
+  .foot-icons svg {
+    width: 1.5rem;
+    height: 1.5rem;
   }
 
   @media (max-width: 860px) {
-    main > .part {
+    .panels > .part {
       grid-template-columns: minmax(0, 1fr);
     }
     .hero {
       align-content: end;
-      padding-bottom: 7rem;
+      padding-bottom: 5rem;
     }
     .hero-shade {
       background: linear-gradient(0deg, var(--n-00) 0%, rgb(0 0 0 / 0.75) 45%, transparent 75%);
@@ -679,23 +820,29 @@ const speedups = [
       display: none;
     }
   }
-  @media (max-width: 480px) {
+  @media (max-width: 560px) {
     /* The links span most of a narrow bar, so the scrim covers all of it. */
     .bar::after {
       background: rgb(0 0 0 / 0.5);
     }
     .bar {
-      gap: 0.5rem;
-      padding-left: 1.1rem;
+      gap: 0.25rem;
+      padding-left: 1rem;
+      padding-right: 0.4rem;
+    }
+    .bar-mark :global(svg) {
+      height: 0.9rem;
+    }
+    .bar nav {
+      gap: 0;
     }
     .bar nav a {
-      padding-inline: 0.6rem;
+      padding-inline: 0.45rem;
+      font-size: 0.875rem;
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .hero-canvas {
-      transition: none;
-    }
+    .stage,
     .bar-canvas {
       transition: none;
     }
