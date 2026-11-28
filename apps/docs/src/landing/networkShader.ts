@@ -546,11 +546,16 @@ const POINTER_REACH = 0.75;
 /** Aspect ratio above which the stack sits right of the copy instead of above it. */
 const WIDE_ASPECT = 1.1;
 /** Where the stack sits on wide and narrow screens, in halves of the short side.
- *  On wide screens x grows with the aspect ratio, up to WIDE_SHIFT_MAX_X. */
+ *  On wide screens x grows with the aspect ratio, and is pushed right until
+ *  the stack clears the hero copy, as far as its right end stays on screen. */
 const WIDE_SHIFT_PER_ASPECT = 0.55;
-const WIDE_SHIFT_MAX_X = 1.2;
 const WIDE_SHIFT_Y = 0.2;
 const NARROW_SHIFT = [0.65, 1.1] as const;
+/** Where the hero copy ends, in CSS pixels from the left edge of the page. */
+const COPY_RIGHT = 600;
+/** How far the stack reaches left and right of its shift, in halves of the short side. */
+const STACK_LEFT_REACH = 1.3;
+const STACK_RIGHT_REACH = 0.64;
 
 /** A frozen moment for reduced motion: the pass mid-way through the network. */
 const STILL_TIME = 2.1;
@@ -598,8 +603,11 @@ export function startHero(
     const focusEase = 1 - Math.exp(-FOCUS_EASE * dt);
     focus.x += (targetX - focus.x) * focusEase;
     focus.y += (targetY - focus.y) * focusEase;
-    // A still frame jumps straight to the scroll position.
-    scroll += (scrollProgress() - scroll) * (dt > 0 ? 1 - Math.exp(-SCROLL_EASE * dt) : 1);
+    // The still frame for reduced motion is drawn once, at the top of the
+    // stack, whatever scroll position the page restored.
+    if (!still) {
+      scroll += (scrollProgress() - scroll) * (dt > 0 ? 1 - Math.exp(-SCROLL_EASE * dt) : 1);
+    }
 
     for (let axis = 0; axis < 3; axis++) {
       const swing = DRIFT_SWING[axis]! * Math.sin((2 * Math.PI * time) / DRIFT_PERIODS[axis]!);
@@ -611,9 +619,15 @@ export function startHero(
     resolution.y = canvas.height;
     const aspect = canvas.width / canvas.height;
     // Wide screens put the stack right of the copy, narrow ones above it.
+    const cssWidth = canvas.width / RENDER_SCALE;
+    const cssHeight = canvas.height / RENDER_SCALE;
+    const clearOfCopy = (2 * COPY_RIGHT - cssWidth) / cssHeight + STACK_LEFT_REACH;
     shift.x =
       aspect > WIDE_ASPECT
-        ? Math.min(aspect * WIDE_SHIFT_PER_ASPECT, WIDE_SHIFT_MAX_X)
+        ? Math.min(
+            Math.max(aspect * WIDE_SHIFT_PER_ASPECT, clearOfCopy),
+            aspect - STACK_RIGHT_REACH,
+          )
         : NARROW_SHIFT[0];
     shift.y = aspect > WIDE_ASPECT ? WIDE_SHIFT_Y : NARROW_SHIFT[1];
     values.time = time;

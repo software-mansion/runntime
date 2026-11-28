@@ -3,13 +3,18 @@
 
 declare const canvas: HTMLCanvasElement;
 // ---cut---
-import { createObjectDetector, imageBufferFromImageData, models } from 'runntime/zoo';
+import {
+  createObjectDetector,
+  imageBufferFromImageData,
+  models,
+} from 'runntime/zoo';
 
 const model = models.objectDetection.YOLO26.DEFAULT;
 const detector = await createObjectDetector(model);
 
 const ctx = canvas.getContext('2d')!;
 const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-const objects = await detector.detectObjects(imageBufferFromImageData(pixels));
+const image = imageBufferFromImageData(pixels);
+const objects = await detector.detectObjects(image);
 console.log(objects);
 // [{ label, confidence, box }, ...]

@@ -7,14 +7,15 @@ import { hash21, valueNoise } from './noise';
 
 /** Canvas pixels per CSS pixel. The marble is soft, so a low resolution is enough. */
 const RENDER_SCALE = 0.5;
-/** Darkest and lightest gray of the marble, kept low so the nav text stays legible. */
+/** Darkest and lightest gray of the marble. The nav text stays legible on a
+ *  dark backing of its own. */
 const DARK = 0.04;
-const LIGHT = 0.62;
+const LIGHT = 0.85;
 /** Noise cells across the width of the bar, and down the same distance. The
  *  bar shows a thin slice of a large, slow pattern. */
-const CELLS_ACROSS = [3.4, 1.2] as const;
+const CELLS_ACROSS = [9, 1.4] as const;
 /** How far each warp layer pushes the next one, in noise cells. */
-const WARP = 2.2;
+const WARP = 1.6;
 /** How fast the marble flows, in noise cells per second. */
 const FLOW_SPEED = 0.035;
 /** Seconds into the flow the first frame shows. At 0 the bands start in a
@@ -54,9 +55,9 @@ const marbleFragment = tgpu.fragmentFn({
   );
   const marble = fbm(point + warp2 * WARP);
 
-  const light = std.smoothstep(0.34, 0.52, marble);
+  const light = std.smoothstep(0.27, 0.45, marble);
   const veins =
-    std.exp(-std.pow((marble - 0.58) * 70, 2)) + std.exp(-std.pow((marble - 0.64) * 90, 2)) * 0.7;
+    std.exp(-std.pow((marble - 0.52) * 70, 2)) + std.exp(-std.pow((marble - 0.6) * 90, 2)) * 0.7;
   let value = std.mix(DARK, LIGHT, light) - veins * light * 0.5;
   value += (hash21(pos.xy + std.fract(params.time) * 57) - 0.5) * 0.05;
   return d.vec4f(d.vec3f(std.clamp(value, 0, 1)), 1);
