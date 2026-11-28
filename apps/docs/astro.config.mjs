@@ -61,7 +61,6 @@ export default defineConfig({
   base,
   trailingSlash: 'always',
   redirects: {
-    '/': `${base}zoo/getting-started/`,
     '/zoo/': `${base}zoo/getting-started/`,
     '/zoo/text-embedding/': `${base}zoo/embedding/`,
   },

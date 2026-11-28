@@ -1,0 +1,703 @@
+---
+/** The site root: a short landing page in front of the Starlight docs. */
+import { Code } from 'astro:components';
+import Wordmark from '../assets/logo-mono.svg';
+import Labs from '../assets/swm-ai-labs-dark.svg';
+import { monoTheme } from '../landing/monoTheme';
+import '../styles/fonts.css';
+import '../styles/tokens.css';
+
+const base = import.meta.env.BASE_URL;
+const docs = `${base}zoo/getting-started/`;
+const github = 'https://github.com/software-mansion/runntime';
+const npm = 'https://www.npmjs.com/package/runntime';
+
+const coreSample = `import { nn, tensor, toArray, type Value } from 'runntime/core';
+
+class Block extends nn.Module {
+  fc1 = new nn.Linear(384, 1536, { activation: 'gelu' });
+  fc2 = new nn.Linear(1536, 384);
+
+  forward(x: Value) {
+    return this.fc2.forward(this.fc1.forward(x), { addend: x });
+  }
+}
+
+// 1. Weights load by name, straight from the PyTorch checkpoint.
+const block = new Block();
+await block.loadStateDict('/block.safetensors');
+
+// 2. forward() only records the graph. toArray() submits it once.
+const y = await toArray(block.forward(tensor(x, [tokens, 384])));`;
+
+const zooSample = `import { createObjectDetector, models } from 'runntime/zoo';
+
+const model = models.objectDetection.YOLO26.DEFAULT;
+const detector = await createObjectDetector(model);
+const objects = await detector.detectObjects(image);
+// [{ label: 'bus', confidence: 0.93, box: { ... } }, ...]`;
+
+const tasks = [
+  ['Embedding', 'createEmbedder', 'EmbeddingGemma 2, all-MiniLM-L6-v2', 'zoo/embedding/'],
+  ['Privacy filter', 'createPrivacyFilter', 'OpenAI privacy-filter (int8)', 'zoo/privacy-filter/'],
+  [
+    'Speech to text',
+    'createSpeechToText',
+    'Moonshine tiny / base, streaming tiny',
+    'zoo/speech-to-text/',
+  ],
+  ['Text to speech', 'createTextToSpeech', 'Reverb-TTS', 'zoo/text-to-speech/'],
+  ['Object detection', 'createObjectDetector', 'YOLO26 n / s / m', 'zoo/object-detection/'],
+  [
+    'Instance segmentation',
+    'createInstanceSegmenter',
+    'YOLO26-seg n / s / m',
+    'zoo/instance-segmentation/',
+  ],
+  ['Pose & keypoints', 'createKeypointDetector', 'YOLO26-pose n / s / m', 'zoo/pose-and-keypoints/'],
+  ['Depth estimation', 'createDepthEstimator', 'DepthART s / b', 'zoo/depth-estimation/'],
+  ['Image classification', 'createImageClassifier', 'MobileNetV4 small', 'zoo/image-classification/'],
+] as const;
+
+/** Speedups from the README, all-MiniLM-L6-v2 on an Apple M4 Pro in Chrome. */
+const speedups = [
+  ['1 sentence (32 tokens)', '2.25×', '2.3×'],
+  ['128 tokens', '1.83×', '3.9×'],
+  ['32 × 128 tokens', '1.26×', '4.0×'],
+  ['Real text, one at a time', '2.05×', '4.1×'],
+  ['Real text, in batches of 32', '2.36×', '-'],
+] as const;
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ruNNtime</title>
+    <meta
+      name="description"
+      content="A high-performance framework for running AI models on the web, in Electron and in React Native."
+    />
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+  </head>
+  <body>
+    <header class="bar" data-gpu="pending">
+      <canvas class="bar-canvas" aria-hidden="true"></canvas>
+      <a class="bar-mark" href={base} aria-label="ruNNtime home"><Wordmark /></a>
+      <nav aria-label="Main">
+        <a href={docs}>Docs</a>
+        <a href={github}>GitHub</a>
+        <a href={npm}>npm</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" data-gpu="pending">
+        <canvas class="hero-canvas" aria-hidden="true"></canvas>
+        <div class="hero-shade" aria-hidden="true"></div>
+        <div class="hero-copy">
+          <h1>
+            <span class="sr-only">ruNNtime</span>
+            <Wordmark class="hero-wordmark" aria-hidden="true" />
+          </h1>
+          <p class="hero-lead">
+            A high-performance framework for running AI models on the web, in Electron and in React
+            Native.
+          </p>
+          <p class="hero-body">
+            Everything runs on the local GPU, and your data can stay there from input to output,
+            with no trip through the CPU. Just TypeScript: no WASM or native binaries.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href={docs}>Get started</a>
+            <code class="install">npm install runntime typegpu</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="part" aria-labelledby="performance-title">
+        <div class="part-text">
+          <h2 id="performance-title">Performance</h2>
+          <p class="part-lead">
+            Against ONNX Runtime Web and LiteRT.js on the same GPU, tensor in to tensor out
+            (all-MiniLM-L6-v2, Apple M4 Pro, Chrome).
+          </p>
+          <dl class="facts">
+            <dt>Built for WebGPU only</dt>
+            <dd>No generic backend layer, kernels tuned for what models actually run.</dd>
+            <dt>Fused kernels</dt>
+            <dd>
+              Bias, activations and residual adds ride along in the kernel before them, so fewer
+              dispatches.
+            </dd>
+            <dt>One submit per call</dt>
+            <dd>The whole forward pass goes to the GPU at once.</dd>
+            <dt>Specialized shaders</dt>
+            <dd>TypeGPU generates a lean shader for every variant from one source.</dd>
+          </dl>
+        </div>
+        <div class="part-code">
+          <table class="grid speedups">
+            <thead>
+              <tr>
+                <th scope="col">Input</th>
+                <th scope="col">vs ONNX Runtime</th>
+                <th scope="col">vs LiteRT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {
+                speedups.map(([input, onnx, litert]) => (
+                  <tr>
+                    <th scope="row">{input}</th>
+                    <td>{onnx}</td>
+                    <td>{litert}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+          <a class="more" href={`${base}zoo/benchmarks/`}>More benchmarks and how they are measured</a>
+        </div>
+      </section>
+
+      <section class="part" aria-labelledby="core-title">
+        <div class="part-text">
+          <h2 id="core-title">runntime/core</h2>
+          <p class="status">Not public yet, coming soon.</p>
+          <p class="part-lead">
+            The building blocks behind the zoo, for composing your own models with PyTorch-like
+            semantics.
+          </p>
+          <dl class="facts">
+            <dt>No model conversion</dt>
+            <dd>
+              Models run straight from their PyTorch weights. No export step to break, and input
+              shapes are set at runtime, not baked in ahead of time.
+            </dd>
+            <dt>Data stays on the GPU</dt>
+            <dd>Feed in a video frame, get results in a GPU buffer, ready for your own rendering.</dd>
+          </dl>
+        </div>
+        <div class="part-code">
+          <Code code={coreSample} lang="ts" theme={monoTheme} />
+        </div>
+      </section>
+
+      <section class="part" aria-labelledby="zoo-title">
+        <div class="part-text">
+          <h2 id="zoo-title">runntime/zoo</h2>
+          <p class="part-lead">
+            Ready-to-run models for speech, vision and text: 19 models across 9 tasks, each loaded
+            with one function call.
+          </p>
+          <dl class="facts">
+            <dt>One line to a running model</dt>
+            <dd>
+              Pick a model, call one function, and it downloads and runs. Turn on caching to skip the
+              download next time.
+            </dd>
+            <dt>Works with transformers.js</dt>
+            <dd>
+              Already using it? One call swaps the engine and your code stays as it is. See{' '}
+              <a href={`${base}zoo/migrating-from-transformers-js/`}>
+                migrating from transformers.js
+              </a>.
+            </dd>
+          </dl>
+          <a class="button" href={docs}>Get started</a>
+        </div>
+        <div class="part-code">
+          <Code code={zooSample} lang="ts" theme={monoTheme} />
+          <table class="grid tasks">
+            <thead>
+              <tr><th scope="col">Task</th><th scope="col">Factory</th><th scope="col">Models</th></tr>
+            </thead>
+            <tbody>
+              {
+                tasks.map(([task, factory, modelNames, slug]) => (
+                  <tr>
+                    <th scope="row">
+                      <a href={`${base}${slug}`}>{task}</a>
+                    </th>
+                    <td>
+                      <code>{factory}</code>
+                    </td>
+                    <td>{modelNames}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <a class="foot-labs" href="https://ai.swmansion.com/?utm_source=runntime&utm_medium=landing">
+        <Labs aria-hidden="true" />
+        <span>Created by Software Mansion AI Labs</span>
+      </a>
+      <nav aria-label="Footer">
+        <a href={docs}>Docs</a>
+        <a href={github}>GitHub</a>
+        <a href={npm}>npm</a>
+        <a href="https://huggingface.co/software-mansion">Hugging Face</a>
+        <a href="https://discord.gg/ZGqqY55qkP">Discord</a>
+      </nav>
+      <p class="foot-license">
+        MIT licensed. Each model has its own license, listed on its Hugging Face page.
+      </p>
+    </footer>
+
+    <script>
+      import tgpu from 'typegpu';
+      import { startHero } from '../landing/networkShader';
+      import { startMarble } from '../landing/marbleShader';
+
+      const hero = document.querySelector<HTMLElement>('.hero')!;
+      const bar = document.querySelector<HTMLElement>('.bar')!;
+      const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const setGpu = (state: 'on' | 'off') => {
+        hero.dataset.gpu = state;
+        bar.dataset.gpu = state;
+      };
+
+      async function start() {
+        if (!navigator.gpu) return setGpu('off');
+        const root = await tgpu.init();
+        const stops = [
+          startHero(root, hero.querySelector('canvas')!, { still }),
+          startMarble(root, bar.querySelector('canvas')!, { still }),
+        ];
+        setGpu('on');
+        void root.device.lost.then(() => {
+          for (const stop of stops) stop();
+          setGpu('off');
+        });
+      }
+
+      start().catch(() => setGpu('off'));
+    </script>
+  </body>
+</html>
+
+<style is:global>
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  html {
+    background: var(--n-00);
+    color: var(--text-body);
+    font-family: 'Aeonik', system-ui, sans-serif;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    background: var(--n-00);
+  }
+</style>
+
+<style>
+  a {
+    color: inherit;
+  }
+  a:focus-visible,
+  .button:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 3px;
+  }
+  code {
+    font-family: 'DM Mono', ui-monospace, monospace;
+    font-size: 0.875em;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /*
+   * A pill pinned to the top, nearly as wide as the page. Its fill is the
+   * marble shader; without WebGPU, a few offset ellipses of gray stand in.
+   * A scrim darkens both ends so the logo and the links stay legible.
+   */
+  .bar {
+    position: fixed;
+    top: 0.75rem;
+    left: 50%;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+    width: min(100% - 1.5rem, 90rem);
+    padding: 0.7rem 0.75rem 0.7rem 1.6rem;
+    overflow: hidden;
+    isolation: isolate;
+    border: 1px solid rgb(255 255 255 / 0.16);
+    border-radius: 999px;
+    background-color: var(--n-08);
+    background-image:
+      radial-gradient(22% 150% at 14% 10%, rgb(140 140 140 / 0.5), transparent 70%),
+      radial-gradient(16% 120% at 41% 105%, rgb(200 200 200 / 0.24), transparent 70%),
+      radial-gradient(28% 180% at 66% 0%, rgb(100 100 100 / 0.45), transparent 72%),
+      radial-gradient(12% 110% at 84% 70%, rgb(170 170 170 / 0.3), transparent 70%);
+    box-shadow: 0 8px 30px rgb(0 0 0 / 0.5);
+    transform: translateX(-50%);
+  }
+  .bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(
+      90deg,
+      rgb(0 0 0 / 0.6) 0%,
+      rgb(0 0 0 / 0.15) 22%,
+      rgb(0 0 0 / 0.15) 70%,
+      rgb(0 0 0 / 0.6) 100%
+    );
+    pointer-events: none;
+  }
+  .bar-canvas {
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 1.2s ease-out;
+  }
+  .bar[data-gpu='on'] .bar-canvas {
+    opacity: 1;
+  }
+  .bar[data-gpu='off'] .bar-canvas {
+    display: none;
+  }
+  .bar-mark {
+    color: var(--text-primary);
+    line-height: 0;
+  }
+  .bar-mark :global(svg) {
+    width: auto;
+    height: 1.05rem;
+  }
+  .bar nav,
+  .foot nav {
+    display: flex;
+    gap: 1.5rem;
+  }
+  .bar nav {
+    gap: 0.25rem;
+  }
+  .bar nav a {
+    padding: 0.4rem 0.85rem;
+    border-radius: 999px;
+    color: var(--text-primary);
+    text-decoration: none;
+    text-shadow: 0 1px 8px rgb(0 0 0 / 0.8);
+  }
+  .bar nav a:hover {
+    background: rgb(255 255 255 / 0.1);
+    color: var(--text-primary);
+  }
+  .foot nav a {
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .foot nav a:hover {
+    color: var(--text-primary);
+  }
+
+  /* ── Hero ── */
+  .hero {
+    position: relative;
+    display: grid;
+    align-content: center;
+    min-height: max(40rem, 100svh);
+    padding: 6rem clamp(1rem, 4vw, 3rem) 5rem;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .hero-canvas {
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    opacity: 0;
+    transition: opacity 1.2s ease-out;
+  }
+  .hero[data-gpu='on'] .hero-canvas {
+    opacity: 1;
+  }
+  /* The poster when there is no WebGPU: a faint stack of panels in CSS. */
+  .hero[data-gpu='off'] {
+    background:
+      radial-gradient(ellipse 40% 45% at 72% 50%, rgb(255 255 255 / 0.1), transparent 70%),
+      repeating-linear-gradient(90deg, transparent 0 3px, rgb(255 255 255 / 0.025) 3px 4px);
+  }
+  .hero[data-gpu='off'] .hero-canvas {
+    display: none;
+  }
+  .hero-shade {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      linear-gradient(90deg, rgb(0 0 0 / 0.9) 0%, rgb(0 0 0 / 0.6) 34%, transparent 58%),
+      linear-gradient(0deg, var(--n-00) 0%, transparent 18%);
+    pointer-events: none;
+  }
+  .hero-copy {
+    max-width: 34rem;
+  }
+  .hero h1 {
+    margin: 0 0 2rem;
+    color: var(--text-primary);
+    line-height: 0;
+  }
+  .hero-wordmark {
+    width: min(100%, 26rem);
+    height: auto;
+  }
+  .hero-lead {
+    margin: 0 0 1rem;
+    color: var(--text-primary);
+    font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+  }
+  .hero-body {
+    max-width: 30rem;
+    margin: 0 0 2.25rem;
+    color: var(--text-muted);
+    font-size: 1.0625rem;
+    line-height: 1.55;
+  }
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem 1.5rem;
+  }
+  .install {
+    color: var(--text-muted);
+  }
+  .install::before {
+    content: '$ ';
+    color: var(--text-faint);
+  }
+  .button {
+    display: inline-block;
+    padding: 0.7rem 1.2rem;
+    border: 1px solid var(--border-strong);
+    color: var(--text-primary);
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .button:hover {
+    border-color: var(--text-primary);
+  }
+  .button.primary {
+    border-color: transparent;
+    background: var(--grad-chalk);
+    color: var(--n-00);
+    box-shadow: -5px 5px 0 0 var(--n-36);
+  }
+  .button.primary:hover {
+    box-shadow: -3px 3px 0 0 var(--n-36);
+    transform: translate(-2px, 2px);
+  }
+
+  /* ── Sections ── */
+  main > .part {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(2rem, 5vw, 5rem);
+    max-width: 76rem;
+    margin: 0 auto;
+    padding: clamp(4rem, 9vw, 7rem) clamp(1rem, 4vw, 3rem);
+    border-top: 1px solid var(--n-15);
+  }
+  h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-family: 'DM Mono', ui-monospace, monospace;
+    font-size: clamp(1.5rem, 2.4vw, 2rem);
+    font-weight: 400;
+    letter-spacing: -0.02em;
+  }
+  .status {
+    margin: 0.5rem 0 0;
+    color: var(--text-faint);
+    font-size: 0.875rem;
+  }
+  .part-lead {
+    margin: 1.25rem 0 2rem;
+    color: var(--text-strong);
+    font-size: 1.1875rem;
+    line-height: 1.5;
+  }
+  .facts {
+    margin: 0;
+  }
+  .facts dt {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .facts dd {
+    margin: 0.3rem 0 1.4rem;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+  .facts a {
+    color: var(--text-strong);
+    text-underline-offset: 3px;
+  }
+  .facts code,
+  .tasks code {
+    color: var(--text-strong);
+  }
+  .part-code {
+    min-width: 0;
+  }
+  .part :global(pre.astro-code) {
+    margin: 0;
+    padding: 1.25rem 1.4rem;
+    border: 1px solid var(--n-18);
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    overflow-x: auto;
+  }
+  .part-code :global(pre.astro-code) + .tasks {
+    margin-top: 2rem;
+  }
+
+  .grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9375rem;
+  }
+  .grid th,
+  .grid td {
+    padding: 0.8rem 1rem 0.8rem 0;
+    border-bottom: 1px solid var(--n-15);
+    text-align: left;
+    vertical-align: baseline;
+  }
+  .grid thead th {
+    color: var(--text-faint);
+    font-size: 0.8125rem;
+    font-weight: 400;
+  }
+  .grid tbody th {
+    font-weight: 500;
+  }
+  .speedups tbody th {
+    color: var(--text-strong);
+  }
+  .speedups td {
+    color: var(--text-primary);
+    font-size: 1.375rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .more {
+    display: inline-block;
+    margin-top: 1.5rem;
+    color: var(--text-muted);
+    text-underline-offset: 3px;
+  }
+  .more:hover {
+    color: var(--text-primary);
+  }
+  .tasks tbody th a {
+    color: var(--text-primary);
+    text-decoration: none;
+  }
+  .tasks tbody th a:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .tasks td {
+    color: var(--text-muted);
+  }
+  .facts + .button {
+    margin-top: 0.6rem;
+  }
+
+  /* ── Footer ── */
+  .foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem 3rem;
+    padding: 3rem clamp(1rem, 4vw, 3rem);
+    border-top: 1px solid var(--n-15);
+    font-size: 0.9375rem;
+  }
+  .foot-labs {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .foot-labs :global(svg) {
+    width: auto;
+    height: 1.75rem;
+  }
+  .foot-license {
+    margin: 0;
+    color: var(--text-faint);
+  }
+
+  @media (max-width: 860px) {
+    main > .part {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .hero {
+      align-content: end;
+      padding-bottom: 7rem;
+    }
+    .hero-shade {
+      background: linear-gradient(0deg, var(--n-00) 0%, rgb(0 0 0 / 0.75) 45%, transparent 75%);
+    }
+    .tasks td:last-child,
+    .tasks th:last-child {
+      display: none;
+    }
+  }
+  @media (max-width: 480px) {
+    /* The links span most of a narrow bar, so the scrim covers all of it. */
+    .bar::after {
+      background: rgb(0 0 0 / 0.5);
+    }
+    .bar {
+      gap: 0.5rem;
+      padding-left: 1.1rem;
+    }
+    .bar nav a {
+      padding-inline: 0.6rem;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-canvas {
+      transition: none;
+    }
+    .bar-canvas {
+      transition: none;
+    }
+  }
+</style>
