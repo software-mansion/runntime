@@ -172,7 +172,7 @@ const perfScaleMax = Math.max(
           <h1>
             <span class="sr-only">ruNNtime</span>
             <span class="hero-wordmark" aria-hidden="true">
-              <svg viewBox={wordmarkViewBox}><path d={wordmarkRest} fill="currentColor"></path></svg>
+              <svg viewBox={wordmarkViewBox}><path class="wordmark-dots" d={wordmarkRest}></path></svg>
               <span class="nn-fill nn-hero" style={`mask-image: ${heroNnMask}; ${heroNnBox}`}>
                 <canvas class="nn-canvas"></canvas>
               </span>
@@ -332,19 +332,19 @@ const perfScaleMax = Math.max(
               function call.
             </p>
           </div>
-          <ul class="model-list">
+          <ul class="model-grid">
             {
-              tasks.map(([task, factory, modelNames, slug]) => (
-                <li class="model-row">
-                  <div class="model-task">
-                    <a href={`${base}${slug}`}>{task}</a>
-                    <code>{factory}</code>
-                  </div>
-                  <ul class="model-names" aria-label={`${task} models`}>
-                    {modelNames.split(', ').map((name) => (
-                      <li class="nowrap">{name}</li>
+              tasks.map(([task, , modelNames, slug]) => (
+                <li>
+                  <a href={`${base}${slug}`}>{task}</a>
+                  <p>
+                    {modelNames.split(', ').map((name, i) => (
+                      <>
+                        {i > 0 && ', '}
+                        <span class="nowrap">{name}</span>
+                      </>
                     ))}
-                  </ul>
+                  </p>
                 </li>
               ))
             }
@@ -427,7 +427,7 @@ const perfScaleMax = Math.max(
           const marbleTargets = [
             { canvas: barCanvas, cells: [4, 1.4], dark: 0.04, light: 0.85 },
             { canvas: navNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1 },
-            { canvas: heroNnCanvas, cells: [2.4, 1.6], dark: 0.5, light: 1 },
+            { canvas: heroNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1 },
           ] as const;
           stops.push(startMarble(root, marbleTargets, { still }));
         } finally {
@@ -685,6 +685,21 @@ const perfScaleMax = Math.max(
     display: block;
     width: 100%;
     height: auto;
+    /* The dotted stroke sits half outside the letters' edges. */
+    overflow: visible;
+  }
+  /*
+   * "ru" and "time" drawn as round dots along their outlines: a near-zero
+   * dash with round caps. Units are the wordmark's viewBox, about 0.9 CSS px
+   * each at full size.
+   */
+  .wordmark-dots {
+    fill: none;
+    stroke: var(--n-89);
+    stroke-width: 3.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 0.01 6.4;
   }
   .nn-hero {
     position: absolute;
@@ -992,55 +1007,35 @@ const perfScaleMax = Math.max(
   .perf-caption a:hover {
     color: var(--text-primary);
   }
-  /* Supported models: one row per task, hairlines between, models as quiet chips. */
-  .model-list {
+  /* Supported models: a 3×3 grid of tiles on shared hairlines. */
+  .model-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     margin: 0;
     padding: 0;
+    border-top: 1px solid var(--n-18);
+    border-left: 1px solid var(--n-18);
     list-style: none;
   }
-  .model-row {
-    display: grid;
-    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
-    align-items: baseline;
-    gap: 0.5rem 2rem;
-    padding: 1rem 0;
-    border-bottom: 1px solid var(--n-15);
+  .model-grid li {
+    padding: 1.25rem 1.25rem 1.5rem;
+    border-right: 1px solid var(--n-18);
+    border-bottom: 1px solid var(--n-18);
   }
-  .model-row:first-child {
-    border-top: 1px solid var(--n-15);
-  }
-  .model-task {
-    display: grid;
-    gap: 0.2rem;
-  }
-  .model-task a {
+  .model-grid a {
     color: var(--text-primary);
     font-weight: 500;
     text-decoration: none;
   }
-  .model-task a:hover {
+  .model-grid a:hover {
     text-decoration: underline;
     text-underline-offset: 3px;
   }
-  .model-task code {
-    color: var(--text-faint);
-    font-size: 0.8125rem;
-  }
-  .model-names {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .model-names li {
-    padding: 0.2rem 0.55rem;
-    border: 1px solid var(--n-18);
-    border-radius: 999px;
+  .model-grid p {
+    margin: 0.5rem 0 0;
     color: var(--text-muted);
-    font-family: 'DM Mono', ui-monospace, monospace;
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
   }
   .facts + .button {
     margin-top: 0.6rem;
@@ -1138,9 +1133,8 @@ const perfScaleMax = Math.max(
     .hero-shade {
       background: linear-gradient(0deg, var(--n-00) 0%, rgb(0 0 0 / 0.75) 45%, transparent 75%);
     }
-    /* Each task stacks: its name above its models. */
-    .model-row {
-      grid-template-columns: minmax(0, 1fr);
+    .model-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     /* Narrow screens put each input's label above its bars. */
     .perf-group {
@@ -1152,6 +1146,12 @@ const perfScaleMax = Math.max(
     }
   }
   @media (max-width: 560px) {
+    .model-grid li {
+      padding: 1rem 0.7rem 1.15rem;
+    }
+    .model-grid p {
+      font-size: 0.8125rem;
+    }
     .bar {
       inset-inline: 0.5rem;
       gap: 0.25rem;
