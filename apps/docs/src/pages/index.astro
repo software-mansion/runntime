@@ -1,7 +1,7 @@
 ---
 /** The site root: a short landing page in front of the Starlight docs. */
 import { Code } from 'astro:components';
-import Wordmark from '../assets/logo-mono.svg';
+import wordmarkSource from '../assets/logo-mono.svg?raw';
 import Labs from '../assets/swm-ai-labs-dark.svg';
 import { monoTheme } from '../landing/monoTheme';
 import { socialLinks } from '../landing/socialLinks';
@@ -10,6 +10,42 @@ import '../styles/fonts.css';
 import '../styles/tokens.css';
 
 const base = import.meta.env.BASE_URL;
+
+/** The wordmark drawn in two parts: "ru" and "time" as one white path, and
+ *  the NN as a marble-filled box masked to the letters, so the word keeps its
+ *  exact metrics. Its third and fourth subpaths are the two N's. */
+const wordmarkViewBox = wordmarkSource.match(/viewBox="([^"]+)"/)![1]!;
+const wordmarkSubpaths = wordmarkSource.match(/ d="([^"]+)"/)![1]!.split(/(?=M)/);
+const wordmarkNn = wordmarkSubpaths.slice(2, 4).join('');
+const wordmarkRest = [...wordmarkSubpaths.slice(0, 2), ...wordmarkSubpaths.slice(4)].join('');
+/** The NN's bounding box in the wordmark's units, from its path. */
+const NN_BOX = { x: 102.9, y: 2.8, width: 131.1, height: 70 };
+const [, , wordmarkWidth, wordmarkHeight] = wordmarkViewBox.split(' ').map(Number) as [
+  number,
+  number,
+  number,
+  number,
+];
+const heroNnBox = [
+  `left: ${(100 * NN_BOX.x) / wordmarkWidth}%`,
+  `top: ${(100 * NN_BOX.y) / wordmarkHeight}%`,
+  `width: ${(100 * NN_BOX.width) / wordmarkWidth}%`,
+  `height: ${(100 * NN_BOX.height) / wordmarkHeight}%`,
+].join('; ');
+/** A CSS mask of an SVG path, cropped to `viewBox`. */
+const pathMask = (viewBox: string, path: string) =>
+  `url("data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" preserveAspectRatio="none"><path d="${path}"/></svg>`,
+  )}")`;
+const heroNnMask = pathMask(
+  `${NN_BOX.x} ${NN_BOX.y} ${NN_BOX.width} ${NN_BOX.height}`,
+  wordmarkNn,
+);
+/** The favicon's NN glyph, cropped to its bounding box. */
+const navNnMask = pathMask(
+  '3 10 26 13',
+  'M3 10h12v3.2H6.2V23H3V10Zm8.8 3.2H15V23h-3.2v-9.8ZM17 10h12v3.2h-8.8V23H17V10Zm8.8 3.2H29V23h-3.2v-9.8Z',
+);
 const docs = `${base}zoo/getting-started/`;
 const github = 'https://github.com/software-mansion/runntime';
 const npm = 'https://www.npmjs.com/package/runntime';
@@ -114,24 +150,14 @@ const perfScaleMax = Math.max(
     <canvas class="stage" aria-hidden="true"></canvas>
 
     <header class="bar">
-      <canvas class="bar-canvas" aria-hidden="true"></canvas>
       <a class="bar-mark" href={base} aria-label="ruNNtime home">
-        <!-- The favicon's NN mark: the hero already spells out ruNNtime. -->
-        <svg viewBox="0 0 32 32" aria-hidden="true">
-          <defs>
-            <linearGradient id="bar-mark-fill" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#ffffff"></stop>
-              <stop offset="1" stop-color="#7a7a7a"></stop>
-            </linearGradient>
-          </defs>
-          <rect width="32" height="32" fill="#000000"></rect>
-          <path
-            fill="url(#bar-mark-fill)"
-            d="M3 10h12v3.2H6.2V23H3V10Zm8.8 3.2H15V23h-3.2v-9.8ZM17 10h12v3.2h-8.8V23H17V10Zm8.8 3.2H29V23h-3.2v-9.8Z"
-          ></path>
-        </svg>
+        <!-- The favicon's NN, filled with the marble: the hero spells out ruNNtime. -->
+        <span class="nn-fill nn-nav" style={`mask-image: ${navNnMask}`}>
+          <canvas class="nn-canvas" aria-hidden="true"></canvas>
+        </span>
       </a>
-      <nav aria-label="Main">
+      <nav class="bar-pill" aria-label="Main">
+        <canvas class="bar-canvas" aria-hidden="true"></canvas>
         <a href={docs}>Docs</a>
         <a href={github}>GitHub</a>
         <a href={npm}>npm</a>
@@ -145,7 +171,12 @@ const perfScaleMax = Math.max(
         <div class="hero-copy">
           <h1>
             <span class="sr-only">ruNNtime</span>
-            <Wordmark class="hero-wordmark" aria-hidden="true" />
+            <span class="hero-wordmark" aria-hidden="true">
+              <svg viewBox={wordmarkViewBox}><path d={wordmarkRest} fill="currentColor"></path></svg>
+              <span class="nn-fill nn-hero" style={`mask-image: ${heroNnMask}; ${heroNnBox}`}>
+                <canvas class="nn-canvas"></canvas>
+              </span>
+            </span>
           </h1>
           <p class="hero-lead">
             A high-performance framework for running AI models on the web, in Electron and in React
@@ -269,8 +300,8 @@ const perfScaleMax = Math.max(
           <div class="part-text">
             <h2 id="zoo-title">runntime/zoo</h2>
             <p class="part-lead">
-              Ready-to-run models for speech, vision and text: 19 models across 9 tasks, each loaded
-              with one function call.
+              Ready-to-run models for speech, vision and text. One function call gives you a running
+              model.
             </p>
             <dl class="facts">
               <dt>One line to a running model</dt>
@@ -290,34 +321,34 @@ const perfScaleMax = Math.max(
           </div>
           <div class="part-code">
             <Code code={zooSample} lang="ts" theme={monoTheme} />
-            <table class="grid tasks">
-              <thead>
-                <tr><th scope="col">Task</th><th scope="col">Factory</th><th scope="col">Models</th></tr>
-              </thead>
-              <tbody>
-                {
-                  tasks.map(([task, factory, modelNames, slug]) => (
-                    <tr>
-                      <th scope="row">
-                        <a href={`${base}${slug}`}>{task}</a>
-                      </th>
-                      <td>
-                        <code>{factory}</code>
-                      </td>
-                      <td>
-                        {modelNames.split(', ').map((name, i) => (
-                          <>
-                            {i > 0 && ', '}
-                            <span class="nowrap">{name}</span>
-                          </>
-                        ))}
-                      </td>
-                    </tr>
-                  ))
-                }
-              </tbody>
-            </table>
           </div>
+        </section>
+
+        <section class="part models" aria-labelledby="models-title">
+          <div class="part-text">
+            <h2 id="models-title">Supported models</h2>
+            <p class="part-lead">
+              The zoo package currently supports 19 models across 9 tasks, each loaded with one
+              function call.
+            </p>
+          </div>
+          <ul class="model-list">
+            {
+              tasks.map(([task, factory, modelNames, slug]) => (
+                <li class="model-row">
+                  <div class="model-task">
+                    <a href={`${base}${slug}`}>{task}</a>
+                    <code>{factory}</code>
+                  </div>
+                  <ul class="model-names" aria-label={`${task} models`}>
+                    {modelNames.split(', ').map((name) => (
+                      <li class="nowrap">{name}</li>
+                    ))}
+                  </ul>
+                </li>
+              ))
+            }
+          </ul>
         </section>
       </div>
     </main>
@@ -374,6 +405,8 @@ const perfScaleMax = Math.max(
       const page = document.documentElement;
       const stage = document.querySelector<HTMLCanvasElement>('.stage')!;
       const barCanvas = document.querySelector<HTMLCanvasElement>('.bar-canvas')!;
+      const navNnCanvas = document.querySelector<HTMLCanvasElement>('.nn-nav canvas')!;
+      const heroNnCanvas = document.querySelector<HTMLCanvasElement>('.nn-hero canvas')!;
       const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
       let stops: (() => void)[] = [];
 
@@ -389,7 +422,14 @@ const perfScaleMax = Math.max(
         root.device.pushErrorScope('validation');
         try {
           stops.push(startHero(root, stage, { still }));
-          stops.push(startMarble(root, barCanvas, { still }));
+          // The pill drives the loop: it is fixed, so always on screen. The
+          // letters take a lighter range, so no stroke sinks into the black.
+          const marbleTargets = [
+            { canvas: barCanvas, cells: [4, 1.4], dark: 0.04, light: 0.85 },
+            { canvas: navNnCanvas, cells: [1.6, 1.6], dark: 0.5, light: 1 },
+            { canvas: heroNnCanvas, cells: [2.4, 1.6], dark: 0.5, light: 1 },
+          ] as const;
+          stops.push(startMarble(root, marbleTargets, { still }));
         } finally {
           const error = await root.device.popErrorScope();
           if (error) throw error;
@@ -507,39 +547,53 @@ const perfScaleMax = Math.max(
   }
 
   /*
-   * A pill pinned to the top, nearly as wide as the page. Its fill is the
-   * marble shader; until it runs, or without WebGPU, a few offset ellipses of
-   * gray stand in. The links sit on a soft dark pill of their own, so the
-   * marble shows across the rest of the bar.
+   * The navbar: the NN mark on the left and a pill of links on the right,
+   * both fixed at the top with nothing between them. The pill's fill is the
+   * marble shader; until it runs, or without WebGPU, offset ellipses of gray
+   * stand in. Each link sits on a soft dark backing, so it reads on silver.
    */
   .bar {
     position: fixed;
-    top: 0.75rem;
-    left: 50%;
+    inset: 0.75rem 0.75rem auto;
     z-index: 10;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 2rem;
-    width: min(100% - 1.5rem, 90rem);
-    padding: 0.6rem 0.75rem;
+    gap: 1rem;
+    max-width: 90rem;
+    margin: 0 auto;
+    pointer-events: none;
+  }
+  .bar > * {
+    pointer-events: auto;
+  }
+  .bar-mark {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 0.5rem;
+  }
+  .bar-pill {
+    position: relative;
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.4rem;
     overflow: hidden;
     isolation: isolate;
     border: 1px solid rgb(255 255 255 / 0.16);
     border-radius: 999px;
     background-color: var(--n-08);
     background-image:
-      radial-gradient(22% 150% at 14% 10%, rgb(140 140 140 / 0.5), transparent 70%),
-      radial-gradient(16% 120% at 41% 105%, rgb(200 200 200 / 0.24), transparent 70%),
-      radial-gradient(28% 180% at 66% 0%, rgb(100 100 100 / 0.45), transparent 72%),
-      radial-gradient(12% 110% at 84% 70%, rgb(170 170 170 / 0.3), transparent 70%);
+      radial-gradient(40% 150% at 14% 10%, rgb(140 140 140 / 0.5), transparent 70%),
+      radial-gradient(30% 120% at 55% 105%, rgb(200 200 200 / 0.24), transparent 70%),
+      radial-gradient(40% 180% at 90% 0%, rgb(100 100 100 / 0.45), transparent 72%);
     box-shadow: 0 8px 30px rgb(0 0 0 / 0.5);
-    transform: translateX(-50%);
   }
   .bar-canvas {
     position: absolute;
     inset: 0;
-    z-index: -2;
+    z-index: -1;
     width: 100%;
     height: 100%;
     opacity: 0;
@@ -548,35 +602,48 @@ const perfScaleMax = Math.max(
   :global(:root[data-gpu='on']) .bar-canvas {
     opacity: 1;
   }
-  .bar-mark {
-    color: var(--text-primary);
-    line-height: 0;
-  }
-  .bar-mark svg {
-    display: block;
-    width: 2.1rem;
-    height: 2.1rem;
-    border-radius: 0.45rem;
-    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.18);
-  }
-  .bar nav {
-    display: flex;
-    gap: 0.25rem;
+  .bar-pill a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    padding: 0 1rem;
     border-radius: 999px;
-    background: rgb(0 0 0 / 0.55);
-    box-shadow: 0 0 1.25rem 0.5rem rgb(0 0 0 / 0.55);
-  }
-  .bar nav a {
-    padding: 0.4rem 0.85rem;
-    border-radius: 999px;
+    background: rgb(0 0 0 / 0.42);
     color: var(--text-primary);
     text-decoration: none;
-    text-shadow: 0 1px 8px rgb(0 0 0 / 0.8);
+    text-shadow: 0 1px 6px rgb(0 0 0 / 0.9);
     white-space: nowrap;
   }
-  .bar nav a:hover {
-    background: rgb(255 255 255 / 0.1);
-    color: var(--text-primary);
+  .bar-pill a:hover {
+    background: rgb(0 0 0 / 0.7);
+  }
+
+  /*
+   * NN letters filled with the marble: a box masked to the glyphs. The
+   * gradient underneath is the fill until the marble runs, or without WebGPU.
+   */
+  .nn-fill {
+    display: block;
+    background: var(--grad-mark-chalk);
+    mask-size: 100% 100%;
+    mask-repeat: no-repeat;
+  }
+  .nn-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 1.2s ease-out;
+  }
+  :global(:root[data-gpu='on']) .nn-canvas {
+    opacity: 1;
+  }
+  :global(:root[data-gpu='off']) .nn-canvas {
+    display: none;
+  }
+  .nn-nav {
+    width: 3rem;
+    height: 1.5rem;
   }
 
   /* ── Hero ── */
@@ -610,8 +677,17 @@ const perfScaleMax = Math.max(
     line-height: 0;
   }
   .hero-wordmark {
+    position: relative;
+    display: inline-block;
     width: min(100%, 26rem);
+  }
+  .hero-wordmark svg {
+    display: block;
+    width: 100%;
     height: auto;
+  }
+  .nn-hero {
+    position: absolute;
   }
   .hero-lead {
     margin: 0 0 1.75rem;
@@ -788,8 +864,7 @@ const perfScaleMax = Math.max(
     color: var(--text-strong);
     text-underline-offset: 3px;
   }
-  .facts code,
-  .tasks code {
+  .facts code {
     color: var(--text-strong);
   }
   .part-code {
@@ -802,30 +877,6 @@ const perfScaleMax = Math.max(
     font-size: 0.8125rem;
     line-height: 1.6;
     overflow-x: auto;
-  }
-  .part-code :global(pre.astro-code) + .tasks {
-    margin-top: 2rem;
-  }
-
-  .grid {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.9375rem;
-  }
-  .grid th,
-  .grid td {
-    padding: 0.8rem 1rem 0.8rem 0;
-    border-bottom: 1px solid var(--n-15);
-    text-align: left;
-    vertical-align: baseline;
-  }
-  .grid thead th {
-    color: var(--text-faint);
-    font-size: 0.8125rem;
-    font-weight: 400;
-  }
-  .grid tbody th {
-    font-weight: 500;
   }
   /*
    * One grouped bar chart on a shared scale: a group per input, a thin bar per
@@ -941,16 +992,55 @@ const perfScaleMax = Math.max(
   .perf-caption a:hover {
     color: var(--text-primary);
   }
-  .tasks tbody th a {
+  /* Supported models: one row per task, hairlines between, models as quiet chips. */
+  .model-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .model-row {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+    align-items: baseline;
+    gap: 0.5rem 2rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--n-15);
+  }
+  .model-row:first-child {
+    border-top: 1px solid var(--n-15);
+  }
+  .model-task {
+    display: grid;
+    gap: 0.2rem;
+  }
+  .model-task a {
     color: var(--text-primary);
+    font-weight: 500;
     text-decoration: none;
   }
-  .tasks tbody th a:hover {
+  .model-task a:hover {
     text-decoration: underline;
     text-underline-offset: 3px;
   }
-  .tasks td {
+  .model-task code {
+    color: var(--text-faint);
+    font-size: 0.8125rem;
+  }
+  .model-names {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .model-names li {
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--n-18);
+    border-radius: 999px;
     color: var(--text-muted);
+    font-family: 'DM Mono', ui-monospace, monospace;
+    font-size: 0.8125rem;
   }
   .facts + .button {
     margin-top: 0.6rem;
@@ -1048,9 +1138,9 @@ const perfScaleMax = Math.max(
     .hero-shade {
       background: linear-gradient(0deg, var(--n-00) 0%, rgb(0 0 0 / 0.75) 45%, transparent 75%);
     }
-    .tasks td:last-child,
-    .tasks th:last-child {
-      display: none;
+    /* Each task stacks: its name above its models. */
+    .model-row {
+      grid-template-columns: minmax(0, 1fr);
     }
     /* Narrow screens put each input's label above its bars. */
     .perf-group {
@@ -1063,30 +1153,31 @@ const perfScaleMax = Math.max(
   }
   @media (max-width: 560px) {
     .bar {
+      inset-inline: 0.5rem;
       gap: 0.25rem;
-      padding-left: 0.6rem;
-      padding-right: 0.4rem;
     }
-    .bar-mark svg {
-      width: 1.8rem;
-      height: 1.8rem;
+    .bar-mark {
+      padding: 0 0.25rem;
     }
-    .bar nav {
-      gap: 0;
+    .nn-nav {
+      width: 2.2rem;
+      height: 1.1rem;
     }
-    /* 44px tall hit targets; the negative margin keeps the bar's height. */
-    .bar nav a {
-      display: inline-flex;
-      align-items: center;
+    .bar-pill {
+      gap: 0.15rem;
+      padding: 0.25rem;
+    }
+    /* 44px tall hit targets inside the pill. */
+    .bar-pill a {
       min-height: 44px;
-      margin-block: -0.4rem;
-      padding-inline: 0.45rem;
+      padding-inline: 0.55rem;
       font-size: 0.875rem;
     }
   }
   @media (prefers-reduced-motion: reduce) {
     .stage,
-    .bar-canvas {
+    .bar-canvas,
+    .nn-canvas {
       transition: none;
     }
   }
